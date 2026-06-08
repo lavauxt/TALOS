@@ -1,0 +1,121 @@
+---
+title: "TALOS: Detecting Internal Tandem Duplications"
+author: "TALOS Team"
+date: "2025-04-11"
+output: 
+  BiocStyle::html_document:
+    toc: true
+    toc_float: true
+vignette: >
+  %\VignetteIndexEntry{TALOS Tutorial}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+# Introduction
+
+TALOS (Tandem duplications identified via Alignment‑free Lookup Of Skipped k‑mers) is a fast R package for detecting internal tandem duplications (ITDs) in targeted sequencing data. It implements the FILT3R k‑mer breakpoint algorithm, which is alignment‑free and therefore much faster than traditional alignment‑based methods.
+
+This vignette walks you through the main steps of an ITD analysis with TALOS.
+
+# Installation
+
+First, install TALOS from GitHub or source:
+
+{r install, eval=FALSE}
+# From GitHub (replace with your repository URL)
+remotes::install_github("yourusername/TALOS")
+
+# Or from a local source package
+# devtools::build(); devtools::install()
+
+Load the package and required dependencies:
+
+{r load}
+library(TALOS)
+library(BSgenome.Hsapiens.UCSC.hg19)   # for hg19 reference
+
+# Preparing the reference
+
+TALOS needs a genomic reference sequence for the target region (e.g., the ~1500 bp spanning FLT3 exons 14‑15). If you have a BSgenome package installed, you can pass the object directly:
+
+{r config}
+config <- get_gene_config(gene = "FLT3", genome = "hg19", bsgenome = Hsapiens)
+
+If you do not have BSgenome.Hsapiens.UCSC.hg19, you can provide a FASTA file manually:
+
+{r ref_fasta}
+ref_seq <- paste(readLines("FLT3_dna_e14e15.fa", warn = FALSE)[-1], collapse = "")
+config <- get_gene_config("FLT3", "hg19")
+
+# Running TALOS
+
+The main function is talos() (or detect_itd_robust()). Provide your indexed BAM file and the configuration.
+
+{r run}
+results <- talos(
+    bam_path = "path/to/sample.bam",
+    gene_config = config,
+    genomic_ref_seq = ref_seq,      # only needed if config$genomic_ref_seq is NA
+    min_support = 5,
+    min_size = 30,
+    prefilter = TRUE,
+    output_prefix = "my_sample_ITD",
+    output_folder = "./results",
+    verbose = TRUE
+)
+
+If you have a BSgenome object, you can use the simpler syntax:
+
+{r run_bsgenome}
+results <- talos(
+    bam_path = "path/to/sample.bam",
+    gene = "FLT3",
+    genome = "hg19",
+    bsgenome = Hsapiens,
+    min_support = 5,
+    min_size = 30,
+    output_prefix = "my_sample_ITD",
+    verbose = TRUE
+)
+
+# Understanding the output
+
+The returned data frame contains one row per exonic ITD cluster. For each, you get:
+
+- GenomicPosition – the breakpoint coordinate (1‑based).
+- ITD_Sequence – the duplicated DNA sequence.
+- Length – length in bp.
+- SupportingReads – number of reads that support this duplication (after stringent re‑mapping to the candidate genome).
+- HGVS_cDNA – e.g., c.1705_1837dup.
+- HGVS_Protein – in‑frame duplication (e.g., p.Tyr569_Gly613dup) or frameshift (e.g., p.Tyr569fs).
+
+If output_prefix was provided, TALOS also writes:
+
+- {prefix}.csv – the same table in CSV format.
+- {prefix}.vcf – a VCF file with INFO fields containing all annotation.
+
+# Example output (simulated)
+
+| Gene | Genome | GenomicPosition | ITD_Sequence | Length | SupportingReads | AlleleFrequency | HGVS_cDNA | HGVS_Protein |
+|------|--------|----------------|--------------|--------|----------------|-----------------|-----------|---------------|
+| FLT3 | hg19   | 28608047       | CCATCTGTA... | 300    | 267            | 0.2392          | c.100_225dup | p.Lys34_Glu75dup |
+
+# Parameter tuning
+
+- min_support – increase to require more evidence (fewer false positives). Decrease to detect low‑frequency ITDs.
+- min_size – set to the smallest duplication length you care about (typically 30‑50 bp).
+- prefilter – set to FALSE if you suspect the ITD is not represented by soft‑clips or large insertions (slower but more sensitive).
+- max_missing_kmers – increase if many reference k‑mers are missing due to sequencing errors (default 0.5 works well for Illumina).
+
+# Troubleshooting
+
+- No reads in target region – check that your BAM is indexed and that the coordinates in gene_config are correct.
+- No ITDs found – try lowering min_support to 2 or 3 and setting prefilter = FALSE.
+- HGVS annotations are NA – this means the breakpoint fell outside the exons. TALOS automatically excludes intronic ITDs from the final output (they are reported in the log but not saved).
+- Translation warnings – harmless; they appear when the cDNA length is not a multiple of 3 (the function still returns the correct frameshift notation).
+
+# Session info
+
+{r sessionInfo}
+sessionInfo()

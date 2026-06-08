@@ -1,0 +1,64 @@
+Package: TALOS
+Type: Package
+Title: Tandem duplication detection via Alignment-free Lookup Of Skipped k-mers
+Version: 0.1.0
+Authors@R: person(given = "Firstname", family = "Lavauxt",
+             role = c("aut", "cre"), email = "lavauxt@example.com")
+Description: TALOS detects internal tandem duplications (ITDs) and partial tandem
+    duplications (PTDs) in genes like FLT3 and KMT2A directly from BAM files using
+    a fast, alignment-free k-mer breakpoint algorithm with sequence collapse
+    optimization. It outputs HGVS-compliant cDNA and protein annotations, VCF/TSV
+    reports, and PDF visualizations. A bundled static hotspot CSV (built from
+    Ensembl/UCSC coordinates) allows annotation against known coding variant
+    regions; users may optionally build an up-to-date SQLite database from Ensembl
+    via update_hotspot_db(). This version includes memory-optimized vectorized
+    sequence extraction, BSgenome caching, and raw-byte k-matching for
+    significantly improved speed and RAM usage.
+License: GPL-3
+Encoding: UTF-8
+LazyData: false
+Depends: R (>= 4.1.0)
+Imports:
+    AnnotationDbi,
+    AnnotationFilter,
+    BiocGenerics,
+    Biostrings,
+    BSgenome,
+    DBI,
+    ensembldb,
+    GenomicAlignments,
+    GenomicFeatures,
+    GenomicRanges,
+    GenomeInfoDb,
+    ggplot2,
+    Gviz,
+    IRanges,
+    methods,
+    pdftools,
+    pwalign,
+    RSQLite,
+    Rsamtools,
+    S4Vectors,
+    stringi,
+    yaml,
+    GenomeInfoDbData,
+    fastmap
+Suggests:
+    BiocManager,
+    biomaRt,
+    BSgenome.Hsapiens.UCSC.hg19,
+    BSgenome.Hsapiens.UCSC.hg38,
+    cigarillo,
+    data.table,
+    DT,
+    EnsDb.Hsapiens.v75,
+    EnsDb.Hsapiens.v86,
+    fastmatch,
+    gridExtra,
+    htmlwidgets,
+    knitr,
+    plotly,
+    rmarkdown,
+    testthat,
+    txdbmaker
+RoxygenNote: 8.0.0
