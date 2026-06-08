@@ -34,7 +34,7 @@ talos(
   min_discordant_ratio = NULL,
   min_entropy = NULL,
   detect_orientation = NULL,
-  annotate_hotspots = NULL,
+  do_annotate_hotspots = NULL,
   hotspot_db_path = NULL,
   compute_alignment_score = TRUE,
   compute_support_bases = TRUE,

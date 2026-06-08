@@ -10,13 +10,13 @@ detect_itd(
   genomic_ref_seq = NULL,
   k = 11,
   min_support = 10,
-  min_size = 10,
+  min_size = 15,
   max_missing_kmers = 0.5,
   cluster_tolerance = 10,
   prefilter = TRUE,
   min_ins_filter = 3,
   output_prefix = "TALOS",
-  output_folder = "./result",
+  output_folder = "./results",
   write_vcf = TRUE,
   verbose = TRUE,
   debug = FALSE,
@@ -43,7 +43,7 @@ detect_itd(
   min_discordant_ratio = 0,
   min_entropy = 0,
   detect_orientation = TRUE,
-  annotate_hotspots = TRUE,
+  do_annotate_hotspots = TRUE,
   hotspot_db_path = NULL,
   compute_alignment_score = TRUE,
   compute_support_bases = TRUE,
@@ -140,8 +140,6 @@ detect_itd(
 
 \item{detect_orientation}{Check inverse loops.}
 
-\item{annotate_hotspots}{SQLite DB lookups.}
-
 \item{hotspot_db_path}{Path to SQLite lookup DB.}
 
 \item{compute_alignment_score}{Metric toggle.}
@@ -158,7 +156,7 @@ detect_itd(
 
 \item{compute_repeat_entropy}{Metric toggle.}
 
-\item{compute_discordant_ratio}{Metric toggle (NEW: boolean).}
+\item{compute_discordant_ratio}{Metric toggle (boolean, default TRUE).}
 
 \item{compute_hgvs}{Produce HGVS format (only works if transcript is assigned).}
 
@@ -175,6 +173,8 @@ detect_itd(
 \item{max_pairwise_alignments}{Max limit for computationally heavy sub-alignments.}
 
 \item{...}{Other parameters passed to the underlying engine.}
+
+\item{annotate_hotspots}{SQLite DB lookups.}
 }
 \value{
 Data frame of ITD calls with diagnostic columns, invisibly.

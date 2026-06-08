@@ -9,7 +9,7 @@ talos_batch(
   genes,
   build = "hg19",
   sample_names = NULL,
-  output_folder = "./result",
+  output_folder = "./results",
   combine_output = TRUE,
   ...
 )
