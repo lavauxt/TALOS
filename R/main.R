@@ -67,6 +67,9 @@
 #' @param min_side_softclip_reads Minimum number of reads with soft‑clip on each side (default 10).
 #' @param max_side_ratio Maximum ratio of left/right soft‑clip counts before filtering (default 10).
 #' @param min_softclip_pct_side Minimum percentage of supporting reads that must have a soft‑clip on each side (default 1.0).
+#' @param min_left_softclip_pct_wt Minimum percentage of wildtype reads with left soft‑clip (default 1.0).
+#' @param min_right_softclip_pct_wt Minimum percentage of wildtype reads with right soft‑clip (default 1.0).
+#' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 10).
 #' @param ... Other parameters passed to the underlying engine.
 #' @return Data frame of ITD calls with diagnostic columns, invisibly.
 #' @export
@@ -95,6 +98,7 @@ detect_itd <- function(
     min_softclip_pct_side = 1.0,
     min_left_softclip_pct_wt = 1.0,
     min_right_softclip_pct_wt = 1.0,
+    min_abs_side_softclip = 10,
     ...
 ) {
   
@@ -209,18 +213,19 @@ detect_itd <- function(
     cand_lengths     <- bp_df$length
     
     thresholds <- list(
-        min_coverage_drop = min_coverage_drop, min_microhomology = min_microhomology,
-        min_discordant_ratio = min_discordant_ratio, min_entropy = min_entropy,
-        min_strand_bias = min_strand_bias, max_strand_bias = max_strand_bias,
-        min_mean_support_mapq = min_mean_support_mapq, max_breakpoint_spread = max_breakpoint_spread,
-        min_softclip_fraction = min_softclip_fraction, min_unique_breakpoints = min_unique_breakpoints,
-        min_itd_read_coverage = min_itd_read_coverage,
-        min_side_softclip_reads = min_side_softclip_reads,
-        max_side_ratio          = max_side_ratio,
-        min_softclip_pct_side   = min_softclip_pct_side,
-        min_left_softclip_pct_wt = min_left_softclip_pct_wt,
-        min_right_softclip_pct_wt = min_right_softclip_pct_wt
-      )
+      min_coverage_drop = min_coverage_drop, min_microhomology = min_microhomology,
+      min_discordant_ratio = min_discordant_ratio, min_entropy = min_entropy,
+      min_strand_bias = min_strand_bias, max_strand_bias = max_strand_bias,
+      min_mean_support_mapq = min_mean_support_mapq, max_breakpoint_spread = max_breakpoint_spread,
+      min_softclip_fraction = min_softclip_fraction, min_unique_breakpoints = min_unique_breakpoints,
+      min_itd_read_coverage = min_itd_read_coverage,
+      min_side_softclip_reads = min_side_softclip_reads,
+      max_side_ratio          = max_side_ratio,
+      min_softclip_pct_side   = min_softclip_pct_side,
+      min_left_softclip_pct_wt = min_left_softclip_pct_wt,
+      min_right_softclip_pct_wt = min_right_softclip_pct_wt,
+      min_abs_side_softclip    = min_abs_side_softclip  
+    )
     
     results <- list()
     for (cl in clusters) {
@@ -311,6 +316,9 @@ detect_itd <- function(
 #' @param min_side_softclip_reads Minimum number of reads with soft‑clip on each side (default 10).
 #' @param max_side_ratio Maximum ratio of left/right soft‑clip counts before filtering (default 10).
 #' @param min_softclip_pct_side Minimum percentage of supporting reads with soft‑clip on each side (default 1.0).
+#' @param min_left_softclip_pct_wt Minimum percentage of wildtype reads with left soft‑clip (default 1.0).
+#' @param min_right_softclip_pct_wt Minimum percentage of wildtype reads with right soft‑clip (default 1.0).
+#' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 10).
 #' @param ... Extra settings.
 #' @export
 talos <- function(
@@ -340,8 +348,8 @@ talos <- function(
     min_softclip_pct_side = 1.0,
     min_left_softclip_pct_wt = 1.0,
     min_right_softclip_pct_wt = 1.0,
+    min_abs_side_softclip = 10,
     ...
-
 ) {
   
   config <- get_gene_config(gene = gene, build = build, padding = padding, config_path = yaml_path, bsgenome = bsgenome)
@@ -365,9 +373,9 @@ talos <- function(
     min_side_softclip_reads = 10, max_side_ratio = 10,
     min_softclip_pct_side = 1.0,
     min_left_softclip_pct_wt = 1.0,
-    min_right_softclip_pct_wt = 1.0
+    min_right_softclip_pct_wt = 1.0,
+    min_abs_side_softclip = 10
   )
-
   
   yaml_vals <- config$gene_settings
   
@@ -381,6 +389,11 @@ talos <- function(
     resolve(get(nm), yaml_vals[[nm]], defaults[[nm]])
   })
   names(p) <- names(defaults)
+  
+  # Safety: replace any NULL with the default (should not happen, but just in case)
+  for (nm in names(defaults)) {
+    if (is.null(p[[nm]])) p[[nm]] <- defaults[[nm]]
+  }
   
   if (is.null(config$exons)) config$exons <- config$target_exons
   
@@ -413,6 +426,7 @@ talos <- function(
     min_softclip_pct_side   = p$min_softclip_pct_side,
     min_left_softclip_pct_wt = p$min_left_softclip_pct_wt,
     min_right_softclip_pct_wt = p$min_right_softclip_pct_wt,
+    min_abs_side_softclip = p$min_abs_side_softclip,
     ...
   )
 }

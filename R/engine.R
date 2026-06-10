@@ -904,6 +904,10 @@
     if (!is.na(left_wt_pct) && left_wt_pct < min_left_softclip_pct_wt) return(FALSE)
     if (!is.na(right_wt_pct) && right_wt_pct < min_right_softclip_pct_wt) return(FALSE)
 
+    # ---- New: absolute softclip count filter (>= min_abs_side_softclip) ----
+    if (!is.na(metrics$LeftSoftclipCount) && metrics$LeftSoftclipCount < min_abs_side_softclip) return(FALSE)
+    if (!is.na(metrics$RightSoftclipCount) && metrics$RightSoftclipCount < min_abs_side_softclip) return(FALSE)
+
     TRUE
   })
 }

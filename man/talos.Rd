@@ -63,6 +63,7 @@ talos(
   min_softclip_pct_side = 1,
   min_left_softclip_pct_wt = 1,
   min_right_softclip_pct_wt = 1,
+  min_abs_side_softclip = 10,
   ...
 )
 }
@@ -100,6 +101,12 @@ talos(
 \item{max_side_ratio}{Maximum ratio of left/right soft‑clip counts before filtering (default 10).}
 
 \item{min_softclip_pct_side}{Minimum percentage of supporting reads with soft‑clip on each side (default 1.0).}
+
+\item{min_left_softclip_pct_wt}{Minimum percentage of wildtype reads with left soft‑clip (default 1.0).}
+
+\item{min_right_softclip_pct_wt}{Minimum percentage of wildtype reads with right soft‑clip (default 1.0).}
+
+\item{min_abs_side_softclip}{Minimum absolute soft‑clip count on each side (default 10).}
 
 \item{...}{Extra settings.}
 }
