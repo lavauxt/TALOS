@@ -923,8 +923,9 @@
 
 
 # ============================================================================
-# MODIFIED .apply_filters – added min_length / max_length checks
-#               and absolute minimum softclip counts for ITDs
+# MODIFIED .apply_filters – added min_length / max_length checks,
+#               absolute minimum softclip counts for ITDs,
+#               AND minimum wildtype softclip percentages for ITDs
 # ============================================================================
 .apply_filters <- function(metrics, thresholds, min_length = NULL, max_length = NULL) { 
   with(thresholds, {
@@ -957,15 +958,21 @@
         !isTRUE(metrics$SequencePartial) &&
         !is.na(metrics$Length) && metrics$Length > 40)   return(FALSE)
 
-    # ---- NEW: For ITDs (Length > 0), enforce absolute minimum on both sides ----
+    # ---- Soft‑clip filters (different for ITDs vs PTDs) ----
     left  <- metrics$LeftSoftclipCount
     right <- metrics$RightSoftclipCount
     if (!is.na(left) && !is.na(right)) {
       # ITD case: length > 0
       if (!is.na(metrics$Length) && metrics$Length > 0L) {
+        # 1) Absolute minimum count on each side
         if (left < min_side_softclip_reads || right < min_side_softclip_reads) {
           return(FALSE)
         }
+        # 2) Minimum wildtype softclip percentage on each side
+        left_wt_pct  <- metrics$LeftSoftclipPctWT
+        right_wt_pct <- metrics$RightSoftclipPctWT
+        if (!is.na(left_wt_pct) && left_wt_pct < min_left_softclip_pct_wt) return(FALSE)
+        if (!is.na(right_wt_pct) && right_wt_pct < min_right_softclip_pct_wt) return(FALSE)
       } else {
         # PTD case (Length == 0): use ratio + absolute filter (unchanged)
         if (left < min_side_softclip_reads || right < min_side_softclip_reads) {
