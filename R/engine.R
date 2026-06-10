@@ -918,6 +918,9 @@
 }
 
 
+# ============================================================================
+# MODIFIED .apply_filters – skip softclip filters for ITDs (Length > 0)
+# ============================================================================
 .apply_filters <- function(metrics, thresholds) {
   with(thresholds, {
     if (!is.na(metrics$CoverageDrop) &&
@@ -956,21 +959,25 @@
       }
     }
 
-    # ---- soft‑clip percentage filter (default 1%) ----
-    left_pct  <- metrics$LeftSoftclipPctSupport
-    right_pct <- metrics$RightSoftclipPctSupport
-    if (!is.na(left_pct) && left_pct < min_softclip_pct_side) return(FALSE)
-    if (!is.na(right_pct) && right_pct < min_softclip_pct_side) return(FALSE)
+    # ---- For ITDs (Length > 0), do NOT enforce softclip percentage filters ----
+    # PTDs (Length == 0) still need to pass these filters.
+    if (is.na(metrics$Length) || metrics$Length == 0L) {
+      # soft‑clip percentage filter (default 1%)
+      left_pct  <- metrics$LeftSoftclipPctSupport
+      right_pct <- metrics$RightSoftclipPctSupport
+      if (!is.na(left_pct) && left_pct < min_softclip_pct_side) return(FALSE)
+      if (!is.na(right_pct) && right_pct < min_softclip_pct_side) return(FALSE)
 
-    # ---- New: soft‑clip percentage relative to wildtype reads ----
-    left_wt_pct  <- metrics$LeftSoftclipPctWT
-    right_wt_pct <- metrics$RightSoftclipPctWT
-    if (!is.na(left_wt_pct) && left_wt_pct < min_left_softclip_pct_wt) return(FALSE)
-    if (!is.na(right_wt_pct) && right_wt_pct < min_right_softclip_pct_wt) return(FALSE)
+      # soft‑clip percentage relative to wildtype reads
+      left_wt_pct  <- metrics$LeftSoftclipPctWT
+      right_wt_pct <- metrics$RightSoftclipPctWT
+      if (!is.na(left_wt_pct) && left_wt_pct < min_left_softclip_pct_wt) return(FALSE)
+      if (!is.na(right_wt_pct) && right_wt_pct < min_right_softclip_pct_wt) return(FALSE)
 
-    # ---- New: absolute softclip count filter (>= min_abs_side_softclip) ----
-    if (!is.na(metrics$LeftSoftclipCount) && metrics$LeftSoftclipCount < min_abs_side_softclip) return(FALSE)
-    if (!is.na(metrics$RightSoftclipCount) && metrics$RightSoftclipCount < min_abs_side_softclip) return(FALSE)
+      # absolute softclip count filter (>= min_abs_side_softclip)
+      if (!is.na(metrics$LeftSoftclipCount) && metrics$LeftSoftclipCount < min_abs_side_softclip) return(FALSE)
+      if (!is.na(metrics$RightSoftclipCount) && metrics$RightSoftclipCount < min_abs_side_softclip) return(FALSE)
+    }
 
     TRUE
   })
