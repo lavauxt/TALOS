@@ -71,6 +71,8 @@ detect_itd(
   min_left_softclip_pct_wt = 1,
   min_right_softclip_pct_wt = 1,
   min_abs_side_softclip = 10,
+  max_itd_length = 1000,
+  convert_long_to_ptd = TRUE,
   ...
 )
 }
@@ -204,6 +206,10 @@ detect_itd(
 \item{min_right_softclip_pct_wt}{Minimum percentage of wildtype reads with right soft‑clip (default 1.0).}
 
 \item{min_abs_side_softclip}{Minimum absolute soft‑clip count on each side (default 10).}
+
+\item{max_itd_length}{Maximum duplication length to consider as ITD; longer duplications are automatically converted to PTD (zero length) if \code{convert_long_to_ptd} is TRUE (default 1000).}
+
+\item{convert_long_to_ptd}{If TRUE, duplications longer than \code{max_itd_length} are reported as PTDs (length 0). If FALSE, they are skipped (default TRUE).}
 
 \item{...}{Other parameters passed to the underlying engine.}
 

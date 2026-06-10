@@ -31,11 +31,14 @@
 
 
 # ----------------------------------------------------------------------------
-# Streaming BAM loader (with coverage computation) – ENHANCED
+# Streaming BAM loader (with coverage computation) – ENHANCED with logging
 # ----------------------------------------------------------------------------
 .load_bam_data_streaming <- function(bam_path, gene_config,
                                       compute_pairs = FALSE,
-                                      max_reads = NULL, chunk_size = 50000) {
+                                      max_reads = NULL, chunk_size = 50000,
+                                      verbose = FALSE) {
+  if (verbose) message("[TALOS] Loading BAM region: ", gene_config$chrom, ":", gene_config$genomic_start, "-", gene_config$genomic_end)
+
   target_chrom <- gene_config$chrom
   which_range <- GenomicRanges::GRanges(
     seqnames = target_chrom,
@@ -52,24 +55,32 @@
 
   all_reads_list <- list()
   total_reads    <- 0L
+  chunk_count    <- 0L
   open(bam_file)
   repeat {
     chunk <- GenomicAlignments::readGAlignments(bam_file, param = param,
                                                 use.names = TRUE)
     if (length(chunk) == 0) break
+    chunk_count <- chunk_count + 1L
     total_reads <- total_reads + length(chunk)
+    if (verbose) message("[TALOS] Loaded chunk ", chunk_count, " (", length(chunk), " reads, total ", total_reads, ")")
     all_reads_list[[length(all_reads_list) + 1L]] <- chunk
     if (!is.null(max_reads) && total_reads >= max_reads) {
       if (total_reads > max_reads) {
         keep <- max_reads - (total_reads - length(chunk))
         all_reads_list[[length(all_reads_list)]] <- chunk[seq_len(keep)]
+        if (verbose) message("[TALOS] Stopping early at max_reads = ", max_reads)
       }
       break
     }
   }
   close(bam_file)
   all_reads <- do.call(c, all_reads_list)
-  if (length(all_reads) == 0) return(list(reads = all_reads, cov = NULL, pairs = NULL))
+  if (verbose) message("[TALOS] Total reads loaded: ", length(all_reads))
+  if (length(all_reads) == 0) {
+    if (verbose) message("[TALOS] No reads found in target region.")
+    return(list(reads = all_reads, cov = NULL, pairs = NULL))
+  }
 
   # ---- ENHANCED: robust chromosome name normalisation using mapSeqlevels ----
   current_levels <- GenomeInfoDb::seqlevels(all_reads)
@@ -89,19 +100,24 @@
   }
   # -----------------------------------------------------
 
+  if (verbose) message("[TALOS] Computing coverage...")
   cov_rle_list <- GenomicAlignments::coverage(all_reads)
   cov <- cov_rle_list[[target_chrom]]
 
   pairs <- NULL
   if (compute_pairs) {
+    if (verbose) message("[TALOS] Loading read pairs...")
     bam_file_pairs <- Rsamtools::BamFile(bam_path, yieldSize = chunk_size)
     pairs_list  <- list()
     total_pairs <- 0L
+    chunk_count <- 0L
     open(bam_file_pairs)
     repeat {
       p_chunk <- suppressWarnings(GenomicAlignments::readGAlignmentPairs(bam_file_pairs, param = param))
       if (length(p_chunk) == 0) break
+      chunk_count <- chunk_count + 1L
       total_pairs <- total_pairs + length(p_chunk)
+      if (verbose) message("[TALOS] Loaded pair chunk ", chunk_count, " (", length(p_chunk), " pairs, total ", total_pairs, ")")
       pairs_list[[length(pairs_list) + 1L]] <- p_chunk
       if (!is.null(max_reads) && total_pairs >= max_reads) {
         if (total_pairs > max_reads) {
@@ -113,6 +129,7 @@
     }
     close(bam_file_pairs)
     if (length(pairs_list) > 0) pairs <- do.call(c, pairs_list)
+    if (verbose) message("[TALOS] Total pairs loaded: ", length(pairs))
   }
 
   list(reads = all_reads, cov = cov, pairs = pairs, cov_list = cov_rle_list)
@@ -120,9 +137,10 @@
 
 
 # ----------------------------------------------------------------------------
-# Pre-filter reads by CIGAR/MAPQ (unchanged)
+# Pre-filter reads by CIGAR/MAPQ (with logging)
 # ----------------------------------------------------------------------------
-.filter_reads_by_cigar <- function(reads, min_mapq, min_ins_filter) {
+.filter_reads_by_cigar <- function(reads, min_mapq, min_ins_filter, verbose = FALSE) {
+  if (verbose) message("[TALOS] Pre-filtering reads: min_mapq=", min_mapq, ", min_ins_filter=", min_ins_filter)
   flags  <- S4Vectors::mcols(reads)$flag
   mapqs  <- S4Vectors::mcols(reads)$mapq
   mapqs[is.na(mapqs)] <- 0L
@@ -153,7 +171,9 @@
   keep <- (unmapped | has_softclip | (net_ins >= min_ins_filter)) &
           (mapqs >= min_mapq)
   keep[is.na(keep)] <- FALSE
-  reads[keep]
+  filtered <- reads[keep]
+  if (verbose) message("[TALOS] ", sum(keep), " reads passed pre-filter (", length(reads), " total)")
+  filtered
 }
 
 
@@ -167,11 +187,12 @@
 
 
 # ----------------------------------------------------------------------------
-# PTD fast path (unchanged)
+# PTD fast path (with logging)
 # ----------------------------------------------------------------------------
-.extract_candidates_ptd <- function(reads, genomic_start, ref_len) {
+.extract_candidates_ptd <- function(reads, genomic_start, ref_len, verbose = FALSE) {
   n_reads <- length(reads)
   if (n_reads == 0) return(list())
+  if (verbose) message("[TALOS] Extracting PTD candidates from ", n_reads, " reads")
 
   all_qnames  <- .safe_qnames(reads)
   all_mapqs   <- S4Vectors::mcols(reads)$mapq; all_mapqs[is.na(all_mapqs)] <- 0L
@@ -214,18 +235,24 @@
       }
     }
   }
-  candidates[seq_len(cand_idx - 1L)]
+  candidates <- candidates[seq_len(cand_idx - 1L)]
+  if (verbose) message("[TALOS] Found ", length(candidates), " PTD candidates")
+  candidates
 }
 
 
 # ----------------------------------------------------------------------------
-# Standard k-mer tracing (unchanged)
+# Standard k-mer tracing (with logging and auto-PTD conversion for long duplications)
 # ----------------------------------------------------------------------------
 .extract_candidates_standard <- function(reads, ref_kmers, ptd_mode, min_size,
                                           max_missing_kmers, refine_bp,
-                                          use_cigar_bp, genomic_start, ref_dna) {
+                                          use_cigar_bp, genomic_start, ref_dna,
+                                          max_itd_length = 1000,
+                                          convert_long_to_ptd = TRUE,
+                                          verbose = FALSE) {
   n_reads <- length(reads)
   k       <- nchar(ref_kmers[1L])
+  if (verbose) message("[TALOS] Extracting standard candidates from ", n_reads, " reads (k=", k, ", ptd_mode=", ptd_mode, ", max_itd_length=", max_itd_length, ")")
 
   all_qnames  <- .safe_qnames(reads)
   all_mapqs   <- S4Vectors::mcols(reads)$mapq; all_mapqs[is.na(all_mapqs)] <- 0L
@@ -239,6 +266,7 @@
   cand_idx        <- 1L
   ref_len         <- nchar(ref_dna)
   max_missing_frac <- max_missing_kmers
+  reads_processed <- 0L
 
   for (i in seq_len(n_reads)) {
     read_seq <- all_seqs[i]
@@ -279,6 +307,20 @@
           pos_before <- trace[j - 1L]
           dup_len    <- (pos_before + k - 1L) - pos_after + 1L
           if (dup_len >= min_size) {
+            # --- Auto-PTD conversion for long duplications ---
+            if (!ptd_mode && dup_len > max_itd_length) {
+              if (convert_long_to_ptd) {
+                if (verbose) message("[TALOS] Long duplication (", dup_len, " bp) converted to PTD at breakpoint ", genomic_start + pos_after - 1L)
+                candidates[[cand_idx]] <- list(
+                  read_name = read_qname, local_breakpoint = pos_after,
+                  itd_seq = NA_character_, read_seq = read_seq,
+                  length = 0L, type = "ptd_clip", mapq = read_mapq,
+                  is_reverse = is_reverse, cigar = read_cigar
+                )
+                cand_idx <- cand_idx + 1L
+              }
+              next
+            }
             dup_seq <- NA_character_
             if (!ptd_mode && dup_len <= 500)
               dup_seq <- substr(read_seq, j, j + dup_len - 1L)
@@ -310,6 +352,20 @@
               (pos_before + k - 1L > pos_after)) {
             dup_len <- (pos_before + k - 1L) - pos_after + 1L
             if (dup_len >= min_size) {
+              # --- Auto-PTD conversion for long duplications ---
+              if (!ptd_mode && dup_len > max_itd_length) {
+                if (convert_long_to_ptd) {
+                  if (verbose) message("[TALOS] Long duplication (", dup_len, " bp) converted to PTD at breakpoint ", genomic_start + pos_after - 1L)
+                  candidates[[cand_idx]] <- list(
+                    read_name = read_qname, local_breakpoint = pos_after,
+                    itd_seq = NA_character_, read_seq = read_seq,
+                    length = 0L, type = "ptd_clip", mapq = read_mapq,
+                    is_reverse = is_reverse, cigar = read_cigar
+                  )
+                  cand_idx <- cand_idx + 1L
+                }
+                next
+              }
               dup_seq <- NA_character_
               if (!ptd_mode && dup_len <= 500)
                 dup_seq <- substr(read_seq, break_start, break_start + dup_len - 1L)
@@ -378,13 +434,17 @@
         cand_idx <- cand_idx + 1L
       }
     }
+    reads_processed <- reads_processed + 1L
+    if (verbose && reads_processed %% 1000 == 0) message("[TALOS] Processed ", reads_processed, " / ", n_reads, " reads for candidate extraction")
   }
-  candidates[seq_len(cand_idx - 1L)]
+  candidates <- candidates[seq_len(cand_idx - 1L)]
+  if (verbose) message("[TALOS] Found ", length(candidates), " standard candidates")
+  candidates
 }
 
 
 # ----------------------------------------------------------------------------
-# Candidate list → data.frame (unchanged)
+# Candidate list → data.frame
 # ----------------------------------------------------------------------------
 .candidates_to_df <- function(candidates, genomic_start) {
   n <- length(candidates)
@@ -483,7 +543,9 @@
                                       do_repeat_entropy, do_discordant_ratio,
                                       do_detect_orientation, do_hgvs,
                                       max_pairwise_alignments,
-                                      debug = FALSE) {
+                                      debug = FALSE, verbose = FALSE) {
+
+  if (verbose) message("[TALOS] Computing metrics for cluster at ", paste(range(cluster_bps), collapse="-"), " length=", best_len)
 
   # ---- Initialize all metric variables to avoid missing values ----
   consistency_score    <- NA_real_
@@ -818,7 +880,7 @@
   }
 
   # ---- Return list (all variables now guaranteed to exist) ----
-  list(
+  result <- list(
     Sample = wildtype_info$sample_name, Gene = gene_config$gene,
     Genome = if (is.null(gene_config$build)) "custom" else gene_config$build,
     GenomicPosition = len_specific_bp, ITD_Sequence = itd_seq, Length = best_len,
@@ -851,6 +913,8 @@
     LeftSoftclipPctWT       = left_sc_pct_wt,
     RightSoftclipPctWT      = right_sc_pct_wt
   )
+  if (verbose) message("[TALOS] Metrics computed: support=", corrected_support, ", AF=", round(raw_af,4), ", length=", best_len)
+  result
 }
 
 

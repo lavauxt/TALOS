@@ -70,6 +70,8 @@
 #' @param min_left_softclip_pct_wt Minimum percentage of wildtype reads with left soft‑clip (default 1.0).
 #' @param min_right_softclip_pct_wt Minimum percentage of wildtype reads with right soft‑clip (default 1.0).
 #' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 10).
+#' @param max_itd_length Maximum duplication length to consider as ITD; longer duplications are automatically converted to PTD (zero length) if \code{convert_long_to_ptd} is TRUE (default 1000).
+#' @param convert_long_to_ptd If TRUE, duplications longer than \code{max_itd_length} are reported as PTDs (length 0). If FALSE, they are skipped (default TRUE).
 #' @param ... Other parameters passed to the underlying engine.
 #' @return Data frame of ITD calls with diagnostic columns, invisibly.
 #' @export
@@ -99,6 +101,8 @@ detect_itd <- function(
     min_left_softclip_pct_wt = 1.0,
     min_right_softclip_pct_wt = 1.0,
     min_abs_side_softclip = 10,
+    max_itd_length = 1000,
+    convert_long_to_ptd = TRUE,
     ...
 ) {
   
@@ -171,7 +175,8 @@ detect_itd <- function(
     ref_kmers <- .prepare_kmers(ref_dna, k)
     bam_data  <- .load_bam_data_streaming(bam_path, gene_config, 
                                           compute_pairs = compute_discordant_ratio,
-                                          max_reads = max_reads_in_region)
+                                          max_reads = max_reads_in_region,
+                                          verbose = verbose)
     all_reads <- bam_data$reads
     
     if (length(all_reads) == 0) {
@@ -185,7 +190,7 @@ detect_itd <- function(
     all_reads_for_wt <- all_reads[wt_mapqs >= min_mapq]
     
     if (prefilter) {
-      all_reads <- .filter_reads_by_cigar(all_reads, min_mapq, min_ins_filter)
+      all_reads <- .filter_reads_by_cigar(all_reads, min_mapq, min_ins_filter, verbose = verbose)
       if (length(all_reads) == 0) {
         log_msg("No reads passed CIGAR prefilter.")
         return(data.frame())
@@ -193,9 +198,15 @@ detect_itd <- function(
     }
     
     if (ptd_mode && use_cigar_bp) {
-      candidates <- .extract_candidates_ptd(all_reads, gene_config$genomic_start, ref_len)
+      candidates <- .extract_candidates_ptd(all_reads, gene_config$genomic_start, ref_len, verbose = verbose)
     } else {
-      candidates <- .extract_candidates_standard(all_reads, ref_kmers, ptd_mode, min_size, max_missing_kmers, refine_bp, use_cigar_bp, gene_config$genomic_start, ref_dna)
+      candidates <- .extract_candidates_standard(
+        reads = all_reads, ref_kmers = ref_kmers, ptd_mode = ptd_mode, min_size = min_size,
+        max_missing_kmers = max_missing_kmers, refine_bp = refine_bp, use_cigar_bp = use_cigar_bp,
+        genomic_start = gene_config$genomic_start, ref_dna = ref_dna,
+        max_itd_length = max_itd_length, convert_long_to_ptd = convert_long_to_ptd,
+        verbose = verbose
+      )
     }
     
     if (length(candidates) == 0) {
@@ -257,7 +268,7 @@ detect_itd <- function(
           do_discordant_ratio = compute_discordant_ratio, 
           do_detect_orientation = detect_orientation,
           do_hgvs = compute_hgvs, max_pairwise_alignments = max_pairwise_alignments,
-          debug = debug
+          debug = debug, verbose = verbose
         )
         if (!is.null(metrics) && .apply_filters(metrics, thresholds)) results[[length(results) + 1L]] <- metrics
       }
@@ -319,6 +330,8 @@ detect_itd <- function(
 #' @param min_left_softclip_pct_wt Minimum percentage of wildtype reads with left soft‑clip (default 1.0).
 #' @param min_right_softclip_pct_wt Minimum percentage of wildtype reads with right soft‑clip (default 1.0).
 #' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 10).
+#' @param max_itd_length Maximum duplication length to consider as ITD; longer duplications are automatically converted to PTD (zero length) if \code{convert_long_to_ptd} is TRUE (default 1000).
+#' @param convert_long_to_ptd If TRUE, duplications longer than \code{max_itd_length} are reported as PTDs (length 0). If FALSE, they are skipped (default TRUE).
 #' @param ... Extra settings.
 #' @export
 talos <- function(
@@ -349,6 +362,8 @@ talos <- function(
     min_left_softclip_pct_wt = 1.0,
     min_right_softclip_pct_wt = 1.0,
     min_abs_side_softclip = 10,
+    max_itd_length = 1000,
+    convert_long_to_ptd = TRUE,
     ...
 ) {
   
@@ -374,7 +389,9 @@ talos <- function(
     min_softclip_pct_side = 1.0,
     min_left_softclip_pct_wt = 1.0,
     min_right_softclip_pct_wt = 1.0,
-    min_abs_side_softclip = 10
+    min_abs_side_softclip = 10,
+    max_itd_length = 1000,
+    convert_long_to_ptd = TRUE
   )
   
   yaml_vals <- config$gene_settings
@@ -427,6 +444,8 @@ talos <- function(
     min_left_softclip_pct_wt = p$min_left_softclip_pct_wt,
     min_right_softclip_pct_wt = p$min_right_softclip_pct_wt,
     min_abs_side_softclip = p$min_abs_side_softclip,
+    max_itd_length = p$max_itd_length,
+    convert_long_to_ptd = p$convert_long_to_ptd,
     ...
   )
 }
