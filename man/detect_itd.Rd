@@ -60,6 +60,16 @@ detect_itd(
   max_reads_in_region = 2e+05,
   add_config_to_report = FALSE,
   max_pairwise_alignments = 30L,
+  include_sample = TRUE,
+  include_gene = TRUE,
+  include_timestamp = TRUE,
+  output_sep = "_",
+  global_log = TRUE,
+  min_side_softclip_reads = 10,
+  max_side_ratio = 10,
+  min_softclip_pct_side = 1,
+  min_left_softclip_pct_wt = 1,
+  min_right_softclip_pct_wt = 1,
   ...
 )
 }
@@ -84,7 +94,7 @@ detect_itd(
 
 \item{min_ins_filter}{Minimum net insertion length filter.}
 
-\item{output_prefix}{Base name for outputs.}
+\item{output_prefix}{Base name prefix (default "TALOS").}
 
 \item{output_folder}{Output folder path.}
 
@@ -171,6 +181,22 @@ detect_itd(
 \item{add_config_to_report}{Render configs in results.}
 
 \item{max_pairwise_alignments}{Max limit for computationally heavy sub-alignments.}
+
+\item{include_sample}{Include sample name in output filenames (default TRUE).}
+
+\item{include_gene}{Include gene name in output filenames (default TRUE).}
+
+\item{include_timestamp}{Include timestamp in output filenames (default TRUE).}
+
+\item{output_sep}{Separator between filename parts (default "_").}
+
+\item{global_log}{Write all logs (config, compute time, errors) to a single file (default TRUE).}
+
+\item{min_side_softclip_reads}{Minimum number of reads with soft‑clip on each side (default 10).}
+
+\item{max_side_ratio}{Maximum ratio of left/right soft‑clip counts before filtering (default 10).}
+
+\item{min_softclip_pct_side}{Minimum percentage of supporting reads that must have a soft‑clip on each side (default 1.0).}
 
 \item{...}{Other parameters passed to the underlying engine.}
 

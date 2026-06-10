@@ -718,6 +718,10 @@
   if (wildtype_reads < min_wt_reads) return(NULL)
   if (raw_af < vaf_threshold)        return(NULL)
 
+  # ---- Wildtype-relative softclip percentages ----
+  left_sc_pct_wt  <- if (wildtype_reads > 0) (left_sc_count / wildtype_reads) * 100 else NA_real_
+  right_sc_pct_wt <- if (wildtype_reads > 0) (right_sc_count / wildtype_reads) * 100 else NA_real_
+
   # ---- Diagnostic metrics ----
   strand_bias       <- if (nrow(support_rows) > 0)
     round(mean(support_rows$is_reverse, na.rm = TRUE), 4) else NA_real_
@@ -730,11 +734,9 @@
   } else NA_real_
   unique_bps        <- length(unique(support_rows$breakpoint))
 
-  # ---- Percentage of softclip reads relative to support and WT ----
+  # ---- Percentage of softclip reads relative to support ----
   left_sc_pct_support <- if (corrected_support > 0) (left_sc_count / corrected_support) * 100 else NA_real_
   right_sc_pct_support <- if (corrected_support > 0) (right_sc_count / corrected_support) * 100 else NA_real_
-  left_sc_pct_wt <- if (wildtype_reads > 0) (left_sc_count / wildtype_reads) * 100 else NA_real_
-  right_sc_pct_wt <- if (wildtype_reads > 0) (right_sc_count / wildtype_reads) * 100 else NA_real_
 
   # ---- Coverage drop ----
   if (do_coverage_drop && !is.na(best_len) && best_len > 0) {
@@ -808,7 +810,6 @@
     if (!is.null(gene_config$all_exons) || !is.null(gene_config$exons)) {
       hgvs <- compute_hgvs_annotations(gene_config, len_specific_bp,
                                        itd_seq, dup_len_for_hgvs, debug)
-      # If breakpoint is intronic, override with "intronic"
       if (!is_exonic && !is.na(hgvs$p_notation)) {
         hgvs$p_notation <- "intronic"
         if (is.na(hgvs$c_notation)) hgvs$c_notation <- "c.?+?"
@@ -880,7 +881,7 @@
         !isTRUE(metrics$SequencePartial) &&
         !is.na(metrics$Length) && metrics$Length > 40)   return(FALSE)
 
-    # ---- Unbalanced soft‑clip filter (default min_side_softclip_reads = 10) ----
+    # ---- Unbalanced soft‑clip filter (absolute counts) ----
     left  <- metrics$LeftSoftclipCount
     right <- metrics$RightSoftclipCount
     if (!is.na(left) && !is.na(right)) {
@@ -890,6 +891,18 @@
         }
       }
     }
+
+    # ---- soft‑clip percentage filter (default 1%) ----
+    left_pct  <- metrics$LeftSoftclipPctSupport
+    right_pct <- metrics$RightSoftclipPctSupport
+    if (!is.na(left_pct) && left_pct < min_softclip_pct_side) return(FALSE)
+    if (!is.na(right_pct) && right_pct < min_softclip_pct_side) return(FALSE)
+
+    # ---- New: soft‑clip percentage relative to wildtype reads ----
+    left_wt_pct  <- metrics$LeftSoftclipPctWT
+    right_wt_pct <- metrics$RightSoftclipPctWT
+    if (!is.na(left_wt_pct) && left_wt_pct < min_left_softclip_pct_wt) return(FALSE)
+    if (!is.na(right_wt_pct) && right_wt_pct < min_right_softclip_pct_wt) return(FALSE)
 
     TRUE
   })

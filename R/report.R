@@ -385,6 +385,9 @@ talos_html_report <- function(result_df, bam_paths = NULL, gene_configs = NULL, 
   invisible(output_file)
 }
 
+# ============================================================================
+# .write_talos_output – fixed with vapply and length sanity check
+# ============================================================================
 .write_talos_output <- function(final_df, base_name, output_folder, sample_name,
                                 gene_config, ref_dna, bam_path, write_vcf, plot,
                                 html_report, verbose, add_config_to_report = FALSE) {
@@ -392,11 +395,33 @@ talos_html_report <- function(result_df, bam_paths = NULL, gene_configs = NULL, 
   sample_folder <- file.path(output_folder, sample_name)
   if (!dir.exists(sample_folder)) dir.create(sample_folder, recursive = TRUE, showWarnings = FALSE)
 
-  tsv_file  <- file.path(sample_folder, paste0(base_name, ".tsv"))
+  tsv_file <- file.path(sample_folder, paste0(base_name, ".tsv"))
+  
+  # ---- SAFE conversion of list columns to character using vapply ----
   for (col in names(final_df)) {
-    if (is.list(final_df[[col]])) final_df[[col]] <- vapply(final_df[[col]], function(x) if (length(x) == 0) NA_character_ else paste(x, collapse = ";"), character(1L))
+    if (is.list(final_df[[col]])) {
+      # vapply ensures each element becomes a single string; if any result is not length 1, it errors
+      converted <- vapply(final_df[[col]], function(x) {
+        if (length(x) == 0 || all(is.na(x))) {
+          NA_character_
+        } else {
+          # Collapse multi‑element vectors, handling numeric/logical/character
+          paste(x, collapse = ";")
+        }
+      }, FUN.VALUE = character(1), USE.NAMES = FALSE)
+      
+      # Sanity check: length must equal number of rows
+      if (length(converted) != nrow(final_df)) {
+        stop(sprintf("Column '%s' conversion produced %d rows, expected %d. Check list elements.", 
+                     col, length(converted), nrow(final_df)))
+      }
+      final_df[[col]] <- converted
+    }
   }
-  write.table(final_df, file = tsv_file, sep = "\t", quote = FALSE, row.names = FALSE, na = ".")
+  
+  # Write TSV without row names, using NA placeholder
+  write.table(final_df, file = tsv_file, sep = "\t", quote = FALSE,
+              row.names = FALSE, na = ".")
   if (verbose) message(sprintf("Results written to: %s", tsv_file))
 
   if (write_vcf) {
