@@ -923,10 +923,14 @@
 
 
 # ============================================================================
-# MODIFIED .apply_filters – skip softclip filters for ITDs (Length > 0)
+# MODIFIED .apply_filters – added min_length / max_length checks
 # ============================================================================
-.apply_filters <- function(metrics, thresholds) {
+.apply_filters <- function(metrics, thresholds, min_length = NULL, max_length = NULL) { 
   with(thresholds, {
+    # ---- Length filters (NEW) ----
+    if (!is.null(min_length) && !is.na(metrics$Length) && metrics$Length < min_length) return(FALSE)
+    if (!is.null(max_length) && !is.na(metrics$Length) && metrics$Length > max_length) return(FALSE)
+
     if (!is.na(metrics$CoverageDrop) &&
         metrics$CoverageDrop < min_coverage_drop)       return(FALSE)
     if (!is.na(metrics$MedianMicrohomology) &&

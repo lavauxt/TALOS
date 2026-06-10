@@ -41,6 +41,13 @@ KMT2A:
   transcript: NM_005933       # KMT2A partial tandem duplication exons 2-12
   targeted_exons: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
   build: hg19
+  gene_settings:
+    min_length: 500
+    min_support: 5
+    padding: 10000
+    min_wt_reads: 5
+    max_itd_length: 50000
+
 
 BCOR:
   transcript: NM_001123385    # BCOR internal tandem duplication, exon 15
