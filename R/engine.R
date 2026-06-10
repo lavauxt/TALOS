@@ -506,6 +506,27 @@
   support_qnames  <- unique(support_rows$read_name)
   raw_support     <- length(support_qnames)
 
+  # ---- Compute softclip side counts ----
+  left_sc_count  <- 0L
+  right_sc_count <- 0L
+  both_sc_count  <- 0L
+  if (nrow(support_rows) > 0 && !is.null(support_rows$cigar)) {
+    for (cig in support_rows$cigar) {
+      if (is.na(cig)) next
+      has_left  <- grepl("^\\d+S", cig, perl = TRUE)
+      has_right <- grepl("\\d+S$", cig, perl = TRUE)
+      if (has_left && has_right) {
+        both_sc_count <- both_sc_count + 1L
+        left_sc_count <- left_sc_count + 1L
+        right_sc_count <- right_sc_count + 1L
+      } else if (has_left) {
+        left_sc_count <- left_sc_count + 1L
+      } else if (has_right) {
+        right_sc_count <- right_sc_count + 1L
+      }
+    }
+  }
+
   # ---- ITD sequence extraction (with observed part tracking) ----
   itd_seq          <- NA_character_
   imputed          <- TRUE
@@ -580,7 +601,6 @@
   }
 
   # ---- Consistency / ITD coverage (with reproducibility seed) ----
-  # Save and restore RNG state to avoid side effects
   if ((do_consistency || do_itd_coverage) &&
       !is.na(itd_seq) && nchar(itd_seq) > 0 && nrow(support_rows) > 0) {
 
@@ -589,11 +609,9 @@
 
     if (length(v_seqs) > 0) {
       if (length(v_seqs) > max_pairwise_alignments) {
-        # Save current RNG state
         old_seed <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) .GlobalEnv$.Random.seed else NULL
-        set.seed(42)  # ensure reproducibility
+        set.seed(42)
         v_seqs <- v_seqs[sample(length(v_seqs), max_pairwise_alignments)]
-        # Restore RNG state
         if (!is.null(old_seed)) .GlobalEnv$.Random.seed <- old_seed else rm(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
       }
 
@@ -814,15 +832,16 @@
     SupportConsistency = consistency_score,
     AlignmentScore    = alignment_score_total,   
     TotalSupportBases = total_support_bases,
-    Orientation       = orientation
+    Orientation       = orientation,
+    LeftSoftclipCount  = left_sc_count,
+    RightSoftclipCount = right_sc_count,
+    BothSoftclipCount  = both_sc_count
   )
 }
 
 
 .apply_filters <- function(metrics, thresholds) {
   with(thresholds, {
-    # NOTE: min_coverage_drop default is 1.5 (a 50% drop). 
-    # Users may adjust based on expected coverage uniformity.
     if (!is.na(metrics$CoverageDrop) &&
         metrics$CoverageDrop < min_coverage_drop)       return(FALSE)
     if (!is.na(metrics$MedianMicrohomology) &&
@@ -847,6 +866,18 @@
     if (!is.na(metrics$SequenceImputed) && isTRUE(metrics$SequenceImputed) &&
         !isTRUE(metrics$SequencePartial) &&
         !is.na(metrics$Length) && metrics$Length > 40)   return(FALSE)
+
+    # ---- Unbalanced soft‑clip filter ----
+    left  <- metrics$LeftSoftclipCount
+    right <- metrics$RightSoftclipCount
+    if (!is.na(left) && !is.na(right)) {
+      if (left < min_side_softclip_reads || right < min_side_softclip_reads) {
+        if (max(left, right) / min(left, right) > max_side_ratio) {
+          return(FALSE)
+        }
+      }
+    }
+
     TRUE
   })
 }

@@ -64,6 +64,8 @@
 #' @param include_timestamp Include timestamp in output filenames (default TRUE).
 #' @param output_sep Separator between filename parts (default "_").
 #' @param global_log Write all logs (config, compute time, errors) to a single file (default TRUE).
+#' @param min_side_softclip_reads Minimum number of reads with soft‑clip on each side (default 2).
+#' @param max_side_ratio Maximum ratio of left/right soft‑clip counts before filtering (default 10).
 #' @param ... Other parameters passed to the underlying engine.
 #' @return Data frame of ITD calls with diagnostic columns, invisibly.
 #' @export
@@ -88,6 +90,7 @@ detect_itd <- function(
     add_config_to_report = FALSE, max_pairwise_alignments = 30L,
     include_sample = TRUE, include_gene = TRUE, include_timestamp = TRUE,
     output_sep = "_", global_log = TRUE,
+    min_side_softclip_reads = 2, max_side_ratio = 10,
     ...
 ) {
   
@@ -207,7 +210,9 @@ detect_itd <- function(
       min_strand_bias = min_strand_bias, max_strand_bias = max_strand_bias,
       min_mean_support_mapq = min_mean_support_mapq, max_breakpoint_spread = max_breakpoint_spread,
       min_softclip_fraction = min_softclip_fraction, min_unique_breakpoints = min_unique_breakpoints,
-      min_itd_read_coverage = min_itd_read_coverage
+      min_itd_read_coverage = min_itd_read_coverage,
+      min_side_softclip_reads = min_side_softclip_reads,
+      max_side_ratio          = max_side_ratio
     )
     
     results <- list()
@@ -296,6 +301,8 @@ detect_itd <- function(
 #' @param include_timestamp Include timestamp in filenames
 #' @param output_sep Separator for filename parts
 #' @param global_log Write all logs to a single file
+#' @param min_side_softclip_reads Minimum number of reads with soft‑clip on each side (default 2).
+#' @param max_side_ratio Maximum ratio of left/right soft‑clip counts before filtering (default 10).
 #' @param ... Extra settings.
 #' @export
 talos <- function(
@@ -321,6 +328,7 @@ talos <- function(
     add_config_to_report = FALSE, max_pairwise_alignments = NULL,
     output_prefix = "TALOS", include_sample = TRUE, include_gene = TRUE,
     include_timestamp = TRUE, output_sep = "_", global_log = TRUE,
+    min_side_softclip_reads = 2, max_side_ratio = 10,
     ...
 ) {
   
@@ -341,7 +349,8 @@ talos <- function(
     compute_repeat_entropy = TRUE, compute_discordant_ratio = TRUE,
     compute_hgvs = TRUE,
     html_report = TRUE, use_gviz = TRUE, min_itd_read_coverage = 0,
-    max_pairwise_alignments = 30L
+    max_pairwise_alignments = 30L,
+    min_side_softclip_reads = 2, max_side_ratio = 10
   )
   
   yaml_vals <- config$gene_settings
@@ -383,6 +392,8 @@ talos <- function(
     max_pairwise_alignments = p$max_pairwise_alignments,
     output_prefix = output_prefix, include_sample = include_sample, include_gene = include_gene,
     include_timestamp = include_timestamp, output_sep = output_sep, global_log = global_log,
+    min_side_softclip_reads = p$min_side_softclip_reads,
+    max_side_ratio          = p$max_side_ratio,
     ...
   )
 }
