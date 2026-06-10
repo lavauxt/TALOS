@@ -449,17 +449,22 @@
 .candidates_to_df <- function(candidates, genomic_start) {
   n <- length(candidates)
   if (n == 0L) return(data.frame())
-
+  
   data.frame(
     breakpoint = vapply(candidates, function(x)
-      genomic_start + x$local_breakpoint - 1L, integer(1L)),
-    length     = vapply(candidates, function(x) x$length,     integer(1L)),
+      as.integer(as.numeric(genomic_start) + as.numeric(x$local_breakpoint) - 1L),
+      integer(1L)),
+    length     = vapply(candidates, function(x) {
+      v <- x$length; if (is.null(v) || (length(v) == 1L && is.na(v))) NA_integer_ else as.integer(v[1L])
+    }, integer(1L)),
     read_name  = vapply(candidates, function(x) x$read_name,  character(1L)),
     read_seq   = vapply(candidates, function(x) {
       s <- x$read_seq; if (is.null(s) || is.na(s)) NA_character_ else s
     }, character(1L)),
     type       = vapply(candidates, function(x) x$type,       character(1L)),
-    mapq       = vapply(candidates, function(x) x$mapq,       integer(1L)),
+    mapq       = vapply(candidates, function(x) {
+      v <- x$mapq; if (is.null(v) || (length(v) == 1L && is.na(v))) NA_integer_ else as.integer(v[1L])
+    }, integer(1L)),
     is_reverse = vapply(candidates, function(x) x$is_reverse, logical(1L)),
     cigar      = vapply(candidates, function(x) x$cigar,      character(1L)),
     itd_seq    = vapply(candidates, function(x) {
@@ -468,7 +473,6 @@
     stringsAsFactors = FALSE
   )
 }
-
 
 .cluster_breakpoints <- function(bp_values, cluster_tolerance) {
   if (length(bp_values) == 0) return(list())
