@@ -14,7 +14,7 @@
 #' @param cluster_tolerance Radius (bp) to cluster breakpoints.
 #' @param prefilter Enable fast prefiltering of alignments.
 #' @param min_ins_filter Minimum net insertion length filter.
-#' @param output_prefix Base name for outputs.
+#' @param output_prefix Base name prefix (default "TALOS").
 #' @param output_folder Output folder path.
 #' @param write_vcf Generate VCF report.
 #' @param verbose Logging enabled.
@@ -59,6 +59,11 @@
 #' @param max_reads_in_region Loading safeguard.
 #' @param add_config_to_report Render configs in results.
 #' @param max_pairwise_alignments Max limit for computationally heavy sub-alignments.
+#' @param include_sample Include sample name in output filenames (default TRUE).
+#' @param include_gene Include gene name in output filenames (default TRUE).
+#' @param include_timestamp Include timestamp in output filenames (default TRUE).
+#' @param output_sep Separator between filename parts (default "_").
+#' @param global_log Write all logs (config, compute time, errors) to a single file (default TRUE).
 #' @param ... Other parameters passed to the underlying engine.
 #' @return Data frame of ITD calls with diagnostic columns, invisibly.
 #' @export
@@ -76,15 +81,13 @@ detect_itd <- function(
     detect_orientation = TRUE, do_annotate_hotspots = TRUE, hotspot_db_path = NULL,
     compute_alignment_score = TRUE, compute_support_bases = TRUE,
     compute_consistency = TRUE, compute_itd_coverage = TRUE,
-    compute_coverage_drop = TRUE,
-    compute_microhomology = TRUE, compute_repeat_entropy = TRUE,
-    compute_discordant_ratio = TRUE,
-    compute_hgvs = TRUE,
-    html_report = TRUE, use_gviz = TRUE,
-    min_itd_read_coverage = 0,
-    max_reads_in_region = 200000,
-    add_config_to_report = FALSE,
-    max_pairwise_alignments = 30L,
+    compute_coverage_drop = TRUE, compute_microhomology = TRUE,
+    compute_repeat_entropy = TRUE, compute_discordant_ratio = TRUE,
+    compute_hgvs = TRUE, html_report = TRUE, use_gviz = TRUE,
+    min_itd_read_coverage = 0, max_reads_in_region = 200000,
+    add_config_to_report = FALSE, max_pairwise_alignments = 30L,
+    include_sample = TRUE, include_gene = TRUE, include_timestamp = TRUE,
+    output_sep = "_", global_log = TRUE,
     ...
 ) {
   
@@ -97,19 +100,51 @@ detect_itd <- function(
   if (!dir.exists(sample_folder)) dir.create(sample_folder, recursive = TRUE, showWarnings = FALSE)
   
   timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-  log_file  <- file.path(sample_folder, paste0(output_prefix, "_", gene_name, "_", timestamp, ".log"))
-  .dump_config_to_log(gene_config, sample_folder, sample_name, gene_name)
   
-  cat(sprintf("TALOS Analysis Log\nSample: %s\nGene: %s\nBAM: %s\nTimestamp: %s\n%s\n",
-              sample_name, gene_name, bam_path, timestamp, strrep("-", 40)), file = log_file)
+  # ---- Build unified base name ----
+  base_parts <- c()
+  if (!is.null(output_prefix) && output_prefix != "") base_parts <- c(base_parts, output_prefix)
+  if (include_sample && !is.null(sample_name) && sample_name != "") base_parts <- c(base_parts, sample_name)
+  if (include_gene   && !is.null(gene_name)   && gene_name != "")   base_parts <- c(base_parts, gene_name)
+  if (include_timestamp && !is.null(timestamp) && timestamp != "")  base_parts <- c(base_parts, timestamp)
+  base_name <- paste(base_parts, collapse = output_sep)
+  
+  # ---- Global log file (single file for everything) ----
+  global_log_file <- NULL
+  if (global_log) {
+    global_log_file <- file.path(sample_folder, paste0(base_name, ".log"))
+    cat("=== TALOS Analysis Log ===\n", file = global_log_file)
+    cat(paste("Sample:", sample_name, "\n"), file = global_log_file, append = TRUE)
+    cat(paste("Gene:", gene_name, "\n"), file = global_log_file, append = TRUE)
+    cat(paste("BAM:", bam_path, "\n"), file = global_log_file, append = TRUE)
+    cat(paste("Timestamp:", timestamp, "\n"), file = global_log_file, append = TRUE)
+    cat(paste("Output folder:", output_folder, "\n"), file = global_log_file, append = TRUE)
+    cat(strrep("-", 40), "\n", file = global_log_file, append = TRUE)
+    cat("=== Gene Configuration ===\n", file = global_log_file, append = TRUE)
+    capture.output(str(gene_config, max.level = 2), file = global_log_file, append = TRUE)
+    cat(strrep("-", 40), "\n", file = global_log_file, append = TRUE)
+  }
+  
+  # Helper to write to both console and log
+  log_msg <- function(..., append = TRUE) {
+    msg <- paste(..., collapse = " ")
+    if (verbose) message(msg)
+    if (global_log && !is.null(global_log_file)) {
+      cat(msg, "\n", file = global_log_file, append = append)
+    }
+  }
+  
+  log_msg("Starting TALOS detection engine...")
   
   on.exit({
-    elapsed  <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+    elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
     time_msg <- if (elapsed < 60) sprintf("%.1f sec", elapsed) else sprintf("%.1f min", elapsed / 60)
-    cat(sprintf("\n%s\nCOMPUTE TIME: %s\n%s\n", strrep("-", 40), time_msg, strrep("-", 40)), file = log_file, append = TRUE)
-    if (verbose) message(sprintf("Log file saved to: %s", log_file))
+    log_msg(sprintf("\n%s\nCOMPUTE TIME: %s\n%s", strrep("-", 40), time_msg, strrep("-", 40)))
+    if (global_log && !is.null(global_log_file)) {
+      log_msg(sprintf("Global log saved to: %s", global_log_file))
+    }
   }, add = TRUE)
-
+  
   tryCatch({
     # Use genomic_ref_seq from gene_config (always present)
     ref_dna <- gene_config$genomic_ref_seq
@@ -118,7 +153,7 @@ detect_itd <- function(
     
     ref_len <- nchar(ref_dna)
     if (ref_len < k) {
-      if (verbose) message("Reference shorter than k-mer length. Skipping.")
+      log_msg("Reference shorter than k-mer length. Skipping.")
       return(data.frame())
     }
     
@@ -129,7 +164,7 @@ detect_itd <- function(
     all_reads <- bam_data$reads
     
     if (length(all_reads) == 0) {
-      if (verbose) message("No reads found in target region.")
+      log_msg("No reads found in target region.")
       .log_duration(gene_name, sample_name, start_time, verbose)
       return(data.frame())
     }
@@ -140,7 +175,10 @@ detect_itd <- function(
     
     if (prefilter) {
       all_reads <- .filter_reads_by_cigar(all_reads, min_mapq, min_ins_filter)
-      if (length(all_reads) == 0) return(data.frame())
+      if (length(all_reads) == 0) {
+        log_msg("No reads passed CIGAR prefilter.")
+        return(data.frame())
+      }
     }
     
     if (ptd_mode && use_cigar_bp) {
@@ -150,7 +188,7 @@ detect_itd <- function(
     }
     
     if (length(candidates) == 0) {
-      if (verbose) message("No candidate reads (clips or k-mer jumps) found.")
+      log_msg("No candidate reads (clips or k-mer jumps) found.")
       return(data.frame())
     }
     
@@ -188,9 +226,6 @@ detect_itd <- function(
         if (is.na(best_len)) support_rows <- bp_df[bp_df$breakpoint %in% cl & is.na(bp_df$length), ]
         else support_rows <- bp_df[bp_df$breakpoint %in% cl & !is.na(bp_df$length) & bp_df$length == best_len, ]
         
-        # Note: itd_seq will be handled inside .compute_variant_metrics (from softclips or consensus)
-        # No longer assigning one sequence to all support rows.
-        
         metrics <- .compute_variant_metrics(
           cluster_bps = cl, best_len = best_len, support_rows = support_rows,
           genomic_start = gene_config$genomic_start, ref_dna = ref_dna,
@@ -212,7 +247,7 @@ detect_itd <- function(
     }
     
     if (length(results) == 0) {
-      if (verbose) message("No variants passed all filters.")
+      log_msg("No variants passed all filters.")
       return(data.frame())
     }
     
@@ -227,12 +262,21 @@ detect_itd <- function(
     final_df$TranscriptRef <- gene_config$transcript
     if (is.na(gene_config$transcript)) final_df$TranscriptRef <- "none"
     
-    .write_talos_output(final_df, output_prefix, output_folder, sample_name, gene_name, gene_config, ref_dna, bam_path, write_vcf, plot, html_report, verbose, add_config_to_report = add_config_to_report)
+    .write_talos_output(
+      final_df, base_name = base_name, output_folder = output_folder,
+      sample_name = sample_name, gene_config = gene_config,
+      ref_dna = ref_dna, bam_path = bam_path,
+      write_vcf = write_vcf, plot = plot, html_report = html_report,
+      verbose = verbose, add_config_to_report = add_config_to_report
+    )
+    
+    log_msg(sprintf("Analysis completed successfully. %d variant(s) found.", nrow(final_df)))
     .log_duration(gene_name, sample_name, start_time, verbose)
     return(final_df)
+    
   }, error = function(e) {
-    cat(sprintf("\n%s\nERROR: %s\n%s\n", strrep("-", 40), conditionMessage(e), strrep("-", 40)),
-        file = log_file, append = TRUE)
+    err_msg <- sprintf("\n%s\nERROR: %s\n%s", strrep("-", 40), conditionMessage(e), strrep("-", 40))
+    log_msg(err_msg)
     stop(e)
   })
 }
@@ -246,6 +290,12 @@ detect_itd <- function(
 #' @param compute_discordant_ratio Boolean: whether to compute discordant pair metric (default TRUE).
 #' @param add_config_to_report Include config in plots/HTML report
 #' @param max_pairwise_alignments Limit maximum sequences for robust alignment matching
+#' @param output_prefix Base name prefix (default "TALOS")
+#' @param include_sample Include sample name in filenames
+#' @param include_gene Include gene name in filenames
+#' @param include_timestamp Include timestamp in filenames
+#' @param output_sep Separator for filename parts
+#' @param global_log Write all logs to a single file
 #' @param ... Extra settings.
 #' @export
 talos <- function(
@@ -269,6 +319,8 @@ talos <- function(
     min_itd_read_coverage = NULL, html_report = NULL, use_gviz = NULL,
     bsgenome = NULL, yaml_path = system.file("extdata", "gene_config.yaml", package = "TALOS"),
     add_config_to_report = FALSE, max_pairwise_alignments = NULL,
+    output_prefix = "TALOS", include_sample = TRUE, include_gene = TRUE,
+    include_timestamp = TRUE, output_sep = "_", global_log = TRUE,
     ...
 ) {
   
@@ -329,6 +381,8 @@ talos <- function(
     compute_hgvs = p$compute_hgvs, html_report = p$html_report, use_gviz = p$use_gviz,
     min_itd_read_coverage = p$min_itd_read_coverage, add_config_to_report = add_config_to_report,
     max_pairwise_alignments = p$max_pairwise_alignments,
+    output_prefix = output_prefix, include_sample = include_sample, include_gene = include_gene,
+    include_timestamp = include_timestamp, output_sep = output_sep, global_log = global_log,
     ...
   )
 }

@@ -321,15 +321,14 @@ talos_html_report <- function(result_df, bam_paths = NULL, gene_configs = NULL, 
   invisible(output_file)
 }
 
-.write_talos_output <- function(final_df, output_prefix, output_folder, sample_name, gene_name, gene_config, ref_dna, bam_path, write_vcf, plot, html_report, verbose, add_config_to_report = FALSE) {
-  if (is.null(output_prefix) || nrow(final_df) == 0) return(invisible(NULL))
+.write_talos_output <- function(final_df, base_name, output_folder, sample_name,
+                                gene_config, ref_dna, bam_path, write_vcf, plot,
+                                html_report, verbose, add_config_to_report = FALSE) {
+  if (is.null(base_name) || nrow(final_df) == 0) return(invisible(NULL))
   sample_folder <- file.path(output_folder, sample_name)
   if (!dir.exists(sample_folder)) dir.create(sample_folder, recursive = TRUE, showWarnings = FALSE)
 
-  timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-  base_name <- paste0(output_prefix, "_", gene_name, "_", timestamp)
   tsv_file  <- file.path(sample_folder, paste0(base_name, ".tsv"))
-
   for (col in names(final_df)) {
     if (is.list(final_df[[col]])) final_df[[col]] <- vapply(final_df[[col]], function(x) if (length(x) == 0) NA_character_ else paste(x, collapse = ";"), character(1L))
   }
@@ -343,18 +342,18 @@ talos_html_report <- function(result_df, bam_paths = NULL, gene_configs = NULL, 
 
   pdf_path <- NULL
   if (plot && nrow(final_df) > 0) {
-    pdf_name <- file.path(sample_folder, paste0(sample_name, "_", gene_name, ".pdf"))
-    plot_talos_report(itd_row = final_df, gene_config = gene_config, bam_path = bam_path, sample_name = sample_name, output_pdf = pdf_name, show_config = add_config_to_report)
-    pdf_path <- pdf_name
+    pdf_file <- file.path(sample_folder, paste0(base_name, ".pdf"))
+    plot_talos_report(itd_row = final_df, gene_config = gene_config, bam_path = bam_path, sample_name = sample_name, output_pdf = pdf_file, show_config = add_config_to_report)
+    pdf_path <- pdf_file
   }
 
   widget_path <- NULL
   if (requireNamespace("plotly", quietly = TRUE)) {
     wgt <- tryCatch(plot_talos_interactive(final_df, gene_config, bam_path, sample_name, show_config = add_config_to_report), error = function(e) NULL)
     if (!is.null(wgt)) {
-      widget_file <- file.path(sample_folder, paste0(sample_name, "_", gene_name, "_interactive.html"))
+      widget_file <- file.path(sample_folder, paste0(base_name, "_interactive.html"))
       if (requireNamespace("htmlwidgets", quietly = TRUE)) {
-        htmlwidgets::saveWidget(wgt, widget_file, selfcontained = TRUE, title = paste0("TALOS – ", sample_name, " | ", gene_name))
+        htmlwidgets::saveWidget(wgt, widget_file, selfcontained = TRUE, title = paste0("TALOS – ", sample_name, " | ", gene_config$gene))
         if (verbose) message(sprintf("Interactive plot saved to: %s", widget_file))
         widget_path <- widget_file
       }
@@ -364,10 +363,10 @@ talos_html_report <- function(result_df, bam_paths = NULL, gene_configs = NULL, 
   if (html_report && nrow(final_df) > 0) {
     if (!requireNamespace("rmarkdown", quietly = TRUE)) { warning("rmarkdown not installed. Cannot generate HTML report.") } 
     else {
-      report_file <- file.path(sample_folder, paste0("TALOS_report_", gene_name, "_", timestamp, ".html"))
+      report_file <- file.path(sample_folder, paste0(base_name, "_report.html"))
       bam_vec     <- setNames(bam_path, sample_name)
-      config_list <- setNames(list(gene_config), gene_name)
-      suppressWarnings(talos_html_report(result_df = final_df, bam_paths = bam_vec, gene_configs = config_list, output_file = report_file, title = paste("TALOS Report –", gene_name, sample_name), show_config = add_config_to_report))
+      config_list <- setNames(list(gene_config), gene_config$gene)
+      suppressWarnings(talos_html_report(result_df = final_df, bam_paths = bam_vec, gene_configs = config_list, output_file = report_file, title = paste("TALOS Report –", gene_config$gene, sample_name), show_config = add_config_to_report))
       if (verbose) message(sprintf("HTML report written to: %s", report_file))
     }
   }
