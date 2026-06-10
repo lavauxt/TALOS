@@ -130,13 +130,40 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   )
   grid::grid.text(label = subtitle, x = grid::unit(0.5, "npc"), y = grid::unit(0.915, "npc"), just = c("center", "center"), gp = grid::gpar(fontsize = 9, col = "#2c3e50", fontface = "plain"))
 
+  # Build summary table including new softclip metrics
   summary_df <- data.frame(
-    Metric = c("Sample", "Gene", "Genome Build", "Genomic Position", "Length (bp)", "VAF (%)", "Supporting Reads", "Wildtype Reads", "Depth at Breakpoint", "HGVS cDNA", "HGVS Protein", "Region", "Exon Number", "Orientation", "Hotspot", "Strand Bias", "Mean MAPQ", "Support Consistency", "RefMatch (%)", "ITD Read Coverage (%)", "Sequence Source"), stringsAsFactors = FALSE
+    Metric = c("Sample", "Gene", "Genome Build", "Genomic Position", "Length (bp)", "VAF (%)", 
+               "Supporting Reads", "Wildtype Reads", "Depth at Breakpoint", "HGVS cDNA", "HGVS Protein", 
+               "Region", "Exon Number", "Orientation", "Hotspot", "Strand Bias", "Mean MAPQ", 
+               "Support Consistency", "RefMatch (%)", "ITD Read Coverage (%)", "Sequence Source",
+               "Left Softclip Count", "Right Softclip Count", "Left Softclip % (Support)", "Right Softclip % (Support)",
+               "Left Softclip % (WT)", "Right Softclip % (WT)"),
+    stringsAsFactors = FALSE
   )
   for (i in seq_len(nrow(itd_df[keep, , drop = FALSE]))) {
     row <- itd_df[keep, ][i, ]
     summary_df[[paste0("ITD_", i)]] <- c(
-      as.character(sample_name), as.character(row$Gene), genome_build, as.character(row$GenomicPosition), as.character(row$Length), sprintf("%.1f", row$AlleleFrequency * 100), as.character(row$SupportingReads), as.character(round(row$WildtypeReads)), as.character(row$DepthAtBreakpoint), ifelse(is.na(row$HGVS_cDNA), "N/A", row$HGVS_cDNA), ifelse(is.na(row$HGVS_Protein), "N/A", row$HGVS_Protein), ifelse(is.na(row$Region), "N/A", row$Region), ifelse(is.na(row$ExonNumber), "N/A", as.character(row$ExonNumber)), ifelse(is.na(row$Orientation), "N/A", row$Orientation), ifelse(isTRUE(row$Hotspot), as.character(row$HotspotName), "No"), ifelse(is.na(row$StrandBias), "N/A", sprintf("%.3f", row$StrandBias)), ifelse(is.na(row$MeanSupportMAPQ), "N/A", sprintf("%.1f", row$MeanSupportMAPQ)), ifelse(is.na(row$SupportConsistency), "N/A", paste0(round(row$SupportConsistency), "%")), ifelse(is.na(row$RefMatch_Observed), "N/A", paste0(round(row$RefMatch_Observed, 1), "%")), ifelse(is.na(row$ITDReadCoverage), "N/A", paste0(round(row$ITDReadCoverage, 1), "%")), ifelse(is.na(row$SequenceSource), "N/A", row$SequenceSource)
+      as.character(sample_name), as.character(row$Gene), genome_build, as.character(row$GenomicPosition), 
+      as.character(row$Length), sprintf("%.1f", row$AlleleFrequency * 100), 
+      as.character(row$SupportingReads), as.character(round(row$WildtypeReads)), as.character(row$DepthAtBreakpoint), 
+      ifelse(is.na(row$HGVS_cDNA), "N/A", row$HGVS_cDNA), 
+      ifelse(is.na(row$HGVS_Protein), "N/A", row$HGVS_Protein), 
+      ifelse(is.na(row$Region), "N/A", row$Region), 
+      ifelse(is.na(row$ExonNumber), "N/A", as.character(row$ExonNumber)), 
+      ifelse(is.na(row$Orientation), "N/A", row$Orientation), 
+      ifelse(isTRUE(row$Hotspot), as.character(row$HotspotName), "No"), 
+      ifelse(is.na(row$StrandBias), "N/A", sprintf("%.3f", row$StrandBias)), 
+      ifelse(is.na(row$MeanSupportMAPQ), "N/A", sprintf("%.1f", row$MeanSupportMAPQ)), 
+      ifelse(is.na(row$SupportConsistency), "N/A", paste0(round(row$SupportConsistency), "%")), 
+      ifelse(is.na(row$RefMatch_Observed), "N/A", paste0(round(row$RefMatch_Observed, 1), "%")), 
+      ifelse(is.na(row$ITDReadCoverage), "N/A", paste0(round(row$ITDReadCoverage, 1), "%")), 
+      ifelse(is.na(row$SequenceSource), "N/A", row$SequenceSource),
+      ifelse(is.na(row$LeftSoftclipCount), "0", as.character(row$LeftSoftclipCount)),
+      ifelse(is.na(row$RightSoftclipCount), "0", as.character(row$RightSoftclipCount)),
+      ifelse(is.na(row$LeftSoftclipPctSupport), "N/A", sprintf("%.1f", row$LeftSoftclipPctSupport)),
+      ifelse(is.na(row$RightSoftclipPctSupport), "N/A", sprintf("%.1f", row$RightSoftclipPctSupport)),
+      ifelse(is.na(row$LeftSoftclipPctWT), "N/A", sprintf("%.1f", row$LeftSoftclipPctWT)),
+      ifelse(is.na(row$RightSoftclipPctWT), "N/A", sprintf("%.1f", row$RightSoftclipPctWT))
     )
   }
 
@@ -144,8 +171,13 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   if (requireNamespace("gridExtra", quietly = TRUE)) {
     n_rows   <- nrow(summary_df)
     row_fill <- rep(c("white", "#f0f4f8"), length.out = n_rows)
-    tbl <- gridExtra::tableGrob(summary_df, rows = NULL, theme = gridExtra::ttheme_minimal(core = list(fg_params = list(cex = 0.8, fontface = "plain"), bg_params = list(fill = row_fill, col = NA)), colhead = list(fg_params = list(cex = 0.9, fontface = "bold", col = "white"), bg_params = list(fill = "#2c3e50", col = NA))))
-    grid::grid.text(sprintf("Variant Summary – Sample: %s | %s (%d variants)", sample_name, gene_config$gene, nrow(itd_df[keep, , drop = FALSE])), x = 0.5, y = 0.97, gp = grid::gpar(fontsize = 13, fontface = "bold", col = "#2c3e50"))
+    tbl <- gridExtra::tableGrob(summary_df, rows = NULL, theme = gridExtra::ttheme_minimal(
+      core = list(fg_params = list(cex = 0.7, fontface = "plain"), 
+                  bg_params = list(fill = row_fill, col = NA)), 
+      colhead = list(fg_params = list(cex = 0.8, fontface = "bold", col = "white"), 
+                     bg_params = list(fill = "#2c3e50", col = NA))))
+    grid::grid.text(sprintf("Variant Summary – Sample: %s | %s (%d variants)", sample_name, gene_config$gene, nrow(itd_df[keep, , drop = FALSE])), 
+                    x = 0.5, y = 0.97, gp = grid::gpar(fontsize = 13, fontface = "bold", col = "#2c3e50"))
     vp <- grid::viewport(x = 0.5, y = 0.47, width = 0.90, height = 0.88)
     grid::pushViewport(vp); grid::grid.draw(tbl); grid::popViewport()
   } else {
@@ -157,7 +189,14 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
     grid::grid.text("Analysis Configuration", x = 0.5, y = 0.95, gp = grid::gpar(fontsize = 14, fontface = "bold", col = "#2c3e50"))
     ypos <- 0.85
     config_lines <- c(
-      paste("Gene:", gene_config$gene), paste("Build:", genome_build), paste("Chromosome:", gene_config$chrom), paste("Strand:", gene_config$strand), paste("Transcript reference:", ifelse(is.na(gene_config$transcript), "none", gene_config$transcript)), paste("CDS offset:", gene_config$cds_offset), paste("Genomic window:", gene_config$genomic_start, "-", gene_config$genomic_end), paste("Targeted exons:", paste(unique(gene_config$target_exons$exon_idx), collapse = ", ")), paste("Settings:"), paste("  min_support =", gene_config$gene_settings$min_support %||% "default"), paste("  cluster_tolerance =", gene_config$gene_settings$cluster_tolerance %||% "default"), paste("  min_mapq =", gene_config$gene_settings$min_mapq %||% "default")
+      paste("Gene:", gene_config$gene), paste("Build:", genome_build), paste("Chromosome:", gene_config$chrom), 
+      paste("Strand:", gene_config$strand), paste("Transcript reference:", ifelse(is.na(gene_config$transcript), "none", gene_config$transcript)), 
+      paste("CDS offset:", gene_config$cds_offset), paste("Genomic window:", gene_config$genomic_start, "-", gene_config$genomic_end), 
+      paste("Targeted exons:", paste(unique(gene_config$target_exons$exon_idx), collapse = ", ")), 
+      paste("Settings:"), 
+      paste("  min_support =", gene_config$gene_settings$min_support %||% "default"), 
+      paste("  cluster_tolerance =", gene_config$gene_settings$cluster_tolerance %||% "default"), 
+      paste("  min_mapq =", gene_config$gene_settings$min_mapq %||% "default")
     )
     for (line in config_lines) { grid::grid.text(line, x = 0.05, y = ypos, just = "left", gp = grid::gpar(fontsize = 10, fontfamily = "mono")); ypos <- ypos - 0.04 }
   }
@@ -252,7 +291,19 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
     vaf_str  <- sprintf("%.1f%%", row$AlleleFrequency * 100)
     col_i    <- pal[((i - 1L) %% length(pal)) + 1L]
     y_pos    <- 0.1 + (i - 1L) * 0.18
-    tip_text <- paste0("<b>ITD ", i, "</b><br>", "Breakpoint: ", row$GenomicPosition, "<br>", "Length: ", row$Length, " bp<br>", "VAF: ", vaf_str, "<br>", "HGVS cDNA: ", ifelse(is.na(row$HGVS_cDNA), "N/A", row$HGVS_cDNA), "<br>", "HGVS Protein: ", ifelse(is.na(row$HGVS_Protein), "N/A", row$HGVS_Protein), "<br>", "Region: ", ifelse(is.na(row$Region), "N/A", row$Region), "<br>", "Support: ", row$SupportingReads, " reads<br>", "RefMatch: ", ifelse(is.na(row$RefMatch_Observed), "N/A", paste0(round(row$RefMatch_Observed, 1), "%")), "<br>", "ITD Cov: ", ifelse(is.na(row$ITDReadCoverage), "N/A", paste0(round(row$ITDReadCoverage, 1), "%")), "<br>", "Orientation: ", ifelse(is.na(row$Orientation), "?", row$Orientation))
+    tip_text <- paste0("<b>ITD ", i, "</b><br>",
+                       "Breakpoint: ", row$GenomicPosition, "<br>",
+                       "Length: ", row$Length, " bp<br>",
+                       "VAF: ", vaf_str, "<br>",
+                       "HGVS cDNA: ", ifelse(is.na(row$HGVS_cDNA), "N/A", row$HGVS_cDNA), "<br>",
+                       "HGVS Protein: ", ifelse(is.na(row$HGVS_Protein), "N/A", row$HGVS_Protein), "<br>",
+                       "Region: ", ifelse(is.na(row$Region), "N/A", row$Region), "<br>",
+                       "Support: ", row$SupportingReads, " reads<br>",
+                       "RefMatch: ", ifelse(is.na(row$RefMatch_Observed), "N/A", paste0(round(row$RefMatch_Observed, 1), "%")), "<br>",
+                       "ITD Cov: ", ifelse(is.na(row$ITDReadCoverage), "N/A", paste0(round(row$ITDReadCoverage, 1), "%")), "<br>",
+                       "Orientation: ", ifelse(is.na(row$Orientation), "?", row$Orientation), "<br>",
+                       "Left Softclip: ", row$LeftSoftclipCount, " (", ifelse(is.na(row$LeftSoftclipPctSupport), "0", round(row$LeftSoftclipPctSupport,1)), "% of support)<br>",
+                       "Right Softclip: ", row$RightSoftclipCount, " (", ifelse(is.na(row$RightSoftclipPctSupport), "0", round(row$RightSoftclipPctSupport,1)), "% of support)")
     label <- sprintf("%d bp  VAF %s", row$Length, vaf_str)
     if (!is.na(row$HGVS_cDNA)) label <- paste0(label, "  ", row$HGVS_cDNA)
 
@@ -312,7 +363,20 @@ talos_html_report <- function(result_df, bam_paths = NULL, gene_configs = NULL, 
   on.exit(unlink(rmd_template, force = TRUE), add = TRUE)
 
   rmd_lines <- c(
-    "---", paste0('title: "', gsub('"', "'", title), '"'), "output:", "  html_document:", "    self_contained: true", "    theme: flatly", "    toc: true", "    toc_float: true", "params:", "  result_df: NULL", "  plot_widgets: NULL", "  gene_configs: NULL", "  has_plotly: false", "  show_config: false", "---", "", "```{r setup, include=FALSE}", "knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)", "library(DT)", "```", "", "## Results summary", "```{r results-table}", "cols_hide <- c('ITD_Sequence','ITDCoverageRLE','SequenceImputed','SequencePartial')", "cols_show <- setdiff(names(params$result_df), cols_hide)", "df_disp   <- params$result_df[, cols_show, drop=FALSE]", "if ('AlleleFrequency' %in% colnames(df_disp)) df_disp$AlleleFrequency <- sprintf('%.1f%%', df_disp$AlleleFrequency * 100)", "DT::datatable(df_disp, filter='top', options=list(scrollX=TRUE, pageLength=25, dom='Bfrtip'), extensions='Buttons')", "```", "", "## Variant details", "```{r variant-details, results='asis'}", "if (nrow(params$result_df) == 0) { cat('*No variants detected.*\\n') } else { groups <- unique(params$result_df[, c('Sample','Gene')]); for (gi in seq_len(nrow(groups))) { sn <- groups$Sample[gi]; gn <- groups$Gene[gi]; cat('\\n\\n### Sample:', sn, '\\u2014', gn, '\\n\\n'); if (isTRUE(params$has_plotly)) { key <- paste(sn, gn, sep='_'); wgt <- params$plot_widgets[[key]]; if (!is.null(wgt)) { print(htmltools::tagList(wgt)) } else { cat('*Interactive plot not available.*\\n') } }; sub_df <- params$result_df[params$result_df$Sample==sn & params$result_df$Gene==gn, , drop=FALSE]; for (vi in seq_len(nrow(sub_df))) { row <- sub_df[vi, ]; hgvs_str <- ifelse(is.na(row$HGVS_cDNA), 'N/A', row$HGVS_cDNA); cat(sprintf('\\n\\n#### Variant %d: %s\\n', vi, hgvs_str)); cat(sprintf('* **VAF:** %.1f%%\\n', row$AlleleFrequency*100)); cat(sprintf('* **Length:** %d bp\\n', row$Length)); cat(sprintf('* **Breakpoint:** %s\\n', row$GenomicPosition)); cat(sprintf('* **Region:** %s\\n', ifelse(is.na(row$Region),'N/A',row$Region))); cat(sprintf('* **Orientation:** %s\\n', ifelse(is.na(row$Orientation),'?',row$Orientation))); cat(sprintf('* **Hotspot:** %s\\n', ifelse(isTRUE(row$Hotspot),row$HotspotName,'No'))); cat(sprintf('* **RefMatch:** %s\\n', ifelse(is.na(row$RefMatch_Observed),'N/A',paste0(round(row$RefMatch_Observed,1),'%')))); cat(sprintf('* **ITD Read Coverage:** %s\\n', ifelse(is.na(row$ITDReadCoverage),'N/A',paste0(round(row$ITDReadCoverage,1),'%')))); cat(sprintf('* **Sequence Source:** %s\\n', ifelse(is.na(row$SequenceSource),'N/A',row$SequenceSource))); if (!is.na(row$ITD_Sequence) && nchar(row$ITD_Sequence) > 0) { cat(sprintf('* **ITD Sequence:** <details><summary>Show (%d bp)</summary><pre>%s</pre></details>\\n', nchar(row$ITD_Sequence), row$ITD_Sequence)) } }; if (isTRUE(params$show_config)) { cat('\\n\\n#### Analysis configuration\\n'); cfg_str <- sprintf(paste0('* **Transcript:** %s\\n* **CDS offset:** %d\\n* **Targeted exons:** %s\\n* **Genomic window:** %d-%d\\n'), ifelse(is.na(params$gene_configs[[gn]]$transcript), 'none', params$gene_configs[[gn]]$transcript), params$gene_configs[[gn]]$cds_offset, paste(unique(params$gene_configs[[gn]]$target_exons$exon_idx), collapse=','), params$gene_configs[[gn]]$genomic_start, params$gene_configs[[gn]]$genomic_end); cat(cfg_str) } } }", "```"
+    "---", paste0('title: "', gsub('"', "'", title), '"'), "output:", "  html_document:", "    self_contained: true", "    theme: flatly", "    toc: true", "    toc_float: true", "params:", "  result_df: NULL", "  plot_widgets: NULL", "  gene_configs: NULL", "  has_plotly: false", "  show_config: false", "---", "", "```{r setup, include=FALSE}", "knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)", "library(DT)", "```", "",
+    "## Results summary", "```{r results-table}",
+    "cols_hide <- c('ITD_Sequence','ITDCoverageRLE','SequenceImputed','SequencePartial','LeftSoftclipPctWT','RightSoftclipPctWT')",
+    "cols_show <- setdiff(names(params$result_df), cols_hide)",
+    "df_disp   <- params$result_df[, cols_show, drop=FALSE]",
+    "if ('AlleleFrequency' %in% colnames(df_disp)) df_disp$AlleleFrequency <- sprintf('%.1f%%', df_disp$AlleleFrequency * 100)",
+    "# Format softclip percentages",
+    "if ('LeftSoftclipPctSupport' %in% colnames(df_disp)) df_disp$LeftSoftclipPctSupport <- ifelse(is.na(df_disp$LeftSoftclipPctSupport), 'N/A', paste0(round(df_disp$LeftSoftclipPctSupport,1), '%'))",
+    "if ('RightSoftclipPctSupport' %in% colnames(df_disp)) df_disp$RightSoftclipPctSupport <- ifelse(is.na(df_disp$RightSoftclipPctSupport), 'N/A', paste0(round(df_disp$RightSoftclipPctSupport,1), '%'))",
+    "DT::datatable(df_disp, filter='top', options=list(scrollX=TRUE, pageLength=25, dom='Bfrtip'), extensions='Buttons')",
+    "```", "",
+    "## Variant details", "```{r variant-details, results='asis'}",
+    "if (nrow(params$result_df) == 0) { cat('*No variants detected.*\\n') } else { groups <- unique(params$result_df[, c('Sample','Gene')]); for (gi in seq_len(nrow(groups))) { sn <- groups$Sample[gi]; gn <- groups$Gene[gi]; cat('\\n\\n### Sample:', sn, '\\u2014', gn, '\\n\\n'); if (isTRUE(params$has_plotly)) { key <- paste(sn, gn, sep='_'); wgt <- params$plot_widgets[[key]]; if (!is.null(wgt)) { print(htmltools::tagList(wgt)) } else { cat('*Interactive plot not available.*\\n') } }; sub_df <- params$result_df[params$result_df$Sample==sn & params$result_df$Gene==gn, , drop=FALSE]; for (vi in seq_len(nrow(sub_df))) { row <- sub_df[vi, ]; hgvs_str <- ifelse(is.na(row$HGVS_cDNA), 'N/A', row$HGVS_cDNA); cat(sprintf('\\n\\n#### Variant %d: %s\\n', vi, hgvs_str)); cat(sprintf('* **VAF:** %.1f%%\\n', row$AlleleFrequency*100)); cat(sprintf('* **Length:** %d bp\\n', row$Length)); cat(sprintf('* **Breakpoint:** %s\\n', row$GenomicPosition)); cat(sprintf('* **Region:** %s\\n', ifelse(is.na(row$Region),'N/A',row$Region))); cat(sprintf('* **Orientation:** %s\\n', ifelse(is.na(row$Orientation),'?',row$Orientation))); cat(sprintf('* **Hotspot:** %s\\n', ifelse(isTRUE(row$Hotspot),row$HotspotName,'No'))); cat(sprintf('* **RefMatch:** %s\\n', ifelse(is.na(row$RefMatch_Observed),'N/A',paste0(round(row$RefMatch_Observed,1),'%')))); cat(sprintf('* **ITD Read Coverage:** %s\\n', ifelse(is.na(row$ITDReadCoverage),'N/A',paste0(round(row$ITDReadCoverage,1),'%')))); cat(sprintf('* **Sequence Source:** %s\\n', ifelse(is.na(row$SequenceSource),'N/A',row$SequenceSource))); cat(sprintf('* **Left Softclip Count:** %d (%.1f%% of support)\\n', row$LeftSoftclipCount, ifelse(is.na(row$LeftSoftclipPctSupport),0,row$LeftSoftclipPctSupport))); cat(sprintf('* **Right Softclip Count:** %d (%.1f%% of support)\\n', row$RightSoftclipCount, ifelse(is.na(row$RightSoftclipPctSupport),0,row$RightSoftclipPctSupport))); if (!is.na(row$ITD_Sequence) && nchar(row$ITD_Sequence) > 0) { cat(sprintf('* **ITD Sequence:** <details><summary>Show (%d bp)</summary><pre>%s</pre></details>\\n', nchar(row$ITD_Sequence), row$ITD_Sequence)) } }; if (isTRUE(params$show_config)) { cat('\\n\\n#### Analysis configuration\\n'); cfg_str <- sprintf(paste0('* **Transcript:** %s\\n* **CDS offset:** %d\\n* **Targeted exons:** %s\\n* **Genomic window:** %d-%d\\n'), ifelse(is.na(params$gene_configs[[gn]]$transcript), 'none', params$gene_configs[[gn]]$transcript), params$gene_configs[[gn]]$cds_offset, paste(unique(params$gene_configs[[gn]]$target_exons$exon_idx), collapse=','), params$gene_configs[[gn]]$genomic_start, params$gene_configs[[gn]]$genomic_end); cat(cfg_str) } } }",
+    "```"
   )
   writeLines(rmd_lines, rmd_template)
 

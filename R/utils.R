@@ -57,7 +57,6 @@ annotate_hotspots <- function(itd_df, db_path = NULL, genome_build = NULL,
     if (!requireNamespace("DBI", quietly = TRUE))
       stop("Package 'DBI' required for database mode.")
 
-    # Bulk query: one query per gene, then use findOverlaps (same as CSV path)
     genes_in_df <- unique(itd_df$Gene)
     hs_list <- lapply(genes_in_df, function(g) {
       build_clause <- if (!is.null(genome_build)) " AND Build = ?" else ""
@@ -115,7 +114,7 @@ annotate_hotspots <- function(itd_df, db_path = NULL, genome_build = NULL,
 
     itd_end <- itd_df$GenomicPosition +
                ifelse(is.na(itd_df$Length), 0L, itd_df$Length) - 1L
-    itd_end <- pmax(itd_end, itd_df$GenomicPosition)  # guard against 0-length
+    itd_end <- pmax(itd_end, itd_df$GenomicPosition)
 
     itd_gr <- GenomicRanges::GRanges(
       seqnames = itd_df$Gene,
@@ -319,7 +318,8 @@ compute_hgvs_annotations <- function(gene_config, genomic_pos,
   end_notation   <- .genomic_to_cdna_hgvs(genomic_end,  exons_df, strand, cds_offset)
 
   if (is.na(start_notation) || is.na(end_notation)) {
-    return(list(c_notation = NA_character_, p_notation = NA_character_))
+    # If the breakpoint is intronic, return a more informative placeholder
+    return(list(c_notation = "c.?+?", p_notation = "intronic"))
   }
 
   c_notation <- paste0("c.", start_notation, "_", end_notation, "dup")
@@ -377,12 +377,21 @@ compute_hgvs_annotations <- function(gene_config, genomic_pos,
     }
   }
 
+  # If still NA and the variant is intronic, set to "intronic"
+  if (is.na(p_notation)) {
+    # Check if breakpoint is exonic (we would need exons_gr, but we can guess from start_notation)
+    # If start_notation contains '+' or '-', it's intronic
+    if (grepl("[+-]", start_notation)) {
+      p_notation <- "intronic"
+    }
+  }
+
   list(c_notation = c_notation, p_notation = p_notation)
 }
 
 
 # ----------------------------------------------------------------------------
-# Metrics helpers
+# Metrics helpers (unchanged)
 # ----------------------------------------------------------------------------
 compute_coverage_drop <- function(cov_all, chrom, breakpoint,
                                    flank = 200, min_depth = 5, 
@@ -393,7 +402,6 @@ compute_coverage_drop <- function(cov_all, chrom, breakpoint,
     return(NA_real_)
   }
 
-  # Handle both RleList and direct Rle/numeric vector inputs
   if (inherits(cov_all, "Rle") || is.numeric(cov_all)) {
     cov_rle <- cov_all
   } else if (chrom %in% names(cov_all)) {
@@ -510,7 +518,6 @@ compute_microhomology <- function(support_rows, ref_dna, breakpoint,
         mm <- if (has_biostrings) {
           Biostrings::lcprefix(sc$lead, ref_down)
         } else {
-          # Fallback: exact match from start
           min_len <- min(nchar(sc$lead), nchar(ref_down))
           if (substr(sc$lead, 1, min_len) == substr(ref_down, 1, min_len)) min_len else 0
         }
@@ -570,7 +577,6 @@ detect_orientation <- function(itd_seq, ref_seq, min_pid = 0.90) {
   has_pwalign   <- requireNamespace("pwalign",   quietly = TRUE)
   has_biostrings <- requireNamespace("Biostrings", quietly = TRUE)
 
-  # Short sequences: exact match only
   if (nchar(itd_seq) < 10 || nchar(ref_seq) < 10) {
     if (itd_seq == ref_seq) return("tandem")
     if (has_biostrings) {
@@ -601,7 +607,7 @@ detect_orientation <- function(itd_seq, ref_seq, min_pid = 0.90) {
 }
 
 # ----------------------------------------------------------------------------
-# VCF helpers
+# VCF helpers (unchanged)
 # ----------------------------------------------------------------------------
 .resolve_ref_base <- function(pos, ref_dna, genomic_start) {
   local_pos <- pos - genomic_start + 1L
@@ -641,6 +647,10 @@ detect_orientation <- function(itd_seq, ref_seq, min_pid = 0.90) {
     info <- paste0(info, sprintf(";HOTSPOT=%s", row$HotspotName))
   info <- append_if(info, !is.null(row$AlignmentScore)       && !is.na(row$AlignmentScore),       ";ALNSCORE=%.4f", row$AlignmentScore)
   info <- append_if(info, !is.null(row$TotalSupportBases)    && !is.na(row$TotalSupportBases),    ";SUPBASES=%d",   as.integer(row$TotalSupportBases))
+  info <- append_if(info, !is.null(row$LeftSoftclipCount)    && !is.na(row$LeftSoftclipCount),    ";LSC=%d",        row$LeftSoftclipCount)
+  info <- append_if(info, !is.null(row$RightSoftclipCount)   && !is.na(row$RightSoftclipCount),   ";RSC=%d",        row$RightSoftclipCount)
+  info <- append_if(info, !is.null(row$LeftSoftclipPctSupport) && !is.na(row$LeftSoftclipPctSupport), ";LSCPCT=%.1f", row$LeftSoftclipPctSupport)
+  info <- append_if(info, !is.null(row$RightSoftclipPctSupport) && !is.na(row$RightSoftclipPctSupport), ";RSCPCT=%.1f", row$RightSoftclipPctSupport)
   info
 }
 
@@ -657,7 +667,6 @@ build_vcf_header <- function(sample_name, chrom, genome_build = NULL, contig_len
   if (!is.null(genome_build))
     lines <- c(lines, paste0("##reference=", genome_build))
   
-  # Always emit a contig line (length placeholder if not known)
   if (!is.null(chrom)) {
     if (!is.null(contig_length) && is.numeric(contig_length) && contig_length > 0) {
       lines <- c(lines, paste0("##contig=<ID=", chrom, ",length=", contig_length, ">"))
@@ -695,6 +704,10 @@ build_vcf_header <- function(sample_name, chrom, genome_build = NULL, contig_len
     '##INFO=<ID=SCFRAC,Number=1,Type=Float,Description="Fraction of supporting reads detected via soft-clip">',
     '##INFO=<ID=UBP,Number=1,Type=Integer,Description="Number of unique breakpoint positions in cluster">',
     '##INFO=<ID=ORIENT,Number=1,Type=String,Description="Duplication orientation: tandem or inverted">',
+    '##INFO=<ID=LSC,Number=1,Type=Integer,Description="Number of supporting reads with left soft-clip">',
+    '##INFO=<ID=RSC,Number=1,Type=Integer,Description="Number of supporting reads with right soft-clip">',
+    '##INFO=<ID=LSCPCT,Number=1,Type=Float,Description="Percentage of supporting reads with left soft-clip">',
+    '##INFO=<ID=RSCPCT,Number=1,Type=Float,Description="Percentage of supporting reads with right soft-clip">',
     '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
     paste(c("#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", sample_name),
           collapse = "\t")
@@ -729,7 +742,6 @@ write_itd_vcf <- function(itd_df, ref_dna, genomic_start, chrom,
   out_dir <- dirname(vcf_path)
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   
-  # Optional: try to get contig length from BSgenome if genome_build is given
   contig_length <- NULL
   if (!is.null(genome_build) && requireNamespace("BSgenome", quietly = TRUE)) {
     bs_pkg <- if (genome_build == "hg19") "BSgenome.Hsapiens.UCSC.hg19" else "BSgenome.Hsapiens.UCSC.hg38"

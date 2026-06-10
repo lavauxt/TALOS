@@ -75,7 +75,6 @@
   current_levels <- GenomeInfoDb::seqlevels(all_reads)
   ucsc_name <- target_chrom
   if (!ucsc_name %in% current_levels) {
-    # Try to convert current seqlevels to UCSC style
     converted <- GenomeInfoDb::mapSeqlevels(current_levels, "UCSC")
     if (any(!is.na(converted))) {
       new_levels <- ifelse(is.na(converted), current_levels, converted)
@@ -93,7 +92,6 @@
   cov_rle_list <- GenomicAlignments::coverage(all_reads)
   cov <- cov_rle_list[[target_chrom]]
 
-  # Apply max_reads cap to pairs pass to match the primary reads pass
   pairs <- NULL
   if (compute_pairs) {
     bam_file_pairs <- Rsamtools::BamFile(bam_path, yieldSize = chunk_size)
@@ -732,6 +730,12 @@
   } else NA_real_
   unique_bps        <- length(unique(support_rows$breakpoint))
 
+  # ---- Percentage of softclip reads relative to support and WT ----
+  left_sc_pct_support <- if (corrected_support > 0) (left_sc_count / corrected_support) * 100 else NA_real_
+  right_sc_pct_support <- if (corrected_support > 0) (right_sc_count / corrected_support) * 100 else NA_real_
+  left_sc_pct_wt <- if (wildtype_reads > 0) (left_sc_count / wildtype_reads) * 100 else NA_real_
+  right_sc_pct_wt <- if (wildtype_reads > 0) (right_sc_count / wildtype_reads) * 100 else NA_real_
+
   # ---- Coverage drop ----
   if (do_coverage_drop && !is.na(best_len) && best_len > 0) {
     cov_ok <- FALSE
@@ -804,6 +808,11 @@
     if (!is.null(gene_config$all_exons) || !is.null(gene_config$exons)) {
       hgvs <- compute_hgvs_annotations(gene_config, len_specific_bp,
                                        itd_seq, dup_len_for_hgvs, debug)
+      # If breakpoint is intronic, override with "intronic"
+      if (!is_exonic && !is.na(hgvs$p_notation)) {
+        hgvs$p_notation <- "intronic"
+        if (is.na(hgvs$c_notation)) hgvs$c_notation <- "c.?+?"
+      }
     }
   }
 
@@ -835,7 +844,11 @@
     Orientation       = orientation,
     LeftSoftclipCount  = left_sc_count,
     RightSoftclipCount = right_sc_count,
-    BothSoftclipCount  = both_sc_count
+    BothSoftclipCount  = both_sc_count,
+    LeftSoftclipPctSupport  = left_sc_pct_support,
+    RightSoftclipPctSupport = right_sc_pct_support,
+    LeftSoftclipPctWT       = left_sc_pct_wt,
+    RightSoftclipPctWT      = right_sc_pct_wt
   )
 }
 
@@ -867,7 +880,7 @@
         !isTRUE(metrics$SequencePartial) &&
         !is.na(metrics$Length) && metrics$Length > 40)   return(FALSE)
 
-    # ---- Unbalanced soft‑clip filter ----
+    # ---- Unbalanced soft‑clip filter (default min_side_softclip_reads = 10) ----
     left  <- metrics$LeftSoftclipCount
     right <- metrics$RightSoftclipCount
     if (!is.na(left) && !is.na(right)) {
