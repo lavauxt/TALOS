@@ -284,7 +284,7 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   cov_track <- Gviz::DataTrack(
     start = cov_df$disp_pos, end = cov_df$disp_pos, data = cov_df$depth, chromosome = chrom,
     genome = genome_build, type = c("a", "l"), name = "Coverage",
-    col = "steelblue", fill = "#4a90d9",
+    col = "steelblue", fill = "#bcd8f2",
     ylab = "Read depth", ylim = c(0, y_max * 1.05),
     grid = TRUE, lwd.grid = 0.4, col.grid = "#d0d0d0",
     cex.axis = 0.8, cex.title = 0.9, labelPos = "below",
@@ -325,7 +325,7 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
     itd_cov_track <- Gviz::DataTrack(
       start = itd_cov_df$disp_pos, end = itd_cov_df$disp_pos, data = itd_cov_df$count,
       chromosome = chrom, genome = genome_build, type = "l", name = "ITD cov reads",
-      col = "#8e44ad", lwd = 2, ylim = c(0, max(itd_cov_df$count, na.rm = TRUE)), ylab = "ITD cov",
+      col = "#8e44ad", fill = "#e6d7f5", lwd = 2, ylim = c(0, max(itd_cov_df$count, na.rm = TRUE)), ylab = "ITD cov",
       background.title = "transparent", col.border.title = NA, fontcolor.title = "black"
     )
   }
@@ -344,16 +344,16 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
                                      at = axis_ctx$exon_centers, labels = axis_ctx$exon_labels)
   if (!is.null(grtrack) && !is.null(itd_cov_track)) {
     track_list <- list(axis_track, grtrack, cov_track, itd_cov_track, itd_track)
-    t_sizes <- c(0.9, 0.9, 5.5, 1.2, max(1.0, 0.35 * length(breakpoints)))
+    t_sizes <- c(0.9, 0.9, 5.0, 1.3, max(1.25, 0.42 * length(breakpoints)))
   } else if (!is.null(grtrack)) {
     track_list <- list(axis_track, grtrack, cov_track, itd_track)
-    t_sizes <- c(0.9, 0.9, 5.5, max(1.0, 0.35 * length(breakpoints)))
+    t_sizes <- c(0.9, 0.9, 5.0, max(1.25, 0.42 * length(breakpoints)))
   } else if (!is.null(itd_cov_track)) {
     track_list <- list(axis_track, cov_track, itd_cov_track, itd_track)
-    t_sizes <- c(0.9, 5.5, 1.2, max(1.0, 0.35 * length(breakpoints)))
+    t_sizes <- c(0.9, 5.0, 1.3, max(1.25, 0.42 * length(breakpoints)))
   } else {
     track_list <- list(axis_track, cov_track, itd_track)
-    t_sizes <- c(0.9, 5.5, max(1.0, 0.35 * length(breakpoints)))
+    t_sizes <- c(0.9, 5.0, max(1.25, 0.42 * length(breakpoints)))
   }
 
   grDevices::pdf(output_pdf, width = width, height = height, onefile = TRUE)
@@ -365,7 +365,7 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   Gviz::plotTracks(
     track_list, from = axis_ctx$disp_from, to = axis_ctx$disp_to,
     sizes = t_sizes, collapse = FALSE, main = main_title, cex.main = 1.2,
-    fontcolor.title = "#2c3e50", col.axis = "black", cex.axis = 0.8, margins = c(7.0, 5, 5.5, 7)
+    fontcolor.title = "#2c3e50", col.axis = "black", cex.axis = 0.8, margins = c(9.0, 5, 6.5, 9)
   )
   grid::grid.text(label = subtitle, x = grid::unit(0.5, "npc"), y = grid::unit(0.915, "npc"), just = c("center", "center"), gp = grid::gpar(fontsize = 9, col = "#2c3e50", fontface = "plain"))
 
@@ -423,7 +423,7 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
                      bg_params = list(fill = "#2c3e50", col = NA))))
     grid::grid.text(sprintf("Variant Summary – Sample: %s | %s (%d variants)", sample_name, gene_config$gene, nrow(itd_df[keep, , drop = FALSE])), 
                     x = 0.5, y = 0.97, gp = grid::gpar(fontsize = 13, fontface = "bold", col = "#2c3e50"))
-    vp <- grid::viewport(x = 0.5, y = 0.47, width = 0.90, height = 0.88)
+    vp <- grid::viewport(x = 0.5, y = 0.44, width = 0.90, height = 0.82)
     grid::pushViewport(vp); grid::grid.draw(tbl); grid::popViewport()
   } else {
     grid::grid.text(paste(capture.output(print(summary_df)), collapse = "\n"), x = 0.05, y = 0.95, just = "left", gp = grid::gpar(cex = 0.7, fontfamily = "mono"))
