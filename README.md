@@ -29,8 +29,13 @@ Hotspot annotation is performed using a bundled CSV file.
 - **Size‑bias correction** – corrects supporting read counts for
   length‑dependent detection bias
 - **Output formats** – TSV and VCF (v4.2) export for downstream analysis
+- **Paired-end support metrics** – optional read-pair diagnostics including
+  softclip-restricted PE support, event-size/long-span PE counts, and FR/RF/FF/RR
+  orientation summaries
 - **Visualisation** – publication‑ready PDF plot and interactive plotly widget
-  per detected event, plus a self‑contained HTML report
+  per detected event, plus a self‑contained HTML report; reports use padded exon
+  context, compressed intronic display, genomic coverage, ITD coverage, and ITD
+  interval tracks
 
 ## Installation
 

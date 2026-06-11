@@ -79,6 +79,15 @@
   discordant_ratio     <- NA_real_
   length_pe            <- NA_real_
   length_pe_nspanning  <- NA_integer_
+  pe_softclip_support  <- NA_integer_
+  pe_softclip_event_pairs <- NA_integer_
+  pe_softclip_long_pairs  <- NA_integer_
+  pe_orientation_fr    <- NA_integer_
+  pe_orientation_rf    <- NA_integer_
+  pe_orientation_ff    <- NA_integer_
+  pe_orientation_rr    <- NA_integer_
+  pe_orientation_other <- NA_integer_
+  pe_orientation_dominant <- NA_character_
   orientation          <- NA_character_
   hgvs <- list(c_notation = NA_character_, p_notation = NA_character_)
 
@@ -342,6 +351,22 @@
     if (verbose && !is.na(length_pe))
       message("[TALOS] PE insert-size ITD length estimate: ", length_pe,
               " bp (", length_pe_nspanning, " spanning pairs)")
+
+    pe_sc <- compute_pe_softclip_metrics(
+      all_pairs = all_pairs,
+      breakpoint = len_specific_bp,
+      support_rows = support_rows,
+      best_len = best_len
+    )
+    pe_softclip_support <- pe_sc$pe_softclip_support
+    pe_softclip_event_pairs <- pe_sc$pe_softclip_event_pairs
+    pe_softclip_long_pairs <- pe_sc$pe_softclip_long_pairs
+    pe_orientation_fr <- pe_sc$pe_orientation_fr
+    pe_orientation_rf <- pe_sc$pe_orientation_rf
+    pe_orientation_ff <- pe_sc$pe_orientation_ff
+    pe_orientation_rr <- pe_sc$pe_orientation_rr
+    pe_orientation_other <- pe_sc$pe_orientation_other
+    pe_orientation_dominant <- pe_sc$pe_orientation_dominant
   }
 
   # ---- Orientation ----
@@ -408,7 +433,16 @@
     RightSoftclipPctWT = right_sc_pct_wt,
     LengthPE           = length_pe,
     LengthPE_NSpanning = length_pe_nspanning,
-    LengthExt          = as.integer(length_ext)
+    LengthExt          = as.integer(length_ext),
+    PESoftclipSupport  = pe_softclip_support,
+    PESoftclipEventPairs = pe_softclip_event_pairs,
+    PESoftclipLongPairs  = pe_softclip_long_pairs,
+    PEOrientationFR = pe_orientation_fr,
+    PEOrientationRF = pe_orientation_rf,
+    PEOrientationFF = pe_orientation_ff,
+    PEOrientationRR = pe_orientation_rr,
+    PEOrientationOther = pe_orientation_other,
+    PEOrientationDominant = pe_orientation_dominant
   )
 }
 

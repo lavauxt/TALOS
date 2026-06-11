@@ -976,3 +976,101 @@ talos_batch <- function(
     elapsed, nrow(combined)))
   invisible(combined)
 }
+#' Compute softclip-restricted paired-end support and orientation metrics
+#'
+#' Counts PE support only among QNAMEs with soft-clipped supporting reads, and
+#' summarizes pair orientation for those paired QNAMEs.
+#'
+#' @keywords internal
+compute_pe_softclip_metrics <- function(all_pairs, breakpoint, support_rows, best_len,
+                                        flank = 5000L, min_mapq = 20L,
+                                        max_insert = 5000L) {
+  empty <- list(
+    pe_softclip_support = 0L,
+    pe_softclip_event_pairs = 0L,
+    pe_softclip_long_pairs = 0L,
+    pe_orientation_fr = 0L,
+    pe_orientation_rf = 0L,
+    pe_orientation_ff = 0L,
+    pe_orientation_rr = 0L,
+    pe_orientation_other = 0L,
+    pe_orientation_dominant = NA_character_
+  )
+  if (is.null(all_pairs) || length(all_pairs) == 0L || is.null(support_rows) || nrow(support_rows) == 0L) return(empty)
+  if (is.null(support_rows$cigar) || is.null(support_rows$read_name)) return(empty)
+
+  has_sc <- grepl("^\\d+S", support_rows$cigar, perl = TRUE) |
+            grepl("\\d+S$", support_rows$cigar, perl = TRUE)
+  sc_qnames <- unique(support_rows$read_name[has_sc & !is.na(support_rows$read_name)])
+  if (length(sc_qnames) == 0L) return(empty)
+
+  r1 <- GenomicAlignments::first(all_pairs)
+  r2 <- GenomicAlignments::last(all_pairs)
+  pair_qnames <- names(all_pairs)
+  if (is.null(pair_qnames) || length(pair_qnames) != length(all_pairs) || all(is.na(pair_qnames))) {
+    pair_qnames <- as.character(S4Vectors::mcols(r1)$qname)
+  }
+  if (is.null(pair_qnames) || length(pair_qnames) != length(all_pairs)) return(empty)
+
+  mq1 <- S4Vectors::mcols(r1)$mapq; if (is.null(mq1)) mq1 <- rep(0L, length(r1)); mq1[is.na(mq1)] <- 0L
+  mq2 <- S4Vectors::mcols(r2)$mapq; if (is.null(mq2)) mq2 <- rep(0L, length(r2)); mq2[is.na(mq2)] <- 0L
+  f1 <- S4Vectors::mcols(r1)$flag; if (is.null(f1)) f1 <- rep(0L, length(r1))
+  f2 <- S4Vectors::mcols(r2)$flag; if (is.null(f2)) f2 <- rep(0L, length(r2))
+
+  primary <- bitwAnd(f1, 0x100L) == 0L & bitwAnd(f1, 0x800L) == 0L &
+             bitwAnd(f2, 0x100L) == 0L & bitwAnd(f2, 0x800L) == 0L
+  valid <- primary & mq1 >= min_mapq & mq2 >= min_mapq
+
+  s1 <- GenomicRanges::start(r1); e1 <- GenomicRanges::end(r1)
+  s2 <- GenomicRanges::start(r2); e2 <- GenomicRanges::end(r2)
+  pair_start <- pmin(s1, s2)
+  pair_end <- pmax(e1, e2)
+  outer_insert <- pair_end - pair_start + 1L
+  size_ok <- outer_insert > 0L & outer_insert <= max_insert
+
+  support_pair_mask <- valid & size_ok & pair_qnames %in% sc_qnames
+  if (!any(support_pair_mask, na.rm = TRUE)) return(empty)
+
+  span_bp <- pair_start <= breakpoint & pair_end >= breakpoint
+  bg_mask <- valid & size_ok &
+    pair_start >= (breakpoint - flank) & pair_end <= (breakpoint + flank) &
+    !span_bp
+  bg_med <- stats::median(outer_insert[bg_mask], na.rm = TRUE)
+  bg_mad <- stats::mad(outer_insert[bg_mask], na.rm = TRUE)
+  if (!is.finite(bg_mad) || bg_mad == 0) bg_mad <- stats::sd(outer_insert[bg_mask], na.rm = TRUE)
+  if (!is.finite(bg_mad) || bg_mad == 0) bg_mad <- 50
+
+  len_used <- if (is.na(best_len) || best_len <= 0L) 0L else as.numeric(best_len)
+  event_size_span <- long_span <- rep(FALSE, length(all_pairs))
+  if (is.finite(bg_med) && len_used > 0) {
+    expected_insert <- bg_med + len_used
+    insert_tol <- max(50, 2 * bg_mad)
+    event_size_span <- span_bp & abs(outer_insert - expected_insert) <= insert_tol
+    long_span <- span_bp & outer_insert >= (bg_med + 0.75 * len_used)
+  }
+
+  rev1 <- bitwAnd(f1, 0x10L) != 0L
+  rev2 <- bitwAnd(f2, 0x10L) != 0L
+  left_is_1 <- s1 <= s2
+  left_rev <- ifelse(left_is_1, rev1, rev2)
+  right_rev <- ifelse(left_is_1, rev2, rev1)
+  orientation <- ifelse(!left_rev & right_rev, "FR",
+                 ifelse(left_rev & !right_rev, "RF",
+                 ifelse(!left_rev & !right_rev, "FF",
+                 ifelse(left_rev & right_rev, "RR", "other"))))
+
+  orient_tab <- table(factor(orientation[support_pair_mask], levels = c("FR", "RF", "FF", "RR", "other")))
+  dominant <- if (sum(orient_tab) > 0L) names(sort(orient_tab, decreasing = TRUE))[1L] else NA_character_
+
+  list(
+    pe_softclip_support = length(unique(pair_qnames[support_pair_mask])),
+    pe_softclip_event_pairs = as.integer(sum(support_pair_mask & event_size_span, na.rm = TRUE)),
+    pe_softclip_long_pairs = as.integer(sum(support_pair_mask & long_span, na.rm = TRUE)),
+    pe_orientation_fr = as.integer(orient_tab[["FR"]]),
+    pe_orientation_rf = as.integer(orient_tab[["RF"]]),
+    pe_orientation_ff = as.integer(orient_tab[["FF"]]),
+    pe_orientation_rr = as.integer(orient_tab[["RR"]]),
+    pe_orientation_other = as.integer(orient_tab[["other"]]),
+    pe_orientation_dominant = dominant
+  )
+}

@@ -378,7 +378,8 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
                "Region", "Exon Number", "Orientation", "Hotspot", "Strand Bias", "Mean MAPQ", 
                "Support Consistency", "RefMatch (%)", "ITD Read Coverage (%)", "Sequence Source",
                "Left Softclip Count", "Right Softclip Count", "Left Softclip % (Support)", "Right Softclip % (Support)",
-               "Left Softclip % (WT)", "Right Softclip % (WT)"),
+               "Left Softclip % (WT)", "Right Softclip % (WT)",
+               "PE Softclip Support", "PE Event-size Pairs", "PE Long-span Pairs", "PE Orientation"),
     stringsAsFactors = FALSE
   )
   for (i in seq_len(nrow(itd_df[keep, , drop = FALSE]))) {
@@ -410,7 +411,13 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
       ifelse(is.na(row$LeftSoftclipPctSupport), "N/A", sprintf("%.1f", row$LeftSoftclipPctSupport)),
       ifelse(is.na(row$RightSoftclipPctSupport), "N/A", sprintf("%.1f", row$RightSoftclipPctSupport)),
       ifelse(is.na(row$LeftSoftclipPctWT), "N/A", sprintf("%.1f", row$LeftSoftclipPctWT)),
-      ifelse(is.na(row$RightSoftclipPctWT), "N/A", sprintf("%.1f", row$RightSoftclipPctWT))
+      ifelse(is.na(row$RightSoftclipPctWT), "N/A", sprintf("%.1f", row$RightSoftclipPctWT)),
+      ifelse(is.null(row$PESoftclipSupport) || is.na(row$PESoftclipSupport), "N/A", as.character(row$PESoftclipSupport)),
+      ifelse(is.null(row$PESoftclipEventPairs) || is.na(row$PESoftclipEventPairs), "N/A", as.character(row$PESoftclipEventPairs)),
+      ifelse(is.null(row$PESoftclipLongPairs) || is.na(row$PESoftclipLongPairs), "N/A", as.character(row$PESoftclipLongPairs)),
+      ifelse(is.null(row$PEOrientationDominant) || is.na(row$PEOrientationDominant), "N/A",
+             sprintf("%s (FR=%s RF=%s FF=%s RR=%s)", row$PEOrientationDominant,
+                     row$PEOrientationFR, row$PEOrientationRF, row$PEOrientationFF, row$PEOrientationRR))
     )
   }
 
