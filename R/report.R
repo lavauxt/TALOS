@@ -366,9 +366,10 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   Gviz::plotTracks(
     track_list, from = axis_ctx$disp_from, to = axis_ctx$disp_to,
     sizes = t_sizes, collapse = FALSE, main = main_title, cex.main = 1.2,
-    fontcolor.title = "#2c3e50", col.axis = "black", cex.axis = 0.8, margins = c(22, 16, 6.5, 16), gap = gap
+    fontcolor.title = "#2c3e50", col.axis = "black", cex.axis = 0.8,
+    margins = c(18, 14, 6.5, 14), gap = gap
   )
-  grid::grid.text(label = subtitle, x = grid::unit(0.5, "npc"), y = grid::unit(0.895, "npc"), just = c("center", "center"), gp = grid::gpar(fontsize = 9, col = "#2c3e50", fontface = "plain"))
+  grid::grid.text(label = subtitle, x = grid::unit(0.5, "npc"), y = grid::unit(0.885, "npc"), just = c("center", "center"), gp = grid::gpar(fontsize = 9, col = "#2c3e50", fontface = "plain"))
 
   # Build summary table including new softclip metrics
   summary_df <- data.frame(
