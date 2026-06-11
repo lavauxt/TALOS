@@ -232,10 +232,11 @@
 #' @export
 plot_talos_report <- function(itd_row, gene_config, bam_path,
                                sample_name, output_pdf,
-                               width = 12, height = 9,
+                               width = 14, height = 14,
                                show_config = FALSE,
                                precomputed_cov = NULL,
-                               include_ptd = FALSE) {
+                               include_ptd = FALSE,
+                               gap = 0.05) {
   itd_df <- itd_row
   if (!requireNamespace("Gviz", quietly = TRUE)) { warning("Gviz not installed – PDF plot skipped."); return(invisible(NULL)) }
   if (!requireNamespace("Rsamtools", quietly = TRUE)) stop("Rsamtools required")
@@ -365,7 +366,7 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   Gviz::plotTracks(
     track_list, from = axis_ctx$disp_from, to = axis_ctx$disp_to,
     sizes = t_sizes, collapse = FALSE, main = main_title, cex.main = 1.2,
-    fontcolor.title = "#2c3e50", col.axis = "black", cex.axis = 0.8, margins = c(22, 16, 6.5, 16)
+    fontcolor.title = "#2c3e50", col.axis = "black", cex.axis = 0.8, margins = c(22, 16, 6.5, 16), gap = gap
   )
   grid::grid.text(label = subtitle, x = grid::unit(0.5, "npc"), y = grid::unit(0.895, "npc"), just = c("center", "center"), gp = grid::gpar(fontsize = 9, col = "#2c3e50", fontface = "plain"))
 

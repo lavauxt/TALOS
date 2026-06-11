@@ -11,11 +11,12 @@ plot_talos_report(
   bam_path,
   sample_name,
   output_pdf,
-  width = 12,
-  height = 9,
+  width = 14,
+  height = 14,
   show_config = FALSE,
   precomputed_cov = NULL,
-  include_ptd = FALSE
+  include_ptd = FALSE,
+  gap = 0.05
 )
 }
 \arguments{
