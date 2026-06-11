@@ -116,9 +116,9 @@ talos(
 
 \item{convert_long_to_ptd}{If TRUE, duplications longer than \code{max_itd_length} are reported as PTDs (length 0). If FALSE, they are skipped (default TRUE).}
 
-\item{min_length}{Minimum duplication length to report (default NULL, no lower bound).  # <-- NEW}
+\item{min_length}{Minimum duplication length to report (default NULL, no lower bound).}
 
-\item{max_length}{Maximum duplication length to report (default NULL, no upper bound).  # <-- NEW}
+\item{max_length}{Maximum duplication length to report (default NULL, no upper bound).}
 
 \item{...}{Extra settings.}
 }
