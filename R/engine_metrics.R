@@ -57,6 +57,7 @@
                                       do_repeat_entropy, do_discordant_ratio,
                                       do_detect_orientation, do_hgvs,
                                       max_pairwise_alignments,
+                                      length_ext = NA_integer_,
                                       debug = FALSE, verbose = FALSE) {
 
   if (verbose) message(
@@ -76,6 +77,8 @@
   median_microhomology <- NA_real_
   repeat_entropy       <- NA_real_
   discordant_ratio     <- NA_real_
+  length_pe            <- NA_real_
+  length_pe_nspanning  <- NA_integer_
   orientation          <- NA_character_
   hgvs <- list(c_notation = NA_character_, p_notation = NA_character_)
 
@@ -158,6 +161,7 @@
       observed_seq     <- NA_character_; observed_len <- 0L
     }
   }
+
 
   # ---- Consistency / ITD coverage ----
   if ((do_consistency || do_itd_coverage) &&
@@ -326,6 +330,20 @@
   if (do_discordant_ratio && !is.null(all_pairs))
     discordant_ratio <- compute_discordant_ratio(all_pairs, len_specific_bp)
 
+  # ---- Paired-end ITD length estimate ----
+  # Useful when the ITD exceeds the read length and CIGAR/k-mer detection undercounts.
+  if (!is.null(all_pairs)) {
+    pe_est <- compute_pe_itd_length(
+      all_pairs, len_specific_bp,
+      nominal_read_len = nominal_read_len
+    )
+    length_pe           <- pe_est$length_pe
+    length_pe_nspanning <- as.integer(pe_est$n_spanning)
+    if (verbose && !is.na(length_pe))
+      message("[TALOS] PE insert-size ITD length estimate: ", length_pe,
+              " bp (", length_pe_nspanning, " spanning pairs)")
+  }
+
   # ---- Orientation ----
   if (do_detect_orientation && !is.na(itd_seq) && !is.na(best_len) && best_len > 0L) {
     local_start <- len_specific_bp - genomic_start + 1L
@@ -387,7 +405,10 @@
     LeftSoftclipPctSupport  = left_sc_pct_support,
     RightSoftclipPctSupport = right_sc_pct_support,
     LeftSoftclipPctWT  = left_sc_pct_wt,
-    RightSoftclipPctWT = right_sc_pct_wt
+    RightSoftclipPctWT = right_sc_pct_wt,
+    LengthPE           = length_pe,
+    LengthPE_NSpanning = length_pe_nspanning,
+    LengthExt          = as.integer(length_ext)
   )
 }
 
@@ -443,4 +464,12 @@
     }
     TRUE
   })
+}
+
+# ---------------------------------------------------------------------------
+# Helper: mode of numeric vector (returns most frequent value)
+# ---------------------------------------------------------------------------
+.mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
 }

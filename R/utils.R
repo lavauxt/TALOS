@@ -494,6 +494,94 @@ compute_discordant_ratio <- function(all_pairs, breakpoint, flank = 5000,
   discordant_spanning / total_valid_pairs
 }
 
+
+#' Estimate ITD length from paired-end insert sizes
+#'
+#' For ITDs larger than the read length, neither CIGAR insertions nor k-mer
+#' backward jumps can span the full duplication in a single read.  Read pairs
+#' that straddle the breakpoint carry an inflated outer insert size equal to
+#' the normal insert size plus the ITD length.  This function estimates the
+#' ITD length as:
+#'   \code{median(spanning-pair outer insert) - median(background outer insert)}
+#'
+#' This estimate is complementary to the k-mer length; it is more reliable when
+#' the ITD exceeds the read length and should be preferred in that regime.
+#' It is stored in the \code{LengthPE} output column and does NOT replace the
+#' primary \code{Length} value (which is always CIGAR-based when available,
+#' k-mer-based otherwise).
+#'
+#' @param all_pairs A \code{GAlignmentPairs} object.
+#' @param breakpoint Genomic breakpoint position (integer).
+#' @param nominal_read_len Typical read length used to determine whether the
+#'   ITD is likely larger than a single read (default 150).
+#' @param flank Flanking window (bp) for collecting background pairs (default 5000).
+#' @param min_mapq Minimum MAPQ for both reads of a pair (default 20).
+#' @param min_spanning Minimum spanning pairs required for a valid estimate
+#'   (default 5).
+#' @param max_insert Maximum plausible outer insert size to include (default 5000).
+#' @return Named list with elements \code{length_pe} (estimated length,
+#'   \code{NA_real_} if insufficient data), \code{n_spanning} (number of
+#'   spanning pairs used), and \code{n_background} (number of background
+#'   pairs used).
+#' @export
+compute_pe_itd_length <- function(all_pairs, breakpoint,
+                                   nominal_read_len = 150L,
+                                   flank            = 5000L,
+                                   min_mapq         = 20L,
+                                   min_spanning     = 5L,
+                                   max_insert       = 5000L) {
+
+  empty <- list(length_pe = NA_real_, n_spanning = 0L, n_background = 0L)
+  if (is.null(all_pairs) || length(all_pairs) == 0L) return(empty)
+
+  r1 <- GenomicAlignments::first(all_pairs)
+  r2 <- GenomicAlignments::last(all_pairs)
+
+  mq1 <- S4Vectors::mcols(r1)$mapq; mq1[is.na(mq1)] <- 0L
+  mq2 <- S4Vectors::mcols(r2)$mapq; mq2[is.na(mq2)] <- 0L
+  f1  <- S4Vectors::mcols(r1)$flag; if (is.null(f1)) f1 <- rep(0L, length(r1))
+  f2  <- S4Vectors::mcols(r2)$flag; if (is.null(f2)) f2 <- rep(0L, length(r2))
+
+  primary_mask <- bitwAnd(f1, 0x100L) == 0L & bitwAnd(f1, 0x800L) == 0L &
+                  bitwAnd(f2, 0x100L) == 0L & bitwAnd(f2, 0x800L) == 0L
+  mapq_mask    <- mq1 >= min_mapq & mq2 >= min_mapq
+  valid        <- primary_mask & mapq_mask
+
+  s1 <- GenomicRanges::start(r1); e2 <- GenomicRanges::end(r2)
+  # Outer insert size: leftmost start to rightmost end of the pair
+  pair_start <- pmin(s1, GenomicRanges::start(r2))
+  pair_end   <- pmax(GenomicRanges::end(r1), e2)
+  isize      <- pair_end - pair_start + 1L
+
+  size_mask <- isize > 0L & isize <= max_insert
+
+  # Background: concordant pairs in the flanking window that do NOT span the breakpoint
+  bg_mask <- valid & size_mask &
+             pair_start >= (breakpoint - flank) &
+             pair_end   <= (breakpoint + flank) &
+             !(pair_start < breakpoint & pair_end > breakpoint)
+
+  # Spanning: pairs whose outer boundaries clearly straddle the breakpoint
+  # Require at least one read-length of clearance on each side so both mates
+  # are fully outside the duplication.
+  span_mask <- valid & size_mask &
+               pair_start <= (breakpoint - nominal_read_len) &
+               pair_end   >= (breakpoint + nominal_read_len)
+
+  n_span <- sum(span_mask, na.rm = TRUE)
+  n_bg   <- sum(bg_mask,   na.rm = TRUE)
+
+  if (n_span < min_spanning || n_bg < 10L) return(empty)
+
+  med_span <- stats::median(isize[span_mask], na.rm = TRUE)
+  med_bg   <- stats::median(isize[bg_mask],   na.rm = TRUE)
+
+  est <- round(med_span - med_bg)
+  if (is.na(est) || est <= 0L) return(empty)
+
+  list(length_pe = est, n_spanning = n_span, n_background = n_bg)
+}
+
 compute_microhomology <- function(support_rows, ref_dna, breakpoint,
                                    genomic_start, debug = FALSE) {
   if (nrow(support_rows) == 0) return(NA_integer_)

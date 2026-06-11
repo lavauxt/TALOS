@@ -75,6 +75,9 @@ detect_itd(
   convert_long_to_ptd = TRUE,
   min_length = NULL,
   max_length = NULL,
+  use_kmers = TRUE,
+  exon_padding = 0L,
+  prefer_extended_length = TRUE,
   ...
 )
 }
@@ -216,6 +219,14 @@ detect_itd(
 \item{min_length}{Minimum duplication length to report (NULL = no lower bound).}
 
 \item{max_length}{Maximum duplication length to report (NULL = no upper bound).}
+
+\item{use_kmers}{Enable k-mer based analysis (default TRUE).}
+
+\item{exon_padding}{Number of flanking exons to add to the genomic window (default 0).}
+
+\item{prefer_extended_length}{If TRUE and duplication length > nominal_read_len,
+use extension-based ITD length (mode of itdsize_ext) and refined breakpoint
+as the primary call. Default TRUE.}
 
 \item{...}{Other parameters passed to the underlying engine.}
 

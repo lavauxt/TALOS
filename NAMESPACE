@@ -3,6 +3,7 @@
 export(annotate_hotspots)
 export(build_vcf_header)
 export(build_vcf_records)
+export(compute_pe_itd_length)
 export(detect_itd)
 export(detect_orientation)
 export(get_gene_config)

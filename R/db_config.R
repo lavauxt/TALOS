@@ -512,6 +512,7 @@
 #' @param bsgenome     Optional BSgenome object (or package name string).
 #' @param padding      Base-pair padding around targeted exons (default 500).
 #' @param use_db       If TRUE (default), fetch exon/CDS info from UCSC/biomaRt.
+#' @param exon_padding Number of flanking exons to add to the genomic window (default 0).
 #' @return A named list with gene configuration including exons, sequences, and
 #'   genomic coordinates.
 #' @examples
@@ -526,7 +527,8 @@ get_gene_config <- function(
     config_path = system.file("extdata", "gene_config.yaml", package = "TALOS"),
     bsgenome    = NULL,
     padding     = 500L,
-    use_db      = TRUE
+    use_db      = TRUE,
+    exon_padding = 0L
 ) {
   if (missing(gene) || length(gene) != 1L || !is.character(gene))
     stop("'gene' must be a single character string")
@@ -584,9 +586,21 @@ get_gene_config <- function(
   )
   target_exons_gr <- all_exons_gr[S4Vectors::mcols(all_exons_gr)$exon_idx %in% targeted]
 
+  # ── Expand exons if exon_padding > 0 (for genomic window) ───────────────────
+  expanded_exons_gr <- target_exons_gr
+  if (exon_padding > 0 && length(all_exons_gr) > 0) {
+    all_idx <- S4Vectors::mcols(all_exons_gr)$exon_idx
+    min_t <- min(S4Vectors::mcols(target_exons_gr)$exon_idx)
+    max_t <- max(S4Vectors::mcols(target_exons_gr)$exon_idx)
+    left_idx  <- max(1L, min_t - exon_padding)
+    right_idx <- min(max(all_idx), max_t + exon_padding)
+    keep_idx  <- which(all_idx >= left_idx & all_idx <= right_idx)
+    expanded_exons_gr <- all_exons_gr[keep_idx]
+  }
+
   # ── Genomic window ─────────────────────────────────────────────────────────
-  genomic_start <- max(1L, min(GenomicRanges::start(target_exons_gr)) - padding)
-  genomic_end   <- max(GenomicRanges::end(target_exons_gr)) + padding
+  genomic_start <- max(1L, min(GenomicRanges::start(expanded_exons_gr)) - padding)
+  genomic_end   <- max(GenomicRanges::end(expanded_exons_gr)) + padding
 
   # ── Sequence extraction ────────────────────────────────────────────────────
   bs_obj <- .load_bsgenome_cached(build, bsgenome)

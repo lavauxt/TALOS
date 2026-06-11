@@ -10,7 +10,8 @@ get_gene_config(
   config_path = system.file("extdata", "gene_config.yaml", package = "TALOS"),
   bsgenome = NULL,
   padding = 500L,
-  use_db = TRUE
+  use_db = TRUE,
+  exon_padding = 0L
 )
 }
 \arguments{
@@ -25,6 +26,8 @@ get_gene_config(
 \item{padding}{Base-pair padding around targeted exons (default 500).}
 
 \item{use_db}{If TRUE (default), fetch exon/CDS info from UCSC/biomaRt.}
+
+\item{exon_padding}{Number of flanking exons to add to the genomic window (default 0).}
 }
 \value{
 A named list with gene configuration including exons, sequences, and

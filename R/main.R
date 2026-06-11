@@ -74,6 +74,11 @@
 #' @param convert_long_to_ptd If TRUE, duplications longer than \code{max_itd_length} are reported as PTDs (length 0). If FALSE, they are skipped (default TRUE).
 #' @param min_length Minimum duplication length to report (NULL = no lower bound).  
 #' @param max_length Maximum duplication length to report (NULL = no upper bound).  
+#' @param use_kmers Enable k-mer based analysis (default TRUE).
+#' @param exon_padding Number of flanking exons to add to the genomic window (default 0).
+#' @param prefer_extended_length If TRUE and duplication length > nominal_read_len,
+#'        use extension-based ITD length (mode of itdsize_ext) and refined breakpoint
+#'        as the primary call. Default TRUE.
 #' @param ... Other parameters passed to the underlying engine.
 #' @return Data frame of ITD calls with diagnostic columns, invisibly.
 #' @export
@@ -106,7 +111,10 @@ detect_itd <- function(
     max_itd_length = 1000,
     convert_long_to_ptd = TRUE,
     min_length = NULL,     
-    max_length = NULL,      
+    max_length = NULL,
+    use_kmers = TRUE,
+    exon_padding = 0L,
+    prefer_extended_length = TRUE,
     ...
 ) {
   
@@ -128,7 +136,7 @@ detect_itd <- function(
   if (include_timestamp && !is.null(timestamp) && timestamp != "")  base_parts <- c(base_parts, timestamp)
   base_name <- paste(base_parts, collapse = output_sep)
   
-  # ---- Global log file (single file for everything) ----
+  # ---- Global log file ----
   global_log_file <- NULL
   if (global_log) {
     global_log_file <- file.path(sample_folder, paste0(base_name, ".log"))
@@ -164,8 +172,14 @@ detect_itd <- function(
     }
   }, add = TRUE)
   
+  # Helper for mode calculation
+  .mode <- function(x) {
+    ux <- unique(x)
+    ux[which.max(tabulate(match(x, ux)))]
+  }
+  
   tryCatch({
-    # Use genomic_ref_seq from gene_config (always present)
+    # Use genomic_ref_seq from gene_config
     ref_dna <- gene_config$genomic_ref_seq
     if (is.null(ref_dna) || is.na(ref_dna) || nchar(ref_dna) == 0)
       stop("No genomic reference sequence available in gene_config.")
@@ -201,8 +215,12 @@ detect_itd <- function(
       }
     }
     
+    # ---- Candidate extraction ----
     if (ptd_mode && use_cigar_bp) {
       candidates <- .extract_candidates_ptd(all_reads, gene_config$genomic_start, ref_len, verbose = verbose)
+    } else if (!use_kmers) {
+      candidates <- .extract_candidates_cigar(all_reads, gene_config$genomic_start, ref_len,
+                                              min_size = min_size, verbose = verbose)
     } else {
       candidates <- .extract_candidates_standard(
         reads = all_reads, ref_kmers = ref_kmers, ptd_mode = ptd_mode, min_size = min_size,
@@ -220,12 +238,19 @@ detect_itd <- function(
     
     bp_df    <- .candidates_to_df(candidates, gene_config$genomic_start)
     clusters <- .cluster_breakpoints(bp_df$breakpoint, cluster_tolerance)
+
+    # ---- Extension data ----
+    # ---- Extension data (compute true ITD length using in‑silico extension) ----
+    ext_df <- .extend_candidates(
+      bp_df[!is.na(bp_df$length) & bp_df$length > 0L, ],
+      ref_dna       = ref_dna,
+      genomic_start = gene_config$genomic_start,
+      min_size      = min_size,
+      verbose       = verbose
+    )
     
-    wt_info              <- .prepare_wildtype_info(all_reads_for_wt, gene_config$genomic_start, gene_config$genomic_end)
-    wt_info$sample_name  <- sample_name
-    
-    cand_breakpoints <- bp_df$breakpoint
-    cand_lengths     <- bp_df$length
+    wt_info <- .prepare_wildtype_info(all_reads_for_wt, gene_config$genomic_start, gene_config$genomic_end)
+    wt_info$sample_name <- sample_name
     
     thresholds <- list(
       min_coverage_drop = min_coverage_drop, min_microhomology = min_microhomology,
@@ -243,40 +268,154 @@ detect_itd <- function(
     )
     
     results <- list()
-    for (cl in clusters) {
-      cluster_candidates <- which(cand_breakpoints %in% cl)
-      if (length(cluster_candidates) == 0) next
+    
+    # ---- If we have extension data, re‑cluster by refined breakpoints ----
+    if (prefer_extended_length && !ptd_mode && nrow(ext_df) >= 3) {
+      # Use only reads with valid extension length
+      ext_valid <- ext_df[!is.na(ext_df$itdsize) & ext_df$itdsize >= min_size, ]
+      if (nrow(ext_valid) >= 3) {
+        # Cluster by refined breakpoint
+        refined_clusters <- .cluster_breakpoints(ext_valid$breakpoint_refined, cluster_tolerance)
+        for (rcl in refined_clusters) {
+          rcl_reads <- ext_valid[ext_valid$breakpoint_refined %in% rcl, ]
+          if (nrow(rcl_reads) < 3) next
+          
+          best_len <- .mode(rcl_reads$itdsize)
+          median_bp <- as.integer(median(rcl_reads$breakpoint_refined))
+          
+          # Find all original candidate rows that support this refined cluster
+          support_read_names <- rcl_reads$read_name
+          support_rows <- bp_df[bp_df$read_name %in% support_read_names, ]
+          # Also include any other reads whose original breakpoint is within tolerance of median_bp
+          additional <- bp_df[abs(bp_df$breakpoint - median_bp) <= cluster_tolerance & 
+                              !(bp_df$read_name %in% support_read_names), ]
+          support_rows <- rbind(support_rows, additional)
+          support_rows <- unique(support_rows)
+          
+          if (nrow(support_rows) == 0) next
+          
+          length_ext <- best_len
+          if (verbose) {
+            log_msg(sprintf("Extension-based cluster at %d: %d bp (mode of %d values, %d supporting reads)",
+                            median_bp, best_len, nrow(rcl_reads), nrow(support_rows)))
+          }
+          metrics <- .compute_variant_metrics(
+            cluster_bps = rep(median_bp, nrow(support_rows)), best_len = best_len, support_rows = support_rows,
+            genomic_start = gene_config$genomic_start, ref_dna = ref_dna,
+            gene_config = gene_config, all_reads_cov = bam_data$cov,
+            all_pairs = bam_data$pairs, wildtype_info = wt_info, ptd_mode = ptd_mode,
+            min_support = min_support, min_wt_reads = min_wt_reads,
+            nominal_read_len = nominal_read_len, max_correction = max_correction,
+            vaf_threshold = vaf_threshold, do_alignment_score = compute_alignment_score,
+            do_support_bases = compute_support_bases, do_consistency = compute_consistency,
+            do_itd_coverage = compute_itd_coverage, do_coverage_drop = compute_coverage_drop,
+            do_microhomology = compute_microhomology, do_repeat_entropy = compute_repeat_entropy,
+            do_discordant_ratio = compute_discordant_ratio,
+            do_detect_orientation = detect_orientation,
+            do_hgvs = compute_hgvs, max_pairwise_alignments = max_pairwise_alignments,
+            length_ext = length_ext,
+            debug = debug, verbose = verbose
+          )
+          if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length))
+            results[[length(results) + 1L]] <- metrics
+        }
+      }
+    }
+    
+    # ---- If no extension‑based results, fall back to original k‑mer clustering ----
+    if (length(results) == 0) {
+      # Create lookups for extension sizes (by read name) for optional use
+      ext_by_read <- setNames(ext_df$itdsize, ext_df$read_name)
+      bp_refined_by_read <- setNames(ext_df$breakpoint_refined, ext_df$read_name)
       
-      cluster_lengths <- cand_lengths[cluster_candidates]
-      cluster_lengths[is.na(cluster_lengths)] <- -1L
-      len_groups <- split(cluster_candidates, cluster_lengths)
+      cand_breakpoints <- bp_df$breakpoint
+      cand_lengths     <- bp_df$length
+      clusters <- .cluster_breakpoints(bp_df$breakpoint, cluster_tolerance)
       
-      for (len in names(len_groups)) {
-        best_len <- if (as.integer(len) == -1L) NA_integer_ else as.integer(len)
-        idxs <- len_groups[[len]]
+      for (cl in clusters) {
+        cluster_candidates <- which(cand_breakpoints %in% cl)
+        if (length(cluster_candidates) == 0) next
         
-        if (is.na(best_len)) support_rows <- bp_df[bp_df$breakpoint %in% cl & is.na(bp_df$length), ]
-        else support_rows <- bp_df[bp_df$breakpoint %in% cl & !is.na(bp_df$length) & bp_df$length == best_len, ]
+        # Try to use extension data within this original cluster
+        ext_sizes <- c()
+        refined_bps <- c()
+        support_read_names <- bp_df$read_name[cluster_candidates]
+        for (rn in support_read_names) {
+          sz <- ext_by_read[rn]
+          bp_ref <- bp_refined_by_read[rn]
+          if (!is.na(sz) && !is.na(bp_ref)) {
+            ext_sizes <- c(ext_sizes, sz)
+            refined_bps <- c(refined_bps, bp_ref)
+          }
+        }
         
-        metrics <- .compute_variant_metrics(
-          cluster_bps = cl, best_len = best_len, support_rows = support_rows,
-          genomic_start = gene_config$genomic_start, ref_dna = ref_dna,
-          gene_config = gene_config, all_reads_cov = bam_data$cov,
-          all_pairs = bam_data$pairs, wildtype_info = wt_info, ptd_mode = ptd_mode,
-          min_support = min_support, min_wt_reads = min_wt_reads,
-          nominal_read_len = nominal_read_len, max_correction = max_correction,
-          vaf_threshold = vaf_threshold, do_alignment_score = compute_alignment_score,
-          do_support_bases = compute_support_bases, do_consistency = compute_consistency,
-          do_itd_coverage = compute_itd_coverage, do_coverage_drop = compute_coverage_drop,
-          do_microhomology = compute_microhomology, do_repeat_entropy = compute_repeat_entropy,
-          do_discordant_ratio = compute_discordant_ratio, 
-          do_detect_orientation = detect_orientation,
-          do_hgvs = compute_hgvs, max_pairwise_alignments = max_pairwise_alignments,
-          debug = debug, verbose = verbose
-        )
-        # Pass min_length and max_length to .apply_filters
-        if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length))  
-          results[[length(results) + 1L]] <- metrics
+        use_ext <- prefer_extended_length && !ptd_mode && length(ext_sizes) >= 3
+        if (use_ext) {
+          best_len <- .mode(ext_sizes)
+          median_bp <- as.integer(median(refined_bps))
+          cl <- rep(median_bp, length(cl))
+          support_rows <- bp_df[bp_df$read_name %in% names(ext_by_read[!is.na(ext_by_read)]), ]
+          support_rows <- support_rows[abs(support_rows$breakpoint - median_bp) <= cluster_tolerance, ]
+          if (nrow(support_rows) == 0) support_rows <- bp_df[bp_df$breakpoint %in% cl, ]
+          length_ext <- best_len
+          metrics <- .compute_variant_metrics(
+            cluster_bps = rep(median_bp, nrow(support_rows)), best_len = best_len, support_rows = support_rows,
+            genomic_start = gene_config$genomic_start, ref_dna = ref_dna,
+            gene_config = gene_config, all_reads_cov = bam_data$cov,
+            all_pairs = bam_data$pairs, wildtype_info = wt_info, ptd_mode = ptd_mode,
+            min_support = min_support, min_wt_reads = min_wt_reads,
+            nominal_read_len = nominal_read_len, max_correction = max_correction,
+            vaf_threshold = vaf_threshold, do_alignment_score = compute_alignment_score,
+            do_support_bases = compute_support_bases, do_consistency = compute_consistency,
+            do_itd_coverage = compute_itd_coverage, do_coverage_drop = compute_coverage_drop,
+            do_microhomology = compute_microhomology, do_repeat_entropy = compute_repeat_entropy,
+            do_discordant_ratio = compute_discordant_ratio,
+            do_detect_orientation = detect_orientation,
+            do_hgvs = compute_hgvs, max_pairwise_alignments = max_pairwise_alignments,
+            length_ext = length_ext,
+            debug = debug, verbose = verbose
+          )
+          if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length))
+            results[[length(results) + 1L]] <- metrics
+          next
+        }
+        
+        # Fallback to k‑mer based length grouping
+        cluster_lengths <- cand_lengths[cluster_candidates]
+        cluster_lengths[is.na(cluster_lengths)] <- -1L
+        len_groups <- split(cluster_candidates, cluster_lengths)
+        for (len in names(len_groups)) {
+          best_len <- if (as.integer(len) == -1L) NA_integer_ else as.integer(len)
+          idxs <- len_groups[[len]]
+          if (is.na(best_len)) support_rows <- bp_df[bp_df$breakpoint %in% cl & is.na(bp_df$length), ]
+          else support_rows <- bp_df[bp_df$breakpoint %in% cl & !is.na(bp_df$length) & bp_df$length == best_len, ]
+          
+          ext_sizes_cl <- unlist(ext_by_read[support_rows$read_name], use.names = FALSE)
+          ext_sizes_cl <- ext_sizes_cl[!is.na(ext_sizes_cl) & ext_sizes_cl > 0L]
+          length_ext <- if (length(ext_sizes_cl) >= 3L) {
+            as.integer(names(sort(table(ext_sizes_cl), decreasing = TRUE))[1L])
+          } else NA_integer_
+          
+          metrics <- .compute_variant_metrics(
+            cluster_bps = cl, best_len = best_len, support_rows = support_rows,
+            genomic_start = gene_config$genomic_start, ref_dna = ref_dna,
+            gene_config = gene_config, all_reads_cov = bam_data$cov,
+            all_pairs = bam_data$pairs, wildtype_info = wt_info, ptd_mode = ptd_mode,
+            min_support = min_support, min_wt_reads = min_wt_reads,
+            nominal_read_len = nominal_read_len, max_correction = max_correction,
+            vaf_threshold = vaf_threshold, do_alignment_score = compute_alignment_score,
+            do_support_bases = compute_support_bases, do_consistency = compute_consistency,
+            do_itd_coverage = compute_itd_coverage, do_coverage_drop = compute_coverage_drop,
+            do_microhomology = compute_microhomology, do_repeat_entropy = compute_repeat_entropy,
+            do_discordant_ratio = compute_discordant_ratio,
+            do_detect_orientation = detect_orientation,
+            do_hgvs = compute_hgvs, max_pairwise_alignments = max_pairwise_alignments,
+            length_ext = length_ext,
+            debug = debug, verbose = verbose
+          )
+          if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length))
+            results[[length(results) + 1L]] <- metrics
+        }
       }
     }
     
@@ -340,6 +479,9 @@ detect_itd <- function(
 #' @param convert_long_to_ptd If TRUE, duplications longer than \code{max_itd_length} are reported as PTDs (length 0). If FALSE, they are skipped (default TRUE).
 #' @param min_length Minimum duplication length to report (default NULL, no lower bound).  
 #' @param max_length Maximum duplication length to report (default NULL, no upper bound).  
+#' @param use_kmers Enable k-mer based analysis (default TRUE).
+#' @param exon_padding Number of flanking exons to add to the genomic window (default 0).
+#' @param prefer_extended_length If TRUE, use extension-based length for ITDs longer than read length (default TRUE).
 #' @param ... Extra settings.
 #' @export
 talos <- function(
@@ -373,11 +515,16 @@ talos <- function(
     max_itd_length = 1000,
     convert_long_to_ptd = TRUE,
     min_length = NULL,       
-    max_length = NULL,        
+    max_length = NULL,
+    use_kmers = TRUE,
+    exon_padding = 0L,
+    prefer_extended_length = TRUE,
     ...
 ) {
   
-  config <- get_gene_config(gene = gene, build = build, padding = padding, config_path = yaml_path, bsgenome = bsgenome)
+  config <- get_gene_config(gene = gene, build = build, padding = padding, 
+                            config_path = yaml_path, bsgenome = bsgenome,
+                            exon_padding = exon_padding)
   config$build <- build
   
   defaults <- list(
@@ -403,7 +550,8 @@ talos <- function(
     max_itd_length = 1000,
     convert_long_to_ptd = TRUE,
     min_length = NULL,       
-    max_length = NULL        
+    max_length = NULL,
+    prefer_extended_length = TRUE
   )
   
   yaml_vals <- config$gene_settings
@@ -458,7 +606,10 @@ talos <- function(
     max_itd_length = p$max_itd_length,
     convert_long_to_ptd = p$convert_long_to_ptd,
     min_length = p$min_length,   
-    max_length = p$max_length,  
+    max_length = p$max_length,
+    use_kmers = use_kmers,
+    exon_padding = exon_padding,
+    prefer_extended_length = p$prefer_extended_length,
     ...
   )
 }

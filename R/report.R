@@ -45,8 +45,26 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   orientations <- itd_df$Orientation[keep]
   orient_display <- ifelse(is.na(orientations) | orientations == "?", "", paste0(" | ", orientations))
   
-  plot_start <- gene_config$genomic_start
-  plot_end   <- gene_config$genomic_end
+  # ---- Compute plot range from exons (one flanking exon on each side) ----
+  all_exons <- gene_config$all_exons
+  target_idx <- unique(S4Vectors::mcols(gene_config$target_exons)$exon_idx)
+  if (!is.null(all_exons) && length(all_exons) > 0 && length(target_idx) > 0) {
+    all_idx <- S4Vectors::mcols(all_exons)$exon_idx
+    min_t <- min(target_idx)
+    max_t <- max(target_idx)
+    left_idx  <- max(1L, min_t - 1L)
+    right_idx <- min(max(all_idx), max_t + 1L)
+    keep_idx  <- which(all_idx >= left_idx & all_idx <= right_idx)
+    plot_gr   <- all_exons[keep_idx]
+    plot_start <- min(GenomicRanges::start(plot_gr))
+    plot_end   <- max(GenomicRanges::end(plot_gr))
+    # Add a small flanking padding for visual comfort
+    plot_start <- max(1L, plot_start - 50L)
+    plot_end   <- plot_end + 50L
+  } else {
+    plot_start <- gene_config$genomic_start
+    plot_end   <- gene_config$genomic_end
+  }
 
   if (is.null(precomputed_cov)) {
     param  <- Rsamtools::ScanBamParam(which = GenomicRanges::GRanges(chrom, IRanges::IRanges(plot_start, plot_end)))
@@ -124,7 +142,7 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   subtitle   <- sprintf("Positions: %s  •  Lengths: %s  •  VAFs: %s%%", paste(breakpoints, collapse = ", "), paste(dup_lens, collapse = ", "), paste(vafs, collapse = ", "))
 
   Gviz::plotTracks(
-    track_list, from = plot_start - 50L, to = plot_end + 50L,
+    track_list, from = plot_start, to = plot_end,
     sizes = t_sizes, collapse = FALSE, main = main_title, cex.main = 1.2,
     fontcolor.title = "#2c3e50", col.axis = "black", cex.axis = 0.8, margins = c(5.0, 5, 5.5, 5)
   )
@@ -132,7 +150,7 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
 
   # Build summary table including new softclip metrics
   summary_df <- data.frame(
-    Metric = c("Sample", "Gene", "Genome Build", "Genomic Position", "Length (bp)", "VAF (%)", 
+    Metric = c("Sample", "Gene", "Genome Build", "Genomic Position", "Length (bp)", "Length PE (bp)", "Length Ext (bp)", "VAF (%)", 
                "Supporting Reads", "Wildtype Reads", "Depth at Breakpoint", "HGVS cDNA", "HGVS Protein", 
                "Region", "Exon Number", "Orientation", "Hotspot", "Strand Bias", "Mean MAPQ", 
                "Support Consistency", "RefMatch (%)", "ITD Read Coverage (%)", "Sequence Source",
@@ -142,9 +160,15 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   )
   for (i in seq_len(nrow(itd_df[keep, , drop = FALSE]))) {
     row <- itd_df[keep, ][i, ]
+    pe_str <- if (!is.null(row$LengthPE) && !is.na(row$LengthPE))
+      sprintf("%d bp (%d pairs)", as.integer(row$LengthPE),
+              as.integer(if (!is.null(row$LengthPE_NSpanning)) row$LengthPE_NSpanning else 0L))
+    else "N/A"
     summary_df[[paste0("ITD_", i)]] <- c(
       as.character(sample_name), as.character(row$Gene), genome_build, as.character(row$GenomicPosition), 
-      as.character(row$Length), sprintf("%.1f", row$AlleleFrequency * 100), 
+      as.character(row$Length), pe_str,
+      ifelse(is.null(row$LengthExt) || is.na(row$LengthExt), "N/A", as.character(row$LengthExt)),
+      sprintf("%.1f", row$AlleleFrequency * 100), 
       as.character(row$SupportingReads), as.character(round(row$WildtypeReads)), as.character(row$DepthAtBreakpoint), 
       ifelse(is.na(row$HGVS_cDNA), "N/A", row$HGVS_cDNA), 
       ifelse(is.na(row$HGVS_Protein), "N/A", row$HGVS_Protein), 
@@ -244,8 +268,25 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
   dup_lens     <- dup_lens[valid]
   dup_ends     <- dup_ends[valid]
 
-  plot_start <- gene_config$genomic_start
-  plot_end   <- gene_config$genomic_end
+  # ---- Compute plot range from exons (one flanking exon on each side) ----
+  all_exons <- gene_config$all_exons
+  target_idx <- unique(S4Vectors::mcols(gene_config$target_exons)$exon_idx)
+  if (!is.null(all_exons) && length(all_exons) > 0 && length(target_idx) > 0) {
+    all_idx <- S4Vectors::mcols(all_exons)$exon_idx
+    min_t <- min(target_idx)
+    max_t <- max(target_idx)
+    left_idx  <- max(1L, min_t - 1L)
+    right_idx <- min(max(all_idx), max_t + 1L)
+    keep_idx  <- which(all_idx >= left_idx & all_idx <= right_idx)
+    plot_gr   <- all_exons[keep_idx]
+    plot_start <- min(GenomicRanges::start(plot_gr))
+    plot_end   <- max(GenomicRanges::end(plot_gr))
+    plot_start <- max(1L, plot_start - 50L)
+    plot_end   <- plot_end + 50L
+  } else {
+    plot_start <- gene_config$genomic_start
+    plot_end   <- gene_config$genomic_end
+  }
 
   if (is.null(precomputed_cov)) {
     param <- Rsamtools::ScanBamParam(which = GenomicRanges::GRanges(chrom, IRanges::IRanges(plot_start, plot_end)))
@@ -310,7 +351,7 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
     p_itd <- p_itd |> plotly::add_trace(x = c(row$GenomicPosition, dup_ends[i]), y = c(y_pos, y_pos), type = "scatter", mode = "lines", line = list(color = col_i, width = 14), name = label, text = tip_text, hoverinfo = "text", showlegend = TRUE) |> plotly::add_trace(x = row$GenomicPosition, y = y_pos, type = "scatter", mode = "markers", marker = list(symbol = "line-ns", size = 14, color = col_i, line = list(color = "white", width = 2)), hoverinfo = "skip", showlegend = FALSE)
   }
 
-  p_itd <- plotly::layout(p_itd, xaxis = list(title = paste0(chrom, " (", genome_build, ")"), gridcolor = "#e8e8e8", rangeslider = list(visible = FALSE)), yaxis = list(title = "ITDs", showticklabels = FALSE, range = c(0, max(1, nrow(itd_df) * 0.18 + 0.2)), fixedrange = TRUE), legend = list(orientation = "h", x = 0, y = -0.25, font = list(size = 11)), plot_bgcolor = "white", paper_bgcolor = "white")
+  p_itd <- plotly::layout(p_itd, xaxis = list(title = paste0(chrom, " (", genome_build, ")"), gridcolor = "#e8e8e8", range = c(plot_start, plot_end), rangeslider = list(visible = FALSE)), yaxis = list(title = "ITDs", showticklabels = FALSE, range = c(0, max(1, nrow(itd_df) * 0.18 + 0.2)), fixedrange = TRUE), legend = list(orientation = "h", x = 0, y = -0.25, font = list(size = 11)), plot_bgcolor = "white", paper_bgcolor = "white")
 
   title_text <- if (!is.null(sample_name)) paste0("TALOS • ", sample_name, "  |  ", gene_config$gene, "  |  ", nrow(itd_df), " ITD(s)  |  ", genome_build) else paste0("TALOS • ", gene_config$gene, "  |  ", nrow(itd_df), " ITD(s)  |  ", genome_build)
 
