@@ -283,8 +283,8 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
 
   cov_track <- Gviz::DataTrack(
     start = cov_df$disp_pos, end = cov_df$disp_pos, data = cov_df$depth, chromosome = chrom,
-    genome = genome_build, type = c("polygon", "l"), name = "Coverage",
-    col = "steelblue", fill = "#dfeefa",
+    genome = genome_build, type = "histogram", name = "Coverage",
+    col.histogram = "steelblue", fill.histogram = "#dfeefa",
     ylab = "Read depth", ylim = c(0, y_max * 1.05),
     grid = TRUE, lwd.grid = 0.4, col.grid = "#d0d0d0",
     cex.axis = 0.8, cex.title = 0.9, labelPos = "below",
@@ -324,8 +324,8 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   if (nrow(itd_cov_df) > 0L) {
     itd_cov_track <- Gviz::DataTrack(
       start = itd_cov_df$disp_pos, end = itd_cov_df$disp_pos, data = itd_cov_df$count,
-      chromosome = chrom, genome = genome_build, type = c("polygon", "l"), name = "ITD cov reads",
-      col = "#f39c12", fill = "#fdebd0", lwd = 2, ylim = c(0, max(itd_cov_df$count, na.rm = TRUE)), ylab = "ITD cov",
+      chromosome = chrom, genome = genome_build, type = "histogram", name = "ITD cov reads",
+      col.histogram = "#f39c12", fill.histogram = "#fdebd0", lwd = 2, ylim = c(0, max(itd_cov_df$count, na.rm = TRUE)), ylab = "ITD cov",
       background.title = "transparent", col.border.title = NA, fontcolor.title = "black"
     )
   }
@@ -365,7 +365,7 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   Gviz::plotTracks(
     track_list, from = axis_ctx$disp_from, to = axis_ctx$disp_to,
     sizes = t_sizes, collapse = FALSE, main = main_title, cex.main = 1.2,
-    fontcolor.title = "#2c3e50", col.axis = "black", cex.axis = 0.8, margins = c(9.0, 5, 6.5, 9)
+    fontcolor.title = "#2c3e50", col.axis = "black", cex.axis = 0.8, margins = c(14, 9, 6.5, 14)
   )
   grid::grid.text(label = subtitle, x = grid::unit(0.5, "npc"), y = grid::unit(0.895, "npc"), just = c("center", "center"), gp = grid::gpar(fontsize = 9, col = "#2c3e50", fontface = "plain"))
 
