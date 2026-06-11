@@ -283,8 +283,8 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
 
   cov_track <- Gviz::DataTrack(
     start = cov_df$disp_pos, end = cov_df$disp_pos, data = cov_df$depth, chromosome = chrom,
-    genome = genome_build, type = c("a", "l"), name = "Coverage",
-    col = "steelblue", fill = "#bcd8f2",
+    genome = genome_build, type = c("polygon", "l"), name = "Coverage",
+    col = "steelblue", fill = "#dfeefa",
     ylab = "Read depth", ylim = c(0, y_max * 1.05),
     grid = TRUE, lwd.grid = 0.4, col.grid = "#d0d0d0",
     cex.axis = 0.8, cex.title = 0.9, labelPos = "below",
@@ -324,8 +324,8 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   if (nrow(itd_cov_df) > 0L) {
     itd_cov_track <- Gviz::DataTrack(
       start = itd_cov_df$disp_pos, end = itd_cov_df$disp_pos, data = itd_cov_df$count,
-      chromosome = chrom, genome = genome_build, type = "l", name = "ITD cov reads",
-      col = "#8e44ad", fill = "#e6d7f5", lwd = 2, ylim = c(0, max(itd_cov_df$count, na.rm = TRUE)), ylab = "ITD cov",
+      chromosome = chrom, genome = genome_build, type = c("polygon", "l"), name = "ITD cov reads",
+      col = "#f39c12", fill = "#fdebd0", lwd = 2, ylim = c(0, max(itd_cov_df$count, na.rm = TRUE)), ylab = "ITD cov",
       background.title = "transparent", col.border.title = NA, fontcolor.title = "black"
     )
   }
@@ -344,16 +344,16 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
                                      at = axis_ctx$exon_centers, labels = axis_ctx$exon_labels)
   if (!is.null(grtrack) && !is.null(itd_cov_track)) {
     track_list <- list(axis_track, grtrack, cov_track, itd_cov_track, itd_track)
-    t_sizes <- c(0.9, 0.9, 5.0, 1.3, max(1.25, 0.42 * length(breakpoints)))
+    t_sizes <- c(0.9, 0.9, 5.0, 1.3, max(0.35, 0.10 * length(breakpoints)))
   } else if (!is.null(grtrack)) {
     track_list <- list(axis_track, grtrack, cov_track, itd_track)
-    t_sizes <- c(0.9, 0.9, 5.0, max(1.25, 0.42 * length(breakpoints)))
+    t_sizes <- c(0.9, 0.9, 5.0, max(0.35, 0.10 * length(breakpoints)))
   } else if (!is.null(itd_cov_track)) {
     track_list <- list(axis_track, cov_track, itd_cov_track, itd_track)
-    t_sizes <- c(0.9, 5.0, 1.3, max(1.25, 0.42 * length(breakpoints)))
+    t_sizes <- c(0.9, 5.0, 1.3, max(0.35, 0.10 * length(breakpoints)))
   } else {
     track_list <- list(axis_track, cov_track, itd_track)
-    t_sizes <- c(0.9, 5.0, max(1.25, 0.42 * length(breakpoints)))
+    t_sizes <- c(0.9, 5.0, max(0.35, 0.10 * length(breakpoints)))
   }
 
   grDevices::pdf(output_pdf, width = width, height = height, onefile = TRUE)
@@ -367,7 +367,7 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
     sizes = t_sizes, collapse = FALSE, main = main_title, cex.main = 1.2,
     fontcolor.title = "#2c3e50", col.axis = "black", cex.axis = 0.8, margins = c(9.0, 5, 6.5, 9)
   )
-  grid::grid.text(label = subtitle, x = grid::unit(0.5, "npc"), y = grid::unit(0.915, "npc"), just = c("center", "center"), gp = grid::gpar(fontsize = 9, col = "#2c3e50", fontface = "plain"))
+  grid::grid.text(label = subtitle, x = grid::unit(0.5, "npc"), y = grid::unit(0.895, "npc"), just = c("center", "center"), gp = grid::gpar(fontsize = 9, col = "#2c3e50", fontface = "plain"))
 
   # Build summary table including new softclip metrics
   summary_df <- data.frame(
@@ -422,8 +422,8 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
       colhead = list(fg_params = list(cex = 0.8, fontface = "bold", col = "white"), 
                      bg_params = list(fill = "#2c3e50", col = NA))))
     grid::grid.text(sprintf("Variant Summary – Sample: %s | %s (%d variants)", sample_name, gene_config$gene, nrow(itd_df[keep, , drop = FALSE])), 
-                    x = 0.5, y = 0.97, gp = grid::gpar(fontsize = 13, fontface = "bold", col = "#2c3e50"))
-    vp <- grid::viewport(x = 0.5, y = 0.44, width = 0.90, height = 0.82)
+                    x = 0.5, y = 0.91, gp = grid::gpar(fontsize = 13, fontface = "bold", col = "#2c3e50"))
+    vp <- grid::viewport(x = 0.5, y = 0.49, width = 0.90, height = 0.80)
     grid::pushViewport(vp); grid::grid.draw(tbl); grid::popViewport()
   } else {
     grid::grid.text(paste(capture.output(print(summary_df)), collapse = "\n"), x = 0.05, y = 0.95, just = "left", gp = grid::gpar(cex = 0.7, fontfamily = "mono"))
@@ -511,7 +511,7 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
     x = cov_df$disp_pos, y = cov_df$depth, type = "scatter", mode = "lines",
     fill = "tozeroy", name = "Coverage",
     line = list(color = "#4a90d9", width = 1.2),
-    fillcolor = "rgba(74,144,217,0.45)",
+    fillcolor = "rgba(74,144,217,0.22)",
     hovertemplate = "Depth: %{y}<extra></extra>"
   )
   p_cov <- plotly::layout(p_cov, yaxis = list(title = "Depth", gridcolor = "#e8e8e8"), xaxis = list(title = "", showticklabels = FALSE, range = c(axis_ctx$disp_from, axis_ctx$disp_to)), plot_bgcolor = "white", paper_bgcolor = "white")
@@ -535,7 +535,7 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
     for (vid in unique(itd_cov_df$variant)) {
       sub <- itd_cov_df[itd_cov_df$variant == vid, , drop = FALSE]
       col_i <- pal[((vid - 1L) %% length(pal)) + 1L]
-      p_itd_cov <- p_itd_cov |> plotly::add_trace(x = sub$disp_pos, y = sub$count, type = "scatter", mode = "lines", line = list(color = col_i, width = 2), name = paste0("ITD cov ", vid), hovertemplate = "ITD pos: %{text}<br>Coverage reads: %{y}<extra></extra>", text = sub$raw_idx, showlegend = FALSE)
+      p_itd_cov <- p_itd_cov |> plotly::add_trace(x = sub$disp_pos, y = sub$count, type = "scatter", mode = "lines", fill = "tozeroy", fillcolor = "rgba(243,156,18,0.22)", line = list(color = col_i, width = 2), name = paste0("ITD cov ", vid), hovertemplate = "ITD pos: %{text}<br>Coverage reads: %{y}<extra></extra>", text = sub$raw_idx, showlegend = FALSE)
     }
   }
   itd_cov_ymax <- if (nrow(itd_cov_df) > 0) max(itd_cov_df$count, na.rm = TRUE) else 1
