@@ -1,3 +1,220 @@
+# Helper: build padded exon display set and plot range
+.build_plot_exon_context <- function(gene_config, flank_exons = 1L, flank_bp = 50L) {
+  all_exons <- gene_config$all_exons
+  target_exons <- gene_config$target_exons
+
+  if (is.null(all_exons) || length(all_exons) == 0L) {
+    return(list(
+      exons_plot = NULL,
+      plot_start = gene_config$genomic_start,
+      plot_end = gene_config$genomic_end
+    ))
+  }
+
+  all_idx <- S4Vectors::mcols(all_exons)$exon_idx
+  if (is.null(all_idx) || length(all_idx) == 0L) {
+    all_idx <- if (!is.null(S4Vectors::mcols(all_exons)$exon_number) && length(S4Vectors::mcols(all_exons)$exon_number) > 0L)
+      as.integer(S4Vectors::mcols(all_exons)$exon_number)
+    else seq_along(all_exons)
+    S4Vectors::mcols(all_exons)$exon_idx <- all_idx
+  }
+
+  if (!is.null(target_exons) && length(target_exons) > 0L) {
+    target_idx <- unique(S4Vectors::mcols(target_exons)$exon_idx)
+    if (is.null(target_idx) || length(target_idx) == 0L)
+      target_idx <- unique(S4Vectors::mcols(target_exons)$exon_number)
+  } else {
+    target_idx <- integer(0)
+  }
+
+  if (length(target_idx) > 0L) {
+    min_t <- min(target_idx)
+    max_t <- max(target_idx)
+    left_idx  <- max(min(all_idx), min_t - flank_exons)
+    right_idx <- min(max(all_idx), max_t + flank_exons)
+    keep_idx  <- which(all_idx >= left_idx & all_idx <= right_idx)
+    exons_plot <- all_exons[keep_idx]
+  } else {
+    exons_plot <- all_exons
+  }
+
+  exons_plot <- exons_plot[order(GenomicRanges::start(exons_plot))]
+  plot_start <- max(1L, min(GenomicRanges::start(exons_plot)) - flank_bp)
+  plot_end   <- max(GenomicRanges::end(exons_plot)) + flank_bp
+
+  list(exons_plot = exons_plot, plot_start = plot_start, plot_end = plot_end)
+}
+
+.parse_itd_coverage_rle <- function(rle_str) {
+  if (is.null(rle_str) || length(rle_str) == 0L || is.na(rle_str) || !nzchar(rle_str))
+    return(numeric(0))
+  parts <- strsplit(rle_str, ",", fixed = TRUE)[[1L]]
+  vals <- numeric(0)
+  lens <- integer(0)
+  for (pt in parts) {
+    sp <- strsplit(pt, ":", fixed = TRUE)[[1L]]
+    if (length(sp) != 2L) next
+    v <- suppressWarnings(as.numeric(sp[1L]))
+    n <- suppressWarnings(as.integer(sp[2L]))
+    if (is.na(v) || is.na(n) || n <= 0L) next
+    vals <- c(vals, v)
+    lens <- c(lens, n)
+  }
+  if (length(vals) == 0L) return(numeric(0))
+  rep(vals, lens)
+}
+
+.build_compressed_axis <- function(exons_plot, raw_plot_start, raw_plot_end,
+                                   intron_display = 40L,
+                                   flank_display = 25L,
+                                   outer_margin = 20L) {
+  if (is.null(exons_plot) || length(exons_plot) == 0L) {
+    raw_len <- max(1L, raw_plot_end - raw_plot_start + 1L)
+    seg <- data.frame(
+      raw_start = raw_plot_start, raw_end = raw_plot_end,
+      disp_start = 1 + outer_margin, disp_end = raw_len + outer_margin,
+      type = "linear", exon_label = NA_character_, stringsAsFactors = FALSE
+    )
+    transform_pos <- function(pos) {
+      pos <- as.numeric(pos)
+      seg$disp_start + (pos - seg$raw_start) / max(1, seg$raw_end - seg$raw_start) * (seg$disp_end - seg$disp_start)
+    }
+    return(list(
+      segments = seg,
+      transform_pos = transform_pos,
+      disp_from = 0,
+      disp_to = seg$disp_end + outer_margin,
+      exon_centers = numeric(0),
+      exon_labels = character(0)
+    ))
+  }
+
+  exons_plot <- exons_plot[order(GenomicRanges::start(exons_plot))]
+  exon_labels <- if (!is.null(S4Vectors::mcols(exons_plot)$exon_idx)) {
+    paste0("E", S4Vectors::mcols(exons_plot)$exon_idx)
+  } else if (!is.null(S4Vectors::mcols(exons_plot)$exon_number)) {
+    paste0("E", S4Vectors::mcols(exons_plot)$exon_number)
+  } else {
+    paste0("E", seq_along(exons_plot))
+  }
+
+  segs <- list()
+  disp_cursor <- 1 + outer_margin
+
+  add_seg <- function(raw_start, raw_end, disp_len, type, exon_label = NA_character_) {
+    if (raw_end < raw_start || disp_len <= 0L) return()
+    nonlocal <<- NULL
+    segs[[length(segs) + 1L]] <<- data.frame(
+      raw_start = as.numeric(raw_start),
+      raw_end = as.numeric(raw_end),
+      disp_start = as.numeric(disp_cursor),
+      disp_end = as.numeric(disp_cursor + disp_len - 1L),
+      type = type,
+      exon_label = exon_label,
+      stringsAsFactors = FALSE
+    )
+    disp_cursor <<- disp_cursor + disp_len
+  }
+
+  first_exon_start <- min(GenomicRanges::start(exons_plot))
+  if (raw_plot_start < first_exon_start)
+    add_seg(raw_plot_start, first_exon_start - 1L,
+            min(flank_display, first_exon_start - raw_plot_start), "flank")
+
+  for (i in seq_along(exons_plot)) {
+    es <- GenomicRanges::start(exons_plot)[i]
+    ee <- GenomicRanges::end(exons_plot)[i]
+    add_seg(es, ee, ee - es + 1L, "exon", exon_labels[i])
+    if (i < length(exons_plot)) {
+      gs <- ee + 1L
+      ge <- GenomicRanges::start(exons_plot)[i + 1L] - 1L
+      if (ge >= gs)
+        add_seg(gs, ge, min(intron_display, ge - gs + 1L), "intron")
+    }
+  }
+
+  last_exon_end <- max(GenomicRanges::end(exons_plot))
+  if (raw_plot_end > last_exon_end)
+    add_seg(last_exon_end + 1L, raw_plot_end,
+            min(flank_display, raw_plot_end - last_exon_end), "flank")
+
+  segments <- do.call(rbind, segs)
+  transform_pos <- function(pos) {
+    pos <- as.numeric(pos)
+    vapply(pos, function(pv) {
+      idx <- which(pv >= segments$raw_start & pv <= segments$raw_end)[1L]
+      if (is.na(idx)) {
+        if (pv < min(segments$raw_start)) return(segments$disp_start[1L])
+        return(segments$disp_end[nrow(segments)])
+      }
+      rs <- segments$raw_start[idx]; re <- segments$raw_end[idx]
+      ds <- segments$disp_start[idx]; de <- segments$disp_end[idx]
+      if (re <= rs) return(ds)
+      ds + (pv - rs) / (re - rs) * (de - ds)
+    }, numeric(1L))
+  }
+
+  exon_rows <- which(segments$type == "exon")
+  exon_centers <- (segments$disp_start[exon_rows] + segments$disp_end[exon_rows]) / 2
+  exon_labels2 <- segments$exon_label[exon_rows]
+
+  list(
+    segments = segments,
+    transform_pos = transform_pos,
+    disp_from = 0,
+    disp_to = max(segments$disp_end) + outer_margin,
+    exon_centers = exon_centers,
+    exon_labels = exon_labels2
+  )
+}
+
+.sample_compressed_coverage <- function(cov, axis_ctx, max_gap_points = 30L) {
+  out <- vector("list", nrow(axis_ctx$segments))
+  for (i in seq_len(nrow(axis_ctx$segments))) {
+    seg <- axis_ctx$segments[i, ]
+    raw_n <- as.integer(seg$raw_end - seg$raw_start + 1L)
+    if (seg$type == "exon" || raw_n <= max_gap_points) {
+      raw_pos <- seq.int(as.integer(seg$raw_start), as.integer(seg$raw_end))
+    } else {
+      raw_pos <- unique(round(seq(seg$raw_start, seg$raw_end, length.out = max_gap_points)))
+      raw_pos <- as.integer(raw_pos)
+    }
+    disp_pos <- axis_ctx$transform_pos(raw_pos)
+    out[[i]] <- data.frame(
+      raw_pos = raw_pos,
+      disp_pos = disp_pos,
+      depth = as.numeric(cov[raw_pos]),
+      type = seg$type,
+      stringsAsFactors = FALSE
+    )
+  }
+  do.call(rbind, out)
+}
+
+.build_itd_cov_display <- function(itd_df, dup_ends, axis_ctx) {
+  rows <- vector("list", nrow(itd_df))
+  idx <- 0L
+  for (i in seq_len(nrow(itd_df))) {
+    rle_str <- itd_df$ITDCoverageRLE[i]
+    cov_vec <- .parse_itd_coverage_rle(rle_str)
+    if (length(cov_vec) == 0L) next
+    count <- as.numeric(cov_vec)
+    x0 <- axis_ctx$transform_pos(itd_df$GenomicPosition[i])
+    x1 <- axis_ctx$transform_pos(dup_ends[i])
+    disp_pos <- if (length(count) == 1L) x0 else seq(x0, x1, length.out = length(count))
+    idx <- idx + 1L
+    rows[[idx]] <- data.frame(
+      variant = i,
+      disp_pos = disp_pos,
+      count = count,
+      raw_idx = seq_along(count),
+      stringsAsFactors = FALSE
+    )
+  }
+  if (idx == 0L) return(data.frame())
+  do.call(rbind, rows[seq_len(idx)])
+}
+
 #' Generate a publication-ready PDF plot (Gviz + summary table)
 #' Only the region restricted directly by targeted_exons context is shown.
 #'
@@ -45,26 +262,10 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   orientations <- itd_df$Orientation[keep]
   orient_display <- ifelse(is.na(orientations) | orientations == "?", "", paste0(" | ", orientations))
   
-  # ---- Compute plot range from exons (one flanking exon on each side) ----
-  all_exons <- gene_config$all_exons
-  target_idx <- unique(S4Vectors::mcols(gene_config$target_exons)$exon_idx)
-  if (!is.null(all_exons) && length(all_exons) > 0 && length(target_idx) > 0) {
-    all_idx <- S4Vectors::mcols(all_exons)$exon_idx
-    min_t <- min(target_idx)
-    max_t <- max(target_idx)
-    left_idx  <- max(1L, min_t - 1L)
-    right_idx <- min(max(all_idx), max_t + 1L)
-    keep_idx  <- which(all_idx >= left_idx & all_idx <= right_idx)
-    plot_gr   <- all_exons[keep_idx]
-    plot_start <- min(GenomicRanges::start(plot_gr))
-    plot_end   <- max(GenomicRanges::end(plot_gr))
-    # Add a small flanking padding for visual comfort
-    plot_start <- max(1L, plot_start - 50L)
-    plot_end   <- plot_end + 50L
-  } else {
-    plot_start <- gene_config$genomic_start
-    plot_end   <- gene_config$genomic_end
-  }
+  plot_ctx   <- .build_plot_exon_context(gene_config, flank_exons = 1L, flank_bp = 50L)
+  exons_plot <- plot_ctx$exons_plot
+  plot_start <- plot_ctx$plot_start
+  plot_end   <- plot_ctx$plot_end
 
   if (is.null(precomputed_cov)) {
     param  <- Rsamtools::ScanBamParam(which = GenomicRanges::GRanges(chrom, IRanges::IRanges(plot_start, plot_end)))
@@ -73,14 +274,17 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   } else {
     cov <- precomputed_cov
   }
-  pos    <- seq(plot_start, plot_end)
-  depth  <- as.numeric(cov[pos])
-  y_max  <- max(depth, na.rm = TRUE); if (y_max == 0) y_max <- 1L
+  axis_ctx <- .build_compressed_axis(exons_plot, plot_start, plot_end,
+                                     intron_display = 40L,
+                                     flank_display = 30L,
+                                     outer_margin = 20L)
+  cov_df <- .sample_compressed_coverage(cov, axis_ctx, max_gap_points = 30L)
+  y_max  <- max(cov_df$depth, na.rm = TRUE); if (!is.finite(y_max) || y_max == 0) y_max <- 1L
 
   cov_track <- Gviz::DataTrack(
-    start = pos, end = pos, data = depth, chromosome = chrom,
-    genome = genome_build, type = "histogram", name = "Coverage",
-    col.histogram = "steelblue", fill.histogram = "#4a90d9",
+    start = cov_df$disp_pos, end = cov_df$disp_pos, data = cov_df$depth, chromosome = chrom,
+    genome = genome_build, type = c("a", "l"), name = "Coverage",
+    col = "steelblue", fill = "#4a90d9",
     ylab = "Read depth", ylim = c(0, y_max * 1.05),
     grid = TRUE, lwd.grid = 0.4, col.grid = "#d0d0d0",
     cex.axis = 0.8, cex.title = 0.9, labelPos = "below",
@@ -89,41 +293,46 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   )
 
   grtrack <- NULL
-  if (!is.null(gene_config$target_exons) && length(gene_config$target_exons) > 0) {
-    exons_full <- gene_config$target_exons
-    window_gr <- GenomicRanges::GRanges(chrom, IRanges::IRanges(plot_start, plot_end))
-    ov <- GenomicRanges::findOverlaps(exons_full, window_gr, type = "any")
-    if (length(ov) > 0) {
-      exons_plot <- exons_full[unique(S4Vectors::queryHits(ov))]
-      exons_plot <- exons_plot[order(start(exons_plot))]
-      
-      if (is.null(exons_plot$exon_idx) && !is.null(exons_plot$exon_number)) exons_plot$exon_idx <- exons_plot$exon_number
-      else if (is.null(exons_plot$exon_idx)) exons_plot$exon_idx <- seq_along(exons_plot)
-      
-      exon_gr <- GenomicRanges::GRanges(
-        seqnames = chrom, ranges = IRanges::IRanges(start = start(exons_plot), end = end(exons_plot)), strand = strand(exons_plot)
-      )
-      exon_gr$gene       <- gene_config$gene
-      exon_gr$transcript <- paste0(gene_config$gene, "_tx")
-      exon_gr$symbol     <- gene_config$gene
-      exon_gr$exon       <- paste0("E", exons_plot$exon_idx)
-      
-      grtrack <- Gviz::GeneRegionTrack(
-        exon_gr, genome = genome_build, chromosome = chrom,
-        name = paste0(gene_config$gene, " targeted exons"),
-        fill = "#2ecc71", col = "#1a8a4a",
-        transcriptAnnotation = "none", exonAnnotation = "exon",
-        showExonId = TRUE, fontsize = 11, cex.feature = 1.0,
-        fontcolor.feature = "black", shape = "box",
-        background.title = "transparent", col.border.title = NA,
-        fontcolor.title = "black"
-      )
-    }
+  if (!is.null(exons_plot) && length(exons_plot) > 0) {
+    if (is.null(exons_plot$exon_idx) && !is.null(exons_plot$exon_number)) exons_plot$exon_idx <- exons_plot$exon_number
+    else if (is.null(exons_plot$exon_idx)) exons_plot$exon_idx <- seq_along(exons_plot)
+
+    exon_st <- axis_ctx$transform_pos(start(exons_plot))
+    exon_en <- axis_ctx$transform_pos(end(exons_plot))
+    exon_gr <- GenomicRanges::GRanges(
+      seqnames = chrom, ranges = IRanges::IRanges(start = round(exon_st), end = round(exon_en)), strand = strand(exons_plot)
+    )
+    exon_gr$gene       <- gene_config$gene
+    exon_gr$transcript <- paste0(gene_config$gene, "_tx")
+    exon_gr$symbol     <- gene_config$gene
+    exon_gr$exon       <- paste0("E", exons_plot$exon_idx)
+
+    grtrack <- Gviz::GeneRegionTrack(
+      exon_gr, genome = genome_build, chromosome = chrom,
+      name = paste0(gene_config$gene, " exons (+ padding)"),
+      fill = "#2ecc71", col = "#1a8a4a",
+      transcriptAnnotation = "none", exonAnnotation = "exon",
+      showExonId = TRUE, fontsize = 11, cex.feature = 1.0,
+      fontcolor.feature = "black", shape = "box",
+      background.title = "transparent", col.border.title = NA,
+      fontcolor.title = "black"
+    )
+  }
+
+  itd_cov_df <- .build_itd_cov_display(itd_df[keep, , drop = FALSE], dup_ends, axis_ctx)
+  itd_cov_track <- NULL
+  if (nrow(itd_cov_df) > 0L) {
+    itd_cov_track <- Gviz::DataTrack(
+      start = itd_cov_df$disp_pos, end = itd_cov_df$disp_pos, data = itd_cov_df$count,
+      chromosome = chrom, genome = genome_build, type = "l", name = "ITD cov reads",
+      col = "#8e44ad", lwd = 2, ylim = c(0, max(itd_cov_df$count, na.rm = TRUE)), ylab = "ITD cov",
+      background.title = "transparent", col.border.title = NA, fontcolor.title = "black"
+    )
   }
 
   itd_labels <- paste0("  ", sprintf("%d bp | VAF %s%% | %s", dup_lens, vafs, orient_display))
   itd_track  <- Gviz::AnnotationTrack(
-    start = breakpoints, end = dup_ends, chromosome = chrom,
+    start = round(axis_ctx$transform_pos(breakpoints)), end = round(axis_ctx$transform_pos(dup_ends)), chromosome = chrom,
     genome = genome_build, name = ifelse(length(breakpoints) > 1, "ITDs", "ITD"),
     id = itd_labels, group = itd_labels, groupAnnotation = "group", just.group = "right",
     showFeatureId = FALSE, fill = "#f39c12", col = "#c0392b",
@@ -131,9 +340,21 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
     rotation.title = 0, background.title = "transparent", col.border.title = NA, fontcolor.title = "black"
   )
 
-  axis_track <- Gviz::GenomeAxisTrack(cex = 0.7, labelPos = "below", add35 = FALSE, add53 = FALSE, col = "black")
-  track_list <- if (!is.null(grtrack)) list(axis_track, grtrack, cov_track, itd_track) else list(axis_track, cov_track, itd_track)
-  t_sizes <- if (!is.null(grtrack)) c(1.0, 0.6, 8, max(0.5, 0.2 * length(breakpoints))) else c(1.0, 8, max(0.5, 0.2 * length(breakpoints)))
+  axis_track <- Gviz::GenomeAxisTrack(cex = 0.7, labelPos = "below", add35 = FALSE, add53 = FALSE, col = "black",
+                                     at = axis_ctx$exon_centers, labels = axis_ctx$exon_labels)
+  if (!is.null(grtrack) && !is.null(itd_cov_track)) {
+    track_list <- list(axis_track, grtrack, cov_track, itd_cov_track, itd_track)
+    t_sizes <- c(0.9, 0.9, 5.5, 1.2, max(1.0, 0.35 * length(breakpoints)))
+  } else if (!is.null(grtrack)) {
+    track_list <- list(axis_track, grtrack, cov_track, itd_track)
+    t_sizes <- c(0.9, 0.9, 5.5, max(1.0, 0.35 * length(breakpoints)))
+  } else if (!is.null(itd_cov_track)) {
+    track_list <- list(axis_track, cov_track, itd_cov_track, itd_track)
+    t_sizes <- c(0.9, 5.5, 1.2, max(1.0, 0.35 * length(breakpoints)))
+  } else {
+    track_list <- list(axis_track, cov_track, itd_track)
+    t_sizes <- c(0.9, 5.5, max(1.0, 0.35 * length(breakpoints)))
+  }
 
   grDevices::pdf(output_pdf, width = width, height = height, onefile = TRUE)
   on.exit(grDevices::dev.off(), add = TRUE)
@@ -142,9 +363,9 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   subtitle   <- sprintf("Positions: %s  •  Lengths: %s  •  VAFs: %s%%", paste(breakpoints, collapse = ", "), paste(dup_lens, collapse = ", "), paste(vafs, collapse = ", "))
 
   Gviz::plotTracks(
-    track_list, from = plot_start, to = plot_end,
+    track_list, from = axis_ctx$disp_from, to = axis_ctx$disp_to,
     sizes = t_sizes, collapse = FALSE, main = main_title, cex.main = 1.2,
-    fontcolor.title = "#2c3e50", col.axis = "black", cex.axis = 0.8, margins = c(5.0, 5, 5.5, 5)
+    fontcolor.title = "#2c3e50", col.axis = "black", cex.axis = 0.8, margins = c(7.0, 5, 5.5, 7)
   )
   grid::grid.text(label = subtitle, x = grid::unit(0.5, "npc"), y = grid::unit(0.915, "npc"), just = c("center", "center"), gp = grid::gpar(fontsize = 9, col = "#2c3e50", fontface = "plain"))
 
@@ -268,25 +489,10 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
   dup_lens     <- dup_lens[valid]
   dup_ends     <- dup_ends[valid]
 
-  # ---- Compute plot range from exons (one flanking exon on each side) ----
-  all_exons <- gene_config$all_exons
-  target_idx <- unique(S4Vectors::mcols(gene_config$target_exons)$exon_idx)
-  if (!is.null(all_exons) && length(all_exons) > 0 && length(target_idx) > 0) {
-    all_idx <- S4Vectors::mcols(all_exons)$exon_idx
-    min_t <- min(target_idx)
-    max_t <- max(target_idx)
-    left_idx  <- max(1L, min_t - 1L)
-    right_idx <- min(max(all_idx), max_t + 1L)
-    keep_idx  <- which(all_idx >= left_idx & all_idx <= right_idx)
-    plot_gr   <- all_exons[keep_idx]
-    plot_start <- min(GenomicRanges::start(plot_gr))
-    plot_end   <- max(GenomicRanges::end(plot_gr))
-    plot_start <- max(1L, plot_start - 50L)
-    plot_end   <- plot_end + 50L
-  } else {
-    plot_start <- gene_config$genomic_start
-    plot_end   <- gene_config$genomic_end
-  }
+  plot_ctx   <- .build_plot_exon_context(gene_config, flank_exons = 1L, flank_bp = 50L)
+  exons_plot <- plot_ctx$exons_plot
+  plot_start <- plot_ctx$plot_start
+  plot_end   <- plot_ctx$plot_end
 
   if (is.null(precomputed_cov)) {
     param <- Rsamtools::ScanBamParam(which = GenomicRanges::GRanges(chrom, IRanges::IRanges(plot_start, plot_end)))
@@ -295,36 +501,46 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
   } else {
     cov <- precomputed_cov
   }
-  pos   <- seq(plot_start, plot_end)
-  depth <- as.numeric(cov[pos])
+  axis_ctx <- .build_compressed_axis(exons_plot, plot_start, plot_end,
+                                     intron_display = 40L,
+                                     flank_display = 30L,
+                                     outer_margin = 20L)
+  cov_df <- .sample_compressed_coverage(cov, axis_ctx, max_gap_points = 30L)
 
   p_cov <- plotly::plot_ly(
-    x = pos, y = depth, type = "bar", name = "Coverage",
-    marker = list(color = "#4a90d9", line = list(color = "#4a90d9", width = 0)),
-    hovertemplate = "Pos: %{x}<br>Depth: %{y}<extra></extra>"
+    x = cov_df$disp_pos, y = cov_df$depth, type = "scatter", mode = "lines",
+    fill = "tozeroy", name = "Coverage",
+    line = list(color = "#4a90d9", width = 1.2),
+    fillcolor = "rgba(74,144,217,0.45)",
+    hovertemplate = "Depth: %{y}<extra></extra>"
   )
-  p_cov <- plotly::layout(p_cov, yaxis = list(title = "Depth", gridcolor = "#e8e8e8"), xaxis = list(title = "", showticklabels = FALSE), bargap = 0, plot_bgcolor = "white", paper_bgcolor = "white")
+  p_cov <- plotly::layout(p_cov, yaxis = list(title = "Depth", gridcolor = "#e8e8e8"), xaxis = list(title = "", showticklabels = FALSE, range = c(axis_ctx$disp_from, axis_ctx$disp_to)), plot_bgcolor = "white", paper_bgcolor = "white")
 
   p_exon <- plotly::plot_ly()
-  p_exon <- plotly::layout(p_exon, xaxis = list(title = "", showticklabels = FALSE, range = c(plot_start, plot_end), rangeslider = list(visible = FALSE)), yaxis = list(title = "Exons", showticklabels = FALSE, range = c(0, 1), fixedrange = TRUE), plot_bgcolor = "#f8fafc", paper_bgcolor = "white")
+  p_exon <- plotly::layout(p_exon, xaxis = list(title = "", showticklabels = FALSE, range = c(axis_ctx$disp_from, axis_ctx$disp_to), rangeslider = list(visible = FALSE)), yaxis = list(title = "Exons", showticklabels = FALSE, range = c(0, 1), fixedrange = TRUE), plot_bgcolor = "#f8fafc", paper_bgcolor = "white")
 
-  if (!is.null(gene_config$target_exons) && length(gene_config$target_exons) > 0) {
-    exons_full <- gene_config$target_exons
-    window_gr <- GenomicRanges::GRanges(chrom, IRanges::IRanges(plot_start, plot_end))
-    ov <- GenomicRanges::findOverlaps(exons_full, window_gr, type = "any")
-    if (length(ov) > 0) {
-      exons_plot <- exons_full[unique(S4Vectors::queryHits(ov))]
-      exons_plot <- exons_plot[order(start(exons_plot))]
-      exon_idx_vec <- if (!is.null(exons_plot$exon_idx)) exons_plot$exon_idx else if (!is.null(exons_plot$exon_number)) exons_plot$exon_number else seq_along(exons_plot)
-      
-      for (i in seq_along(exons_plot)) {
-        es <- start(exons_plot[i]); ee <- end(exons_plot[i])
-        p_exon <- p_exon |> plotly::add_trace(x = c(es, ee, ee, es, es), y = c(0.1, 0.1, 0.9, 0.9, 0.1), type = "scatter", mode = "lines", fill = "toself", fillcolor = "rgba(46,204,113,0.7)", line = list(color = "#1a8a4a", width = 1), name = paste0("Exon ", exon_idx_vec[i]), hovertemplate = sprintf("<b>Exon %s</b><br>%d–%d<extra></extra>", exon_idx_vec[i], es, ee), showlegend = FALSE) |> plotly::add_annotations(x = (es + ee) / 2, y = 0.5, xref = "x", yref = "y", text = paste0("E", exon_idx_vec[i]), showarrow = FALSE, font = list(size = 10, color = "#1a5e30"))
-      }
+  if (!is.null(exons_plot) && length(exons_plot) > 0) {
+    exon_idx_vec <- if (!is.null(exons_plot$exon_idx)) exons_plot$exon_idx else if (!is.null(exons_plot$exon_number)) exons_plot$exon_number else seq_along(exons_plot)
+
+    for (i in seq_along(exons_plot)) {
+      es <- axis_ctx$transform_pos(start(exons_plot[i])); ee <- axis_ctx$transform_pos(end(exons_plot[i]))
+      p_exon <- p_exon |> plotly::add_trace(x = c(es, ee, ee, es, es), y = c(0.1, 0.1, 0.9, 0.9, 0.1), type = "scatter", mode = "lines", fill = "toself", fillcolor = "rgba(46,204,113,0.7)", line = list(color = "#1a8a4a", width = 1), name = paste0("Exon ", exon_idx_vec[i]), hovertemplate = sprintf("<b>Exon %s</b><br>%d–%d<extra></extra>", exon_idx_vec[i], start(exons_plot[i]), end(exons_plot[i])), showlegend = FALSE) |> plotly::add_annotations(x = (es + ee) / 2, y = 0.5, xref = "x", yref = "y", text = paste0("E", exon_idx_vec[i]), showarrow = FALSE, font = list(size = 10, color = "#1a5e30"))
     }
   }
 
   pal <- c("#e67e22", "#e74c3c", "#9b59b6", "#1abc9c", "#3498db", "#f39c12", "#c0392b", "#8e44ad", "#16a085", "#2980b9")
+  itd_cov_df <- .build_itd_cov_display(itd_df, dup_ends, axis_ctx)
+  p_itd_cov <- plotly::plot_ly()
+  if (nrow(itd_cov_df) > 0) {
+    for (vid in unique(itd_cov_df$variant)) {
+      sub <- itd_cov_df[itd_cov_df$variant == vid, , drop = FALSE]
+      col_i <- pal[((vid - 1L) %% length(pal)) + 1L]
+      p_itd_cov <- p_itd_cov |> plotly::add_trace(x = sub$disp_pos, y = sub$count, type = "scatter", mode = "lines", line = list(color = col_i, width = 2), name = paste0("ITD cov ", vid), hovertemplate = "ITD pos: %{text}<br>Coverage reads: %{y}<extra></extra>", text = sub$raw_idx, showlegend = FALSE)
+    }
+  }
+  itd_cov_ymax <- if (nrow(itd_cov_df) > 0) max(itd_cov_df$count, na.rm = TRUE) else 1
+  p_itd_cov <- plotly::layout(p_itd_cov, xaxis = list(title = "", showticklabels = FALSE, range = c(axis_ctx$disp_from, axis_ctx$disp_to), rangeslider = list(visible = FALSE)), yaxis = list(title = "ITD cov", range = c(0, max(1, itd_cov_ymax)), fixedrange = TRUE), plot_bgcolor = "white", paper_bgcolor = "white")
+
   p_itd <- plotly::plot_ly()
 
   for (i in seq_len(nrow(itd_df))) {
@@ -348,15 +564,17 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
     label <- sprintf("%d bp  VAF %s", row$Length, vaf_str)
     if (!is.na(row$HGVS_cDNA)) label <- paste0(label, "  ", row$HGVS_cDNA)
 
-    p_itd <- p_itd |> plotly::add_trace(x = c(row$GenomicPosition, dup_ends[i]), y = c(y_pos, y_pos), type = "scatter", mode = "lines", line = list(color = col_i, width = 14), name = label, text = tip_text, hoverinfo = "text", showlegend = TRUE) |> plotly::add_trace(x = row$GenomicPosition, y = y_pos, type = "scatter", mode = "markers", marker = list(symbol = "line-ns", size = 14, color = col_i, line = list(color = "white", width = 2)), hoverinfo = "skip", showlegend = FALSE)
+    x0 <- axis_ctx$transform_pos(row$GenomicPosition)
+    x1 <- axis_ctx$transform_pos(dup_ends[i])
+    p_itd <- p_itd |> plotly::add_trace(x = c(x0, x1), y = c(y_pos, y_pos), type = "scatter", mode = "lines", line = list(color = col_i, width = 14), name = label, text = tip_text, hoverinfo = "text", showlegend = TRUE) |> plotly::add_trace(x = x0, y = y_pos, type = "scatter", mode = "markers", marker = list(symbol = "line-ns", size = 14, color = col_i, line = list(color = "white", width = 2)), hoverinfo = "skip", showlegend = FALSE)
   }
 
-  p_itd <- plotly::layout(p_itd, xaxis = list(title = paste0(chrom, " (", genome_build, ")"), gridcolor = "#e8e8e8", range = c(plot_start, plot_end), rangeslider = list(visible = FALSE)), yaxis = list(title = "ITDs", showticklabels = FALSE, range = c(0, max(1, nrow(itd_df) * 0.18 + 0.2)), fixedrange = TRUE), legend = list(orientation = "h", x = 0, y = -0.25, font = list(size = 11)), plot_bgcolor = "white", paper_bgcolor = "white")
+  p_itd <- plotly::layout(p_itd, xaxis = list(title = paste0(chrom, " (compressed ", genome_build, ")"), gridcolor = "#e8e8e8", range = c(axis_ctx$disp_from, axis_ctx$disp_to), rangeslider = list(visible = FALSE)), yaxis = list(title = "ITDs", showticklabels = FALSE, range = c(0, max(1.15, nrow(itd_df) * 0.18 + 0.35)), fixedrange = TRUE), legend = list(orientation = "h", x = 0, y = -0.35, font = list(size = 11)), plot_bgcolor = "white", paper_bgcolor = "white")
 
   title_text <- if (!is.null(sample_name)) paste0("TALOS • ", sample_name, "  |  ", gene_config$gene, "  |  ", nrow(itd_df), " ITD(s)  |  ", genome_build) else paste0("TALOS • ", gene_config$gene, "  |  ", nrow(itd_df), " ITD(s)  |  ", genome_build)
 
-  fig <- plotly::subplot(p_cov, p_exon, p_itd, nrows = 3, shareX = TRUE, heights = c(0.58, 0.14, 0.28))
-  fig <- plotly::layout(fig, title = list(text = title_text, x = 0.5, font = list(size = 14)), hovermode = "x unified", showlegend = TRUE, margin = list(t = 60))
+  fig <- plotly::subplot(p_cov, p_exon, p_itd_cov, p_itd, nrows = 4, shareX = TRUE, heights = c(0.42, 0.14, 0.14, 0.30))
+  fig <- plotly::layout(fig, title = list(text = title_text, x = 0.5, font = list(size = 14)), hovermode = "x unified", showlegend = TRUE, margin = list(t = 60, l = 60, r = 40, b = 90))
   
   if (show_config) {
     config_text <- paste("Config:", paste("Targeted exons:", paste(unique(gene_config$target_exons$exon_idx), collapse = ",")), paste("Transcript:", ifelse(is.na(gene_config$transcript), "none", gene_config$transcript)), paste("CDS offset:", gene_config$cds_offset), sep = " | ")
