@@ -64,12 +64,12 @@
 #' @param include_timestamp Include timestamp in output filenames (default TRUE).
 #' @param output_sep Separator between filename parts (default "_").
 #' @param global_log Write all logs (config, compute time, errors) to a single file (default TRUE).
-#' @param min_side_softclip_reads Minimum number of reads with soft‑clip on each side (default 10).
+#' @param min_side_softclip_reads Minimum number of reads with soft‑clip on each side (default 20).
 #' @param max_side_ratio Maximum ratio of left/right soft‑clip counts before filtering (default 10).
 #' @param min_softclip_pct_side Minimum percentage of supporting reads that must have a soft‑clip on each side (default 1.0).
 #' @param min_left_softclip_pct_wt Minimum percentage of wildtype reads with left soft‑clip (default 1.0).
 #' @param min_right_softclip_pct_wt Minimum percentage of wildtype reads with right soft‑clip (default 1.0).
-#' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 10).
+#' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 20).
 #' @param max_itd_length Maximum duplication length to consider as ITD; longer duplications are automatically converted to PTD (zero length) if \code{convert_long_to_ptd} is TRUE (default 1000).
 #' @param convert_long_to_ptd If TRUE, duplications longer than \code{max_itd_length} are reported as PTDs (length 0). If FALSE, they are skipped (default TRUE).
 #' @param min_length Minimum duplication length to report (NULL = no lower bound).  
@@ -103,11 +103,11 @@ detect_itd <- function(
     add_config_to_report = FALSE, max_pairwise_alignments = 30L,
     include_sample = TRUE, include_gene = TRUE, include_timestamp = TRUE,
     output_sep = "_", global_log = TRUE,
-    min_side_softclip_reads = 10, max_side_ratio = 10,
+    min_side_softclip_reads = 20, max_side_ratio = 10,
     min_softclip_pct_side = 1.0,
     min_left_softclip_pct_wt = 1.0,
     min_right_softclip_pct_wt = 1.0,
-    min_abs_side_softclip = 10,
+    min_abs_side_softclip = 20,
     max_itd_length = 1000,
     convert_long_to_ptd = TRUE,
     min_length = NULL,     
@@ -469,12 +469,12 @@ detect_itd <- function(
 #' @param include_timestamp Include timestamp in filenames
 #' @param output_sep Separator for filename parts
 #' @param global_log Write all logs to a single file
-#' @param min_side_softclip_reads Minimum number of reads with soft‑clip on each side (default 10).
+#' @param min_side_softclip_reads Minimum number of reads with soft‑clip on each side (default 20).
 #' @param max_side_ratio Maximum ratio of left/right soft‑clip counts before filtering (default 10).
 #' @param min_softclip_pct_side Minimum percentage of supporting reads with soft‑clip on each side (default 1.0).
 #' @param min_left_softclip_pct_wt Minimum percentage of wildtype reads with left soft‑clip (default 1.0).
 #' @param min_right_softclip_pct_wt Minimum percentage of wildtype reads with right soft‑clip (default 1.0).
-#' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 10).
+#' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 20).
 #' @param max_itd_length Maximum duplication length to consider as ITD; longer duplications are automatically converted to PTD (zero length) if \code{convert_long_to_ptd} is TRUE (default 1000).
 #' @param convert_long_to_ptd If TRUE, duplications longer than \code{max_itd_length} are reported as PTDs (length 0). If FALSE, they are skipped (default TRUE).
 #' @param min_length Minimum duplication length to report (default NULL, no lower bound).  
@@ -507,11 +507,11 @@ talos <- function(
     add_config_to_report = FALSE, max_pairwise_alignments = NULL,
     output_prefix = "TALOS", include_sample = TRUE, include_gene = TRUE,
     include_timestamp = TRUE, output_sep = "_", global_log = TRUE,
-    min_side_softclip_reads = 10, max_side_ratio = 10,
+    min_side_softclip_reads = 20, max_side_ratio = 10,
     min_softclip_pct_side = 1.0,
     min_left_softclip_pct_wt = 1.0,
     min_right_softclip_pct_wt = 1.0,
-    min_abs_side_softclip = 10,
+    min_abs_side_softclip = 20,
     max_itd_length = 1000,
     convert_long_to_ptd = TRUE,
     min_length = NULL,       
@@ -542,11 +542,11 @@ talos <- function(
     compute_hgvs = TRUE,
     html_report = TRUE, use_gviz = TRUE, min_itd_read_coverage = 0,
     max_pairwise_alignments = 30L,
-    min_side_softclip_reads = 10, max_side_ratio = 10,
+    min_side_softclip_reads = 20, max_side_ratio = 10,
     min_softclip_pct_side = 1.0,
     min_left_softclip_pct_wt = 1.0,
     min_right_softclip_pct_wt = 1.0,
-    min_abs_side_softclip = 10,
+    min_abs_side_softclip = 20,
     max_itd_length = 1000,
     convert_long_to_ptd = TRUE,
     min_length = NULL,       
