@@ -72,8 +72,8 @@
 #' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 10).
 #' @param max_itd_length Maximum duplication length to consider as ITD; longer duplications are automatically converted to PTD (zero length) if \code{convert_long_to_ptd} is TRUE (default 1000).
 #' @param convert_long_to_ptd If TRUE, duplications longer than \code{max_itd_length} are reported as PTDs (length 0). If FALSE, they are skipped (default TRUE).
-#' @param min_length Minimum duplication length to report (NULL = no lower bound).  # <-- NEW
-#' @param max_length Maximum duplication length to report (NULL = no upper bound).  # <-- NEW
+#' @param min_length Minimum duplication length to report (NULL = no lower bound).  
+#' @param max_length Maximum duplication length to report (NULL = no upper bound).  
 #' @param ... Other parameters passed to the underlying engine.
 #' @return Data frame of ITD calls with diagnostic columns, invisibly.
 #' @export
@@ -105,8 +105,8 @@ detect_itd <- function(
     min_abs_side_softclip = 10,
     max_itd_length = 1000,
     convert_long_to_ptd = TRUE,
-    min_length = NULL,      # <-- NEW
-    max_length = NULL,      # <-- NEW
+    min_length = NULL,     
+    max_length = NULL,      
     ...
 ) {
   
@@ -275,7 +275,7 @@ detect_itd <- function(
           debug = debug, verbose = verbose
         )
         # Pass min_length and max_length to .apply_filters
-        if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length))  # <-- NEW
+        if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length))  
           results[[length(results) + 1L]] <- metrics
       }
     }
@@ -338,8 +338,8 @@ detect_itd <- function(
 #' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 10).
 #' @param max_itd_length Maximum duplication length to consider as ITD; longer duplications are automatically converted to PTD (zero length) if \code{convert_long_to_ptd} is TRUE (default 1000).
 #' @param convert_long_to_ptd If TRUE, duplications longer than \code{max_itd_length} are reported as PTDs (length 0). If FALSE, they are skipped (default TRUE).
-#' @param min_length Minimum duplication length to report (default NULL, no lower bound).  # <-- NEW
-#' @param max_length Maximum duplication length to report (default NULL, no upper bound).  # <-- NEW
+#' @param min_length Minimum duplication length to report (default NULL, no lower bound).  
+#' @param max_length Maximum duplication length to report (default NULL, no upper bound).  
 #' @param ... Extra settings.
 #' @export
 talos <- function(
@@ -372,8 +372,8 @@ talos <- function(
     min_abs_side_softclip = 10,
     max_itd_length = 1000,
     convert_long_to_ptd = TRUE,
-    min_length = NULL,        # <-- NEW
-    max_length = NULL,        # <-- NEW
+    min_length = NULL,       
+    max_length = NULL,        
     ...
 ) {
   
@@ -402,8 +402,8 @@ talos <- function(
     min_abs_side_softclip = 10,
     max_itd_length = 1000,
     convert_long_to_ptd = TRUE,
-    min_length = NULL,       # <-- NEW
-    max_length = NULL        # <-- NEW
+    min_length = NULL,       
+    max_length = NULL        
   )
   
   yaml_vals <- config$gene_settings
@@ -419,7 +419,6 @@ talos <- function(
   })
   names(p) <- names(defaults)
   
-  # Safety: replace any NULL with the default (should not happen, but just in case)
   for (nm in names(defaults)) {
     if (is.null(p[[nm]])) p[[nm]] <- defaults[[nm]]
   }
