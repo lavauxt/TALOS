@@ -48,10 +48,10 @@ KMT2A:
     max_itd_length: 30000
     convert_long_to_ptd: TRUE
     min_coverage_drop: 0
-    max_missing_kmers: 0.8
+    max_missing_kmers: 0.8 
     min_length: 1000
     merge_ptd_intervals: TRUE
-    merge_gap: 500
+    merge_gap: 10 
     min_ptd_length: 200
 
 BCOR:
