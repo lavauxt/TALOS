@@ -73,6 +73,41 @@
 
 
 # ---------------------------------------------------------------------------
+# Assemble PTD consensus from soft-clipped sequences (new for PTD improvement)
+# ---------------------------------------------------------------------------
+.assemble_ptd_consensus <- function(support_rows, min_reads = 3L, min_len = 15L) {
+  # Collect all soft-clip sequences (lead and trail)
+  soft_seqs <- character()
+  for (i in seq_len(nrow(support_rows))) {
+    sc <- .get_softclips(support_rows$cigar[i], support_rows$read_seq[i])
+    if (!is.na(sc$lead)) soft_seqs <- c(soft_seqs, sc$lead)
+    if (!is.na(sc$trail)) soft_seqs <- c(soft_seqs, sc$trail)
+  }
+  if (length(soft_seqs) < min_reads) return(NA_character_)
+
+  # Keep only sequences with length >= min_len
+  soft_seqs <- soft_seqs[nchar(soft_seqs) >= min_len]
+  if (length(soft_seqs) < min_reads) return(NA_character_)
+
+  # Build consensus by taking the most frequent base at each position
+  max_len <- max(nchar(soft_seqs))
+  # Pad all to max_len with NAs
+  mat <- matrix(NA_character_, nrow = length(soft_seqs), ncol = max_len)
+  for (i in seq_along(soft_seqs)) {
+    s <- soft_seqs[i]
+    mat[i, seq_len(nchar(s))] <- strsplit(s, "")[[1]]
+  }
+  consensus <- vapply(seq_len(max_len), function(pos) {
+    col <- mat[, pos]
+    col <- col[!is.na(col)]
+    if (length(col) == 0) return("N")
+    names(sort(table(col), decreasing = TRUE))[1L]
+  }, character(1L))
+  paste(consensus, collapse = "")
+}
+
+
+# ---------------------------------------------------------------------------
 # CIGAR-only candidate extraction (for use_kmers = FALSE)
 # ---------------------------------------------------------------------------
 .extract_candidates_cigar <- function(reads, genomic_start, ref_len,

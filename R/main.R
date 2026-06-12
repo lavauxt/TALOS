@@ -79,6 +79,11 @@
 #' @param prefer_extended_length If TRUE and duplication length > nominal_read_len,
 #'        use extension-based ITD length (mode of itdsize_ext) and refined breakpoint
 #'        as the primary call. Default TRUE.
+#' @param ptd_allow_asymmetric Allow PTD detection with soft-clips on only one side (default TRUE).
+#' @param ptd_use_local_assembly Attempt to reconstruct duplication from soft-clips (default TRUE).
+#' @param merge_ptd_intervals If TRUE, merge overlapping/adjacent large duplication intervals into a single PTD call (default FALSE).
+#' @param merge_gap Maximum gap (bp) between intervals to merge (default 500).
+#' @param min_ptd_length Minimum length (bp) for intervals to be considered for merging (default 200).
 #' @param ... Other parameters passed to the underlying engine.
 #' @return Data frame of ITD calls with diagnostic columns, invisibly.
 #' @export
@@ -115,6 +120,11 @@ detect_itd <- function(
     use_kmers = TRUE,
     exon_padding = 0L,
     prefer_extended_length = TRUE,
+    ptd_allow_asymmetric = TRUE,
+    ptd_use_local_assembly = TRUE,
+    merge_ptd_intervals = FALSE,      
+    merge_gap = 500L,                 
+    min_ptd_length = 200L,            
     ...
 ) {
   
@@ -215,9 +225,22 @@ detect_itd <- function(
       }
     }
     
-    # ---- Candidate extraction ----
+    # ---- Candidate extraction (PTD improvements) ----
+    candidates <- list()
     if (ptd_mode && use_cigar_bp) {
+      # PTD fast path: soft-clip extraction
       candidates <- .extract_candidates_ptd(all_reads, gene_config$genomic_start, ref_len, verbose = verbose)
+      # If requested, also run standard k‑mer based detection (for jumps) and merge
+      if (use_kmers) {
+        jump_candidates <- .extract_candidates_standard(
+          reads = all_reads, ref_kmers = ref_kmers, ptd_mode = TRUE, min_size = min_size,
+          max_missing_kmers = max_missing_kmers, refine_bp = refine_bp, use_cigar_bp = use_cigar_bp,
+          genomic_start = gene_config$genomic_start, ref_dna = ref_dna,
+          max_itd_length = max_itd_length, convert_long_to_ptd = convert_long_to_ptd,
+          verbose = verbose
+        )
+        candidates <- c(candidates, jump_candidates)
+      }
     } else if (!use_kmers) {
       candidates <- .extract_candidates_cigar(all_reads, gene_config$genomic_start, ref_len,
                                               min_size = min_size, verbose = verbose)
@@ -238,8 +261,21 @@ detect_itd <- function(
     
     bp_df    <- .candidates_to_df(candidates, gene_config$genomic_start)
     clusters <- .cluster_breakpoints(bp_df$breakpoint, cluster_tolerance)
-
-    # ---- Extension data ----
+    
+    # ---- Local assembly for PTD clusters (new) ----
+    if (ptd_mode && ptd_use_local_assembly && nrow(bp_df) > 0) {
+      for (cl in clusters) {
+        cl_df <- bp_df[bp_df$breakpoint %in% cl, ]
+        assembled <- .assemble_ptd_consensus(cl_df, min_reads = 3L, min_len = 15L)
+        if (!is.na(assembled) && nchar(assembled) > 0) {
+          # Store assembled sequence in a new column (optional)
+          # For now, we simply log it.
+          log_msg(sprintf("[TALOS] Assembled PTD consensus of length %d bp for cluster at %d",
+                          nchar(assembled), round(median(cl))))
+        }
+      }
+    }
+    
     # ---- Extension data (compute true ITD length using in‑silico extension) ----
     ext_df <- .extend_candidates(
       bp_df[!is.na(bp_df$length) & bp_df$length > 0L, ],
@@ -281,7 +317,7 @@ detect_itd <- function(
           if (nrow(rcl_reads) < 3) next
           
           best_len <- .mode(rcl_reads$itdsize)
-          median_bp <- as.integer(median(rcl_reads$breakpoint_refined))
+          median_bp <- as.integer(median(rcl_reads$breakpoint_refined, na.rm = TRUE))
           
           # Find all original candidate rows that support this refined cluster
           support_read_names <- rcl_reads$read_name
@@ -316,7 +352,8 @@ detect_itd <- function(
             length_ext = length_ext,
             debug = debug, verbose = verbose
           )
-          if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length))
+          if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length,
+                                                  ptd_mode = ptd_mode, ptd_allow_asymmetric = ptd_allow_asymmetric))
             results[[length(results) + 1L]] <- metrics
         }
       }
@@ -324,9 +361,19 @@ detect_itd <- function(
     
     # ---- If no extension‑based results, fall back to original k‑mer clustering ----
     if (length(results) == 0) {
-      # Create lookups for extension sizes (by read name) for optional use
-      ext_by_read <- setNames(ext_df$itdsize, ext_df$read_name)
-      bp_refined_by_read <- setNames(ext_df$breakpoint_refined, ext_df$read_name)
+      # Create lookups for extension sizes (by read name) – handle duplicates by taking first value
+      ext_by_read <- if (nrow(ext_df) > 0) {
+        tmp <- tapply(ext_df$itdsize, ext_df$read_name, function(x) x[1L])
+        tmp[!is.na(tmp)]
+      } else {
+        c()
+      }
+      bp_refined_by_read <- if (nrow(ext_df) > 0) {
+        tmp <- tapply(ext_df$breakpoint_refined, ext_df$read_name, function(x) x[1L])
+        tmp[!is.na(tmp)]
+      } else {
+        c()
+      }
       
       cand_breakpoints <- bp_df$breakpoint
       cand_lengths     <- bp_df$length
@@ -341,8 +388,14 @@ detect_itd <- function(
         refined_bps <- c()
         support_read_names <- bp_df$read_name[cluster_candidates]
         for (rn in support_read_names) {
+          # Safely extract single value (first if duplicate)
           sz <- ext_by_read[rn]
+          if (length(sz) == 0) sz <- NA_integer_
+          else if (length(sz) > 1) sz <- sz[1L]
           bp_ref <- bp_refined_by_read[rn]
+          if (length(bp_ref) == 0) bp_ref <- NA_integer_
+          else if (length(bp_ref) > 1) bp_ref <- bp_ref[1L]
+          
           if (!is.na(sz) && !is.na(bp_ref)) {
             ext_sizes <- c(ext_sizes, sz)
             refined_bps <- c(refined_bps, bp_ref)
@@ -352,9 +405,9 @@ detect_itd <- function(
         use_ext <- prefer_extended_length && !ptd_mode && length(ext_sizes) >= 3
         if (use_ext) {
           best_len <- .mode(ext_sizes)
-          median_bp <- as.integer(median(refined_bps))
+          median_bp <- as.integer(median(refined_bps, na.rm = TRUE))
           cl <- rep(median_bp, length(cl))
-          support_rows <- bp_df[bp_df$read_name %in% names(ext_by_read[!is.na(ext_by_read)]), ]
+          support_rows <- bp_df[bp_df$read_name %in% names(ext_by_read), ]
           support_rows <- support_rows[abs(support_rows$breakpoint - median_bp) <= cluster_tolerance, ]
           if (nrow(support_rows) == 0) support_rows <- bp_df[bp_df$breakpoint %in% cl, ]
           length_ext <- best_len
@@ -375,7 +428,8 @@ detect_itd <- function(
             length_ext = length_ext,
             debug = debug, verbose = verbose
           )
-          if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length))
+          if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length,
+                                                  ptd_mode = ptd_mode, ptd_allow_asymmetric = ptd_allow_asymmetric))
             results[[length(results) + 1L]] <- metrics
           next
         }
@@ -413,7 +467,8 @@ detect_itd <- function(
             length_ext = length_ext,
             debug = debug, verbose = verbose
           )
-          if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length))
+          if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length,
+                                                  ptd_mode = ptd_mode, ptd_allow_asymmetric = ptd_allow_asymmetric))
             results[[length(results) + 1L]] <- metrics
         }
       }
@@ -425,6 +480,78 @@ detect_itd <- function(
     }
     
     final_df <- do.call(rbind, lapply(results, function(x) as.data.frame(x, stringsAsFactors = FALSE)))
+    
+    # ========== MERGE PTD INTERVALS (NEW) ==========
+    if (merge_ptd_intervals && !ptd_mode && nrow(final_df) > 0) {
+      # Keep only duplications larger than min_ptd_length
+      keep <- which(final_df$Length >= min_ptd_length)
+      if (length(keep) >= 2) {
+        log_msg("Merging %d large duplication intervals (gap ≤ %d bp)...", length(keep), merge_gap)
+        requireNamespace("GenomicRanges", quietly = TRUE)
+        gr <- GenomicRanges::GRanges(
+          seqnames = final_df$Genome[keep],
+          ranges = IRanges::IRanges(
+            start = final_df$GenomicPosition[keep],
+            end = final_df$GenomicPosition[keep] + final_df$Length[keep] - 1L
+          )
+        )
+        merged_gr <- GenomicRanges::reduce(gr, min.gapwidth = merge_gap)
+        if (length(merged_gr) > 0) {
+          # Create a new data frame with merged intervals
+          merged_rows <- lapply(seq_along(merged_gr), function(i) {
+            start <- GenomicRanges::start(merged_gr[i])
+            end <- GenomicRanges::end(merged_gr[i])
+            len <- GenomicRanges::width(merged_gr[i])
+            # Take the first row's sample/gene/genome as template
+            template <- final_df[keep[1], ]
+            # Replace position, length, and adjust other fields
+            template$GenomicPosition <- start
+            template$Length <- len
+            template$ITD_Sequence <- NA_character_  # cannot reconstruct easily
+            template$HGVS_cDNA <- NA_character_
+            template$HGVS_Protein <- NA_character_
+            template$SupportingReads <- sum(final_df$SupportingReads[keep], na.rm = TRUE)
+            template$WildtypeReads <- sum(final_df$WildtypeReads[keep], na.rm = TRUE)
+            template$DepthAtBreakpoint <- template$SupportingReads + template$WildtypeReads
+            template$AlleleFrequency <- template$SupportingReads / template$DepthAtBreakpoint
+            # Set other metrics to NA or placeholder
+            template$RefMatch_Observed <- NA_real_
+            template$RefMatch_Total <- NA_real_
+            template$ITDReadCoverage <- NA_real_
+            template$ITDCoverageRLE <- NA_character_
+            template$SupportConsistency <- NA_real_
+            template$AlignmentScore <- NA_real_
+            template$TotalSupportBases <- NA_integer_
+            template$LeftSoftclipCount <- NA_integer_
+            template$RightSoftclipCount <- NA_integer_
+            template$BothSoftclipCount <- NA_integer_
+            template$LeftSoftclipPctSupport <- NA_real_
+            template$RightSoftclipPctSupport <- NA_real_
+            template$LeftSoftclipPctWT <- NA_real_
+            template$RightSoftclipPctWT <- NA_real_
+            template$SequenceImputed <- TRUE
+            template$SequencePartial <- TRUE
+            template$SequenceSource <- "merged_intervals"
+            template$Hotspot <- any(final_df$Hotspot[keep])
+            template$HotspotName <- if (template$Hotspot) "KMT2A_PTD_hotspot" else NA_character_
+            template$Region <- "exonic"  # assume merged PTD is exonic (can be refined)
+            template$ExonNumber <- NA_integer_
+            template
+          })
+          merged_df <- do.call(rbind, merged_rows)
+          log_msg("Merged into %d interval(s).", nrow(merged_df))
+          # Replace final_df with merged_df (or keep both? We'll replace for simplicity)
+          final_df <- merged_df
+        } else {
+          log_msg("No intervals could be merged.")
+        }
+      } else if (length(keep) == 1) {
+        log_msg("Only one large duplication found; no merging performed.")
+      } else {
+        log_msg("No duplications longer than %d bp found; skipping merge.", min_ptd_length)
+      }
+    }
+    # ========== END MERGE ==========
     
     if (do_annotate_hotspots) final_df <- annotate_hotspots(final_df, db_path = hotspot_db_path, genome_build = gene_config$build)
     else { final_df$Hotspot <- FALSE; final_df$HotspotName <- NA_character_ }
@@ -482,11 +609,18 @@ detect_itd <- function(
 #' @param use_kmers Enable k-mer based analysis (default TRUE).
 #' @param exon_padding Number of flanking exons to add to the genomic window (default 0).
 #' @param prefer_extended_length If TRUE, use extension-based length for ITDs longer than read length (default TRUE).
+#' @param ptd_allow_asymmetric Allow PTD detection with soft-clips on only one side (default TRUE).
+#' @param ptd_use_local_assembly Attempt to reconstruct duplication from soft-clips (default TRUE).
+#' @param merge_ptd_intervals If TRUE, merge overlapping/adjacent large duplication intervals into a single PTD call (default FALSE).
+#' @param merge_gap Maximum gap (bp) between intervals to merge (default 500).
+#' @param min_ptd_length Minimum length (bp) for intervals to be considered for merging (default 200).
+#' @param verbose Print progress messages (default TRUE).
 #' @param ... Extra settings.
 #' @export
 talos <- function(
     bam_path, gene, build = "hg19", padding = 500L,
     min_support = NULL, min_size = NULL, max_correction = NULL,
+    max_missing_kmers = NULL,
     plot = TRUE, sample_name = NULL, filter_intronic = NULL,
     ptd_mode = NULL, use_cigar_bp = NULL, refine_bp = NULL,
     min_mapq = NULL, min_wt_reads = NULL, cluster_tolerance = NULL,
@@ -507,18 +641,24 @@ talos <- function(
     add_config_to_report = FALSE, max_pairwise_alignments = NULL,
     output_prefix = "TALOS", include_sample = TRUE, include_gene = TRUE,
     include_timestamp = TRUE, output_sep = "_", global_log = TRUE,
-    min_side_softclip_reads = 20, max_side_ratio = 10,
-    min_softclip_pct_side = 1.0,
-    min_left_softclip_pct_wt = 1.0,
-    min_right_softclip_pct_wt = 1.0,
-    min_abs_side_softclip = 20,
-    max_itd_length = 1000,
-    convert_long_to_ptd = TRUE,
+    min_side_softclip_reads = NULL, max_side_ratio = NULL,
+    min_softclip_pct_side = NULL,
+    min_left_softclip_pct_wt = NULL,
+    min_right_softclip_pct_wt = NULL,
+    min_abs_side_softclip = NULL,
+    max_itd_length = NULL,
+    convert_long_to_ptd = NULL,
     min_length = NULL,       
     max_length = NULL,
     use_kmers = TRUE,
     exon_padding = 0L,
-    prefer_extended_length = TRUE,
+    prefer_extended_length = NULL,
+    ptd_allow_asymmetric = NULL,
+    ptd_use_local_assembly = NULL,
+    merge_ptd_intervals = NULL,      
+    merge_gap = NULL,                
+    min_ptd_length = NULL,           
+    verbose = TRUE,
     ...
 ) {
   
@@ -527,9 +667,10 @@ talos <- function(
                             exon_padding = exon_padding)
   config$build <- build
   
+  # Hard package defaults (used when both user and YAML are NULL)
   defaults <- list(
     min_support = 10, min_size = 15, max_correction = 2.0, filter_intronic = FALSE,
-    ptd_mode = FALSE, use_cigar_bp = TRUE, refine_bp = FALSE, min_mapq = 20,
+    max_missing_kmers = 0.5, ptd_mode = FALSE, use_cigar_bp = TRUE, refine_bp = FALSE, min_mapq = 20,
     min_wt_reads = 0, cluster_tolerance = 10, vaf_threshold = 0.01,
     min_strand_bias = 0, max_strand_bias = 1, min_mean_support_mapq = 0,
     max_breakpoint_spread = Inf, min_softclip_fraction = 0, min_unique_breakpoints = 0,
@@ -551,11 +692,17 @@ talos <- function(
     convert_long_to_ptd = TRUE,
     min_length = NULL,       
     max_length = NULL,
-    prefer_extended_length = TRUE
+    prefer_extended_length = TRUE,
+    ptd_allow_asymmetric = TRUE,
+    ptd_use_local_assembly = TRUE,
+    merge_ptd_intervals = FALSE,
+    merge_gap = 500L,
+    min_ptd_length = 200L
   )
   
   yaml_vals <- config$gene_settings
   
+  # Resolve: user argument (if not NULL) > YAML > hard default
   resolve <- function(user_val, yaml_val, default_val) {
     if (!is.null(user_val)) return(user_val)
     if (!is.null(yaml_val)) return(yaml_val)
@@ -563,12 +710,20 @@ talos <- function(
   }
   
   p <- lapply(names(defaults), function(nm) {
-    resolve(get(nm), yaml_vals[[nm]], defaults[[nm]])
+    user_val <- get(nm)   # will be NULL if not supplied by caller
+    yaml_val <- yaml_vals[[nm]]
+    resolve(user_val, yaml_val, defaults[[nm]])
   })
   names(p) <- names(defaults)
   
-  for (nm in names(defaults)) {
-    if (is.null(p[[nm]])) p[[nm]] <- defaults[[nm]]
+  # Auto-relax thresholds for KMT2A PTD
+  if (gene == "KMT2A" && p$ptd_mode) {
+    if (verbose) message("[TALOS] Using relaxed thresholds for KMT2A PTD detection")
+    p$min_support <- min(p$min_support, 5)
+    p$min_side_softclip_reads <- min(p$min_side_softclip_reads, 10)
+    p$min_abs_side_softclip <- min(p$min_abs_side_softclip, 10)
+    p$min_coverage_drop <- min(p$min_coverage_drop, 1.0)
+    p$ptd_allow_asymmetric <- TRUE
   }
   
   if (is.null(config$exons)) config$exons <- config$target_exons
@@ -578,6 +733,7 @@ talos <- function(
     min_support = p$min_support, min_size = p$min_size,
     max_correction = p$max_correction, plot = plot, sample_name = sample_name,
     filter_intronic = p$filter_intronic, ptd_mode = p$ptd_mode,
+    max_missing_kmers = p$max_missing_kmers,
     use_cigar_bp = p$use_cigar_bp, refine_bp = p$refine_bp,
     min_mapq = p$min_mapq, min_wt_reads = p$min_wt_reads,
     cluster_tolerance = p$cluster_tolerance, vaf_threshold = p$vaf_threshold,
@@ -610,6 +766,12 @@ talos <- function(
     use_kmers = use_kmers,
     exon_padding = exon_padding,
     prefer_extended_length = p$prefer_extended_length,
+    ptd_allow_asymmetric = p$ptd_allow_asymmetric,
+    ptd_use_local_assembly = p$ptd_use_local_assembly,
+    merge_ptd_intervals = p$merge_ptd_intervals,
+    merge_gap = p$merge_gap,
+    min_ptd_length = p$min_ptd_length,
+    verbose = verbose,
     ...
   )
 }

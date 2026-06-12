@@ -38,16 +38,21 @@ FLT3:
   cds_offset: 93            
 
 KMT2A:
-  transcript: NM_005933       # KMT2A partial tandem duplication exons 2-12
-  targeted_exons: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+  transcript: NM_005933
+  targeted_exons: [2,3,4,5,6,7,8,9,10,11,12]
   build: hg19
   gene_settings:
-    min_length: 500
-    min_support: 5
-    padding: 10000
-    min_wt_reads: 5
-    max_itd_length: 50000
-
+    ptd_mode: FALSE
+    min_support: 3
+    min_size: 15
+    max_itd_length: 30000
+    convert_long_to_ptd: TRUE
+    min_coverage_drop: 0
+    max_missing_kmers: 0.8
+    min_length: 1000
+    merge_ptd_intervals: TRUE
+    merge_gap: 500
+    min_ptd_length: 200
 
 BCOR:
   transcript: NM_001123385    # BCOR internal tandem duplication, exon 15

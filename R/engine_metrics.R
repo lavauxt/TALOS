@@ -91,7 +91,8 @@
   orientation          <- NA_character_
   hgvs <- list(c_notation = NA_character_, p_notation = NA_character_)
 
-  len_specific_bp <- round(median(cluster_bps))
+  len_specific_bp <- round(median(cluster_bps, na.rm = TRUE))
+  if (is.na(len_specific_bp) || is.infinite(len_specific_bp)) return(NULL)
   support_qnames  <- unique(support_rows$read_name)
   raw_support     <- length(support_qnames)
 
@@ -164,7 +165,7 @@
   if (is.na(itd_seq) && !is.na(best_len) && best_len > 0L && !ptd_mode) {
     local_start <- len_specific_bp - genomic_start + 1L
     local_end   <- local_start + best_len - 1L
-    if (local_end <= nchar(ref_dna)) {
+    if (!is.na(local_end) && local_end <= nchar(ref_dna)) {
       itd_seq          <- substr(ref_dna, local_start, local_end)
       imputed          <- TRUE; sequence_partial <- FALSE
       observed_seq     <- NA_character_; observed_len <- 0L
@@ -228,7 +229,7 @@
   if (do_alignment_score && !is.na(itd_seq) && !is.na(best_len) && best_len > 0L) {
     local_start <- len_specific_bp - genomic_start + 1L
     local_end   <- local_start + best_len - 1L
-    if (local_end <= nchar(ref_dna)) {
+    if (!is.na(local_end) && local_end <= nchar(ref_dna)) {
       ref_segment  <- substr(ref_dna, local_start, local_end)
       min_len_tot  <- min(nchar(itd_seq), nchar(ref_segment))
       if (min_len_tot > 0L) {
@@ -339,8 +340,7 @@
   if (do_discordant_ratio && !is.null(all_pairs))
     discordant_ratio <- compute_discordant_ratio(all_pairs, len_specific_bp)
 
-  # ---- Paired-end ITD length estimate ----
-  # Useful when the ITD exceeds the read length and CIGAR/k-mer detection undercounts.
+  # ---- Paired-end ITD length estimate (also for PTD mode) ----
   if (!is.null(all_pairs)) {
     pe_est <- compute_pe_itd_length(
       all_pairs, len_specific_bp,
@@ -373,7 +373,7 @@
   if (do_detect_orientation && !is.na(itd_seq) && !is.na(best_len) && best_len > 0L) {
     local_start <- len_specific_bp - genomic_start + 1L
     local_end   <- local_start + best_len - 1L
-    if (local_end <= nchar(ref_dna))
+    if (!is.na(local_end) && local_end <= nchar(ref_dna))
       orientation <- detect_orientation(itd_seq,
                                         substr(ref_dna, local_start, local_end))
   }
@@ -449,9 +449,11 @@
 
 # ---------------------------------------------------------------------------
 # Apply all hard-threshold filters; returns TRUE if the call should be kept
+# Modified to support asymmetric PTD mode and PTD-specific microhomology check
 # ---------------------------------------------------------------------------
 .apply_filters <- function(metrics, thresholds,
-                            min_length = NULL, max_length = NULL) {
+                            min_length = NULL, max_length = NULL,
+                            ptd_mode = FALSE, ptd_allow_asymmetric = TRUE) {
   with(thresholds, {
     if (!is.null(min_length) && !is.na(metrics$Length) && metrics$Length < min_length)
       return(FALSE)
@@ -476,24 +478,34 @@
     left  <- metrics$LeftSoftclipCount
     right <- metrics$RightSoftclipCount
     if (!is.na(left) && !is.na(right)) {
-      if (!is.na(metrics$Length) && metrics$Length > 0L) {
-        # ITD: absolute minimum per side + WT % check
+      if (ptd_mode && ptd_allow_asymmetric) {
+        # PTD asymmetric mode: require at least one side to have sufficient reads
+        max_side <- max(left, right)
+        if (max_side < min_side_softclip_reads) return(FALSE)
+        # Check dominant side's percentage of support and WT
+        if (left >= right) {
+          if (!is.na(metrics$LeftSoftclipPctSupport) && metrics$LeftSoftclipPctSupport < min_softclip_pct_side) return(FALSE)
+          if (!is.na(metrics$LeftSoftclipPctWT) && metrics$LeftSoftclipPctWT < min_left_softclip_pct_wt) return(FALSE)
+        } else {
+          if (!is.na(metrics$RightSoftclipPctSupport) && metrics$RightSoftclipPctSupport < min_softclip_pct_side) return(FALSE)
+          if (!is.na(metrics$RightSoftclipPctWT) && metrics$RightSoftclipPctWT < min_right_softclip_pct_wt) return(FALSE)
+        }
+      } else {
+        # Original symmetric ITD/PTD filter
         if (left < min_side_softclip_reads || right < min_side_softclip_reads) return(FALSE)
         lw <- metrics$LeftSoftclipPctWT;  rw <- metrics$RightSoftclipPctWT
         if (!is.na(lw) && lw < min_left_softclip_pct_wt)  return(FALSE)
         if (!is.na(rw) && rw < min_right_softclip_pct_wt) return(FALSE)
-      } else {
-        # PTD: ratio + absolute + pct support + WT %
-        if (left < min_side_softclip_reads || right < min_side_softclip_reads) {
+        if (!is.na(metrics$Length) && metrics$Length > 0L) {
+          # ITD: additional checks already covered
+        } else {
+          # PTD symmetric (original)
           if (max(left, right) / min(left, right) > max_side_ratio) return(FALSE)
+          if (left < min_abs_side_softclip || right < min_abs_side_softclip) return(FALSE)
+          lp <- metrics$LeftSoftclipPctSupport;  rp <- metrics$RightSoftclipPctSupport
+          if (!is.na(lp) && lp < min_softclip_pct_side) return(FALSE)
+          if (!is.na(rp) && rp < min_softclip_pct_side) return(FALSE)
         }
-        if (left < min_abs_side_softclip || right < min_abs_side_softclip) return(FALSE)
-        lp <- metrics$LeftSoftclipPctSupport;  rp <- metrics$RightSoftclipPctSupport
-        if (!is.na(lp) && lp < min_softclip_pct_side) return(FALSE)
-        if (!is.na(rp) && rp < min_softclip_pct_side) return(FALSE)
-        lw <- metrics$LeftSoftclipPctWT;  rw <- metrics$RightSoftclipPctWT
-        if (!is.na(lw) && lw < min_left_softclip_pct_wt)  return(FALSE)
-        if (!is.na(rw) && rw < min_right_softclip_pct_wt) return(FALSE)
       }
     }
     TRUE
