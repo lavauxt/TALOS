@@ -90,6 +90,7 @@
     total_pairs <- 0L
     chunk_count <- 0L
     open(bam_pairs)
+    on.exit(close(bam_pairs), add = TRUE)   
     repeat {
       p_chunk <- suppressWarnings(
         GenomicAlignments::readGAlignmentPairs(bam_pairs, param = param)
@@ -106,7 +107,6 @@
         break
       }
     }
-    close(bam_pairs)
     if (length(pair_list) > 0L) pairs <- do.call(c, pair_list)
     if (verbose) message("[TALOS] Total pairs loaded: ", length(pairs %||% integer(0L)))
   }

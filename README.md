@@ -53,24 +53,26 @@ Alternatively, build from source:
 - R ≥ 4.1.0 (the native pipe `|>` is used)
 - Bioconductor packages (required):
   `Rsamtools`, `Biostrings`, `GenomicRanges`, `GenomicAlignments`, `IRanges`,
-  `S4Vectors`, `BiocGenerics`, `GenomeInfoDb`, `GenomicFeatures`, `ensembldb`,
-  `AnnotationFilter`, `AnnotationDbi`, `BSgenome`
+  `S4Vectors`, `BiocGenerics`, `GenomeInfoDb`, `GenomicFeatures`,
+  `AnnotationDbi`, `BSgenome`
 - CRAN packages (required):
-  `yaml`, `DBI`, `RSQLite`
+  `yaml`
 - Bioconductor packages (required for TxDb building):
   `txdbmaker` (Bioconductor ≥ 3.16) or `GenomicFeatures` (older Bioconductor)
 - Optional – RefSeq NM_ transcript fallback: `biomaRt`
+- Optional – Ensembl ENST transcript lookup: `ensembldb`, `AnnotationFilter`
 - Optional – BSgenome sequence data:
   `BSgenome.Hsapiens.UCSC.hg19` or `BSgenome.Hsapiens.UCSC.hg38`
 - Optional – offline EnsDb exon lookup:
   `EnsDb.Hsapiens.v75` (hg19) or `EnsDb.Hsapiens.v86` (hg38)
 - Optional – accelerated k‑mer matching: `fastmatch`
 - Optional – accelerated CIGAR parsing: `cigarillo`
-- Optional – alignment-based orientation / consistency scoring: `pwalign`, `Biostrings`
+- Optional – alignment-based orientation / consistency scoring: `pwalign`
 - Optional – publication PDF plots: `Gviz`
 - Optional – interactive plots: `plotly`, `htmlwidgets`
 - Optional – PDF report tables: `gridExtra`
 - Optional – HTML report: `rmarkdown`, `DT`
+- Optional – hotspot SQLite database: `DBI`, `RSQLite`
 
 Install Bioconductor dependencies:
 
@@ -98,6 +100,22 @@ Install Bioconductor dependencies:
     )
 
     print(results)
+
+For KMT2A partial tandem duplication (PTD) detection:
+
+    results_kmt2a <- talos(
+        bam_path      = "path/to/sample.bam",
+        gene          = "KMT2A",
+        build         = "hg19",
+        output_prefix = "KMT2A_PTD",
+        output_folder = "./results",
+        plot          = TRUE
+    )
+    # Gene-specific settings from gene_config.yaml are applied automatically:
+    # min_support=3, max_missing_kmers=0.8, max_itd_length=30000,
+    # convert_long_to_ptd=TRUE, merge_ptd_intervals=TRUE.
+    # Threshold relaxations (min_support, softclip counts) are applied by talos()
+    # for KMT2A regardless of ptd_mode.
 
 On the first call for a given genome build, TALOS downloads the UCSC refGene
 annotation (~30 s) and caches it to disk so subsequent calls are instant.
@@ -369,9 +387,9 @@ When `output_prefix` is provided, the following files are written to
 - If internet is unavailable, provide static coordinate blocks in
   `gene_config.yaml` and run with `use_db = FALSE`, or pre-build the cache
   with `save_offline_config()`.
-- **`detect_itd()` vs `talos()` defaults** – when calling `detect_itd()` 
-  directly (bypassing `talos()`), note that `min_size` defaults to `10` rather
-  than `15`. All other parameters default as documented in the table above.
+- **`detect_itd()` vs `talos()` defaults** – `min_size` defaults to `15` in
+  both `detect_itd()` and `talos()`. Other parameters may differ; consult
+  the parameter tables above when calling `detect_itd()` directly.
 - **Per-gene YAML overrides** – the gene config YAML supports an optional
   `gene_settings:` block per gene entry. Any key listed there is used as a
   per-gene default that sits between the package default and an explicit
@@ -385,6 +403,14 @@ When `output_prefix` is provided, the following files are written to
 - **`compute_discordant_ratio = TRUE`** triggers a second BAM read pass to
   load read pairs. Set it to `FALSE` when processing many samples in parallel
   to halve I/O and memory usage if discordant-pair evidence is not required.
+- **KMT2A PTD detection strategy** – KMT2A uses `ptd_mode = FALSE` in the
+  bundled YAML (k-mer backward-jump path) combined with
+  `convert_long_to_ptd = TRUE` and `max_itd_length = 30000`. This means
+  duplications up to 30 kb receive a size estimate from k-mer geometry, while
+  larger ones are promoted to PTD records (Length = 0). The `min_length = 1000`
+  filter applies only to sized calls (Length > 0) and does not discard PTD-
+  converted candidates. `talos()` automatically relaxes support and softclip
+  thresholds for KMT2A regardless of `ptd_mode`.
 
 ## License
 

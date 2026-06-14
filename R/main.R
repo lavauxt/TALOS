@@ -181,12 +181,7 @@ detect_itd <- function(
       log_msg(sprintf("Global log saved to: %s", global_log_file))
     }
   }, add = TRUE)
-  
-  # Helper for mode calculation
-  .mode <- function(x) {
-    ux <- unique(x)
-    ux[which.max(tabulate(match(x, ux)))]
-  }
+  # NOTE: .mode() is defined in engine_metrics.R and does not need a local copy here.
   
   tryCatch({
     # Use genomic_ref_seq from gene_config
@@ -262,18 +257,31 @@ detect_itd <- function(
     bp_df    <- .candidates_to_df(candidates, gene_config$genomic_start)
     clusters <- .cluster_breakpoints(bp_df$breakpoint, cluster_tolerance)
     
-    # ---- Local assembly for PTD clusters (new) ----
+    # ---- Local assembly for PTD clusters (reactivated) ----
+    # Assembled sequences are stored keyed by cluster-median genomic BP so that
+    # .compute_variant_metrics() can use them as a higher-quality fallback for
+    # itd_seq when no sequence can be extracted from individual reads.
+    ptd_assembled_seqs <- list()   # character, keyed by as.character(median_bp)
     if (ptd_mode && ptd_use_local_assembly && nrow(bp_df) > 0) {
       for (cl in clusters) {
         cl_df <- bp_df[bp_df$breakpoint %in% cl, ]
         assembled <- .assemble_ptd_consensus(cl_df, min_reads = 3L, min_len = 15L)
         if (!is.na(assembled) && nchar(assembled) > 0) {
-          # Store assembled sequence in a new column (optional)
-          # For now, we simply log it.
-          log_msg(sprintf("[TALOS] Assembled PTD consensus of length %d bp for cluster at %d",
-                          nchar(assembled), round(median(cl))))
+          med_cl <- as.character(round(median(cl)))
+          ptd_assembled_seqs[[med_cl]] <- assembled
+          log_msg(sprintf("[TALOS] Assembled PTD consensus of length %d bp for cluster at %s",
+                          nchar(assembled), med_cl))
         }
       }
+    }
+
+    # Helper: retrieve the nearest stored consensus within `tol` bp
+    .lookup_assembled_seq <- function(bp, store, tol = 50L) {
+      if (length(store) == 0L) return(NA_character_)
+      keys <- suppressWarnings(as.integer(names(store)))
+      dists <- abs(keys - as.integer(bp))
+      best  <- which.min(dists)
+      if (dists[best] <= tol) store[[best]] else NA_character_
     }
     
     # ---- Extension data (compute true ITD length using in‑silico extension) ----
@@ -350,6 +358,7 @@ detect_itd <- function(
             do_detect_orientation = detect_orientation,
             do_hgvs = compute_hgvs, max_pairwise_alignments = max_pairwise_alignments,
             length_ext = length_ext,
+            pre_assembled_seq = .lookup_assembled_seq(median_bp, ptd_assembled_seqs),
             debug = debug, verbose = verbose
           )
           if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length,
@@ -426,6 +435,7 @@ detect_itd <- function(
             do_detect_orientation = detect_orientation,
             do_hgvs = compute_hgvs, max_pairwise_alignments = max_pairwise_alignments,
             length_ext = length_ext,
+            pre_assembled_seq = .lookup_assembled_seq(median_bp, ptd_assembled_seqs),
             debug = debug, verbose = verbose
           )
           if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length,
@@ -465,6 +475,7 @@ detect_itd <- function(
             do_detect_orientation = detect_orientation,
             do_hgvs = compute_hgvs, max_pairwise_alignments = max_pairwise_alignments,
             length_ext = length_ext,
+            pre_assembled_seq = .lookup_assembled_seq(round(median(cl)), ptd_assembled_seqs),
             debug = debug, verbose = verbose
           )
           if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length,
@@ -481,74 +492,81 @@ detect_itd <- function(
     
     final_df <- do.call(rbind, lapply(results, function(x) as.data.frame(x, stringsAsFactors = FALSE)))
     
-    # ========== MERGE PTD INTERVALS (NEW) ==========
+    # ========== MERGE PTD INTERVALS ==========
+    # Merges scattered large-duplication calls (e.g. KMT2A PTD breakpoints detected
+    # across multiple exons) into a single interval.  Only rows whose Length >=
+    # min_ptd_length participate; rows below the threshold are kept as-is alongside
+    # the merged result.
     if (merge_ptd_intervals && !ptd_mode && nrow(final_df) > 0) {
-      # Keep only duplications larger than min_ptd_length
-      keep <- which(final_df$Length >= min_ptd_length)
+      keep <- which(!is.na(final_df$Length) & final_df$Length >= min_ptd_length)
+      skip <- setdiff(seq_len(nrow(final_df)), keep)   # rows NOT eligible for merging
       if (length(keep) >= 2) {
-        log_msg("Merging %d large duplication intervals (gap ≤ %d bp)...", length(keep), merge_gap)
-        requireNamespace("GenomicRanges", quietly = TRUE)
+        log_msg(sprintf("Merging %d large duplication intervals (gap \u2264 %d bp)...",
+                        length(keep), merge_gap))
         gr <- GenomicRanges::GRanges(
           seqnames = final_df$Genome[keep],
           ranges = IRanges::IRanges(
             start = final_df$GenomicPosition[keep],
-            end = final_df$GenomicPosition[keep] + final_df$Length[keep] - 1L
+            end   = final_df$GenomicPosition[keep] + final_df$Length[keep] - 1L
           )
         )
         merged_gr <- GenomicRanges::reduce(gr, min.gapwidth = merge_gap)
         if (length(merged_gr) > 0) {
-          # Create a new data frame with merged intervals
           merged_rows <- lapply(seq_along(merged_gr), function(i) {
-            start <- GenomicRanges::start(merged_gr[i])
-            end <- GenomicRanges::end(merged_gr[i])
-            len <- GenomicRanges::width(merged_gr[i])
-            # Take the first row's sample/gene/genome as template
-            template <- final_df[keep[1], ]
-            # Replace position, length, and adjust other fields
-            template$GenomicPosition <- start
-            template$Length <- len
-            template$ITD_Sequence <- NA_character_  # cannot reconstruct easily
-            template$HGVS_cDNA <- NA_character_
-            template$HGVS_Protein <- NA_character_
-            template$SupportingReads <- sum(final_df$SupportingReads[keep], na.rm = TRUE)
-            template$WildtypeReads <- sum(final_df$WildtypeReads[keep], na.rm = TRUE)
+            mg_start <- GenomicRanges::start(merged_gr[i])
+            mg_end   <- GenomicRanges::end(merged_gr[i])
+            mg_len   <- GenomicRanges::width(merged_gr[i])
+
+            tmpl_idx <- keep[which.min(final_df$GenomicPosition[keep])]
+            template <- final_df[tmpl_idx, ]
+
+            template$GenomicPosition  <- mg_start
+            template$Length           <- mg_len
+            template$ITD_Sequence     <- NA_character_
+            template$HGVS_cDNA        <- NA_character_
+            template$HGVS_Protein     <- NA_character_
+            template$SupportingReads  <- sum(final_df$SupportingReads[keep], na.rm = TRUE)
+            template$WildtypeReads    <- sum(final_df$WildtypeReads[keep],   na.rm = TRUE)
             template$DepthAtBreakpoint <- template$SupportingReads + template$WildtypeReads
-            template$AlleleFrequency <- template$SupportingReads / template$DepthAtBreakpoint
-            # Set other metrics to NA or placeholder
-            template$RefMatch_Observed <- NA_real_
-            template$RefMatch_Total <- NA_real_
-            template$ITDReadCoverage <- NA_real_
-            template$ITDCoverageRLE <- NA_character_
-            template$SupportConsistency <- NA_real_
-            template$AlignmentScore <- NA_real_
-            template$TotalSupportBases <- NA_integer_
-            template$LeftSoftclipCount <- NA_integer_
-            template$RightSoftclipCount <- NA_integer_
-            template$BothSoftclipCount <- NA_integer_
-            template$LeftSoftclipPctSupport <- NA_real_
+            template$AlleleFrequency  <- if (template$DepthAtBreakpoint > 0L)
+              template$SupportingReads / template$DepthAtBreakpoint else NA_real_
+            template$RefMatch_Observed    <- NA_real_
+            template$RefMatch_Total       <- NA_real_
+            template$ITDReadCoverage      <- NA_real_
+            template$ITDCoverageRLE       <- NA_character_
+            template$SupportConsistency   <- NA_real_
+            template$AlignmentScore       <- NA_real_
+            template$TotalSupportBases    <- NA_integer_
+            template$LeftSoftclipCount    <- NA_integer_
+            template$RightSoftclipCount   <- NA_integer_
+            template$BothSoftclipCount    <- NA_integer_
+            template$LeftSoftclipPctSupport  <- NA_real_
             template$RightSoftclipPctSupport <- NA_real_
-            template$LeftSoftclipPctWT <- NA_real_
-            template$RightSoftclipPctWT <- NA_real_
-            template$SequenceImputed <- TRUE
-            template$SequencePartial <- TRUE
-            template$SequenceSource <- "merged_intervals"
-            template$Hotspot <- any(final_df$Hotspot[keep])
-            template$HotspotName <- if (template$Hotspot) "KMT2A_PTD_hotspot" else NA_character_
-            template$Region <- "exonic"  # assume merged PTD is exonic (can be refined)
-            template$ExonNumber <- NA_integer_
+            template$LeftSoftclipPctWT    <- NA_real_
+            template$RightSoftclipPctWT   <- NA_real_
+            template$SequenceImputed  <- TRUE
+            template$SequencePartial  <- TRUE
+            template$SequenceSource   <- "merged_intervals"
+            template$Hotspot     <- FALSE
+            template$HotspotName <- NA_character_
+            template$Region      <- NA_character_   
+            template$ExonNumber  <- NA_integer_
             template
           })
           merged_df <- do.call(rbind, merged_rows)
-          log_msg("Merged into %d interval(s).", nrow(merged_df))
-          # Replace final_df with merged_df (or keep both? We'll replace for simplicity)
-          final_df <- merged_df
+          log_msg(sprintf("Merged into %d interval(s).", nrow(merged_df)))
+          # Combine merged rows with any small calls that were below min_ptd_length
+          final_df <- if (length(skip) > 0L)
+            rbind(merged_df, final_df[skip, , drop = FALSE])
+          else
+            merged_df
         } else {
           log_msg("No intervals could be merged.")
         }
-      } else if (length(keep) == 1) {
+      } else if (length(keep) == 1L) {
         log_msg("Only one large duplication found; no merging performed.")
       } else {
-        log_msg("No duplications longer than %d bp found; skipping merge.", min_ptd_length)
+        log_msg(sprintf("No duplications >= %d bp found; skipping merge.", min_ptd_length))
       }
     }
     # ========== END MERGE ==========
@@ -716,14 +734,13 @@ talos <- function(
   })
   names(p) <- names(defaults)
   
-  # Auto-relax thresholds for KMT2A PTD
-  if (gene == "KMT2A" && p$ptd_mode) {
-    if (verbose) message("[TALOS] Using relaxed thresholds for KMT2A PTD detection")
-    p$min_support <- min(p$min_support, 5)
-    p$min_side_softclip_reads <- min(p$min_side_softclip_reads, 10)
-    p$min_abs_side_softclip <- min(p$min_abs_side_softclip, 10)
-    p$min_coverage_drop <- min(p$min_coverage_drop, 1.0)
-    p$ptd_allow_asymmetric <- TRUE
+  if (gene == "KMT2A") {
+    if (verbose) message("[TALOS] Applying relaxed thresholds for KMT2A PTD detection")
+    p$min_support             <- min(p$min_support, 5L)
+    p$min_side_softclip_reads <- min(p$min_side_softclip_reads, 10L)
+    p$min_abs_side_softclip   <- min(p$min_abs_side_softclip,   10L)
+    p$min_coverage_drop       <- min(p$min_coverage_drop, 1.0)
+    p$ptd_allow_asymmetric    <- TRUE
   }
   
   if (is.null(config$exons)) config$exons <- config$target_exons

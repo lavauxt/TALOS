@@ -1,0 +1,77 @@
+# ============================================================================
+# TALOS Gene Configuration
+# ============================================================================
+#
+# Required fields per gene
+# ────────────────────────
+#   transcript:      RefSeq NM_ accession (or Ensembl ENST).
+#                    Drives the fetch path (refGene TxDb → biomaRt fallback).
+#   targeted_exons:  1-based exon indices in *transcript* order (5′ → 3′).
+#                    Used to restrict the detection/reporting window.
+#
+# Optional fields
+# ───────────────
+#   cds_offset:      Integer override.  If omitted, auto-computed from the CDS.
+#   gene_settings:   Per-gene parameter overrides.  Any key listed here sits
+#                    between the package default and an explicit user argument
+#                    (user arg > gene_settings > package default).
+#
+# Offline / manual mode  (use_db = FALSE)
+# ──────────────────────────────────────
+# Add a build-specific sub-block with pre-fetched coordinates, e.g.:
+#
+#   GENE:
+#     transcript: NM_XXXXXX
+#     targeted_exons: [1, 2]
+#     chrom: chr7
+#     strand: "+"
+#     hg19:
+#       start: 117120017
+#       end:   117382285
+#       exons:
+#         - [117120017, 117120201]
+#         - [117227832, 117228028]
+#
+# ============================================================================
+
+FLT3:
+  transcript: NM_004119       # FLT3 ITD / TKD region
+  targeted_exons: [14, 15]
+  build: hg19
+  cds_offset: 93
+
+KMT2A:
+  transcript: NM_005933
+  targeted_exons: [2,3,4,5,6,7,8,9,10,11,12]
+  build: hg19
+  gene_settings:
+    # ptd_mode: FALSE is intentional.  KMT2A uses the standard k-mer backward-jump
+    # path (not the soft-clip-only PTD path) so that breakpoints across the large
+    # duplicated region are detected and a length estimate is available.
+    # Duplications that exceed max_itd_length (30 000 bp) are automatically promoted
+    # to PTD records (length = 0) via convert_long_to_ptd = TRUE.
+    # The talos() wrapper applies KMT2A-specific threshold relaxations regardless of
+    # ptd_mode (min_support, softclip counts, coverage-drop).
+    ptd_mode: FALSE
+    min_support: 3
+    min_size: 15
+    max_itd_length: 30000
+    convert_long_to_ptd: TRUE
+    min_coverage_drop: 0
+    max_missing_kmers: 0.8
+    # min_length only filters calls with a positive Length estimate (>0).
+    # PTD-converted candidates (Length = 0) bypass this filter intentionally.
+    min_length: 1000
+    merge_ptd_intervals: TRUE
+    merge_gap: 10
+    min_ptd_length: 200
+
+BCOR:
+  transcript: NM_001123385    # BCOR internal tandem duplication, exon 15
+  targeted_exons: [15]
+  build: hg19
+
+UBTF:
+  transcript: NM_014233       # UBTF tandem duplication, exon 13
+  targeted_exons: [13]
+  build: hg19

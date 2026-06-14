@@ -12,6 +12,7 @@ talos(
   min_support = NULL,
   min_size = NULL,
   max_correction = NULL,
+  max_missing_kmers = NULL,
   plot = TRUE,
   sample_name = NULL,
   filter_intronic = NULL,
@@ -58,19 +59,25 @@ talos(
   include_timestamp = TRUE,
   output_sep = "_",
   global_log = TRUE,
-  min_side_softclip_reads = 20,
-  max_side_ratio = 10,
-  min_softclip_pct_side = 1,
-  min_left_softclip_pct_wt = 1,
-  min_right_softclip_pct_wt = 1,
-  min_abs_side_softclip = 20,
-  max_itd_length = 1000,
-  convert_long_to_ptd = TRUE,
+  min_side_softclip_reads = NULL,
+  max_side_ratio = NULL,
+  min_softclip_pct_side = NULL,
+  min_left_softclip_pct_wt = NULL,
+  min_right_softclip_pct_wt = NULL,
+  min_abs_side_softclip = NULL,
+  max_itd_length = NULL,
+  convert_long_to_ptd = NULL,
   min_length = NULL,
   max_length = NULL,
   use_kmers = TRUE,
   exon_padding = 0L,
-  prefer_extended_length = TRUE,
+  prefer_extended_length = NULL,
+  ptd_allow_asymmetric = NULL,
+  ptd_use_local_assembly = NULL,
+  merge_ptd_intervals = NULL,
+  merge_gap = NULL,
+  min_ptd_length = NULL,
+  verbose = TRUE,
   ...
 )
 }
@@ -128,6 +135,18 @@ talos(
 \item{exon_padding}{Number of flanking exons to add to the genomic window (default 0).}
 
 \item{prefer_extended_length}{If TRUE, use extension-based length for ITDs longer than read length (default TRUE).}
+
+\item{ptd_allow_asymmetric}{Allow PTD detection with soft-clips on only one side (default TRUE).}
+
+\item{ptd_use_local_assembly}{Attempt to reconstruct duplication from soft-clips (default TRUE).}
+
+\item{merge_ptd_intervals}{If TRUE, merge overlapping/adjacent large duplication intervals into a single PTD call (default FALSE).}
+
+\item{merge_gap}{Maximum gap (bp) between intervals to merge (default 500).}
+
+\item{min_ptd_length}{Minimum length (bp) for intervals to be considered for merging (default 200).}
+
+\item{verbose}{Print progress messages (default TRUE).}
 
 \item{...}{Extra settings.}
 }

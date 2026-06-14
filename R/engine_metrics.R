@@ -58,6 +58,7 @@
                                       do_detect_orientation, do_hgvs,
                                       max_pairwise_alignments,
                                       length_ext = NA_integer_,
+                                      pre_assembled_seq = NA_character_,
                                       debug = FALSE, verbose = FALSE) {
 
   if (verbose) message(
@@ -140,6 +141,13 @@
       observed_seq <- itd_seq
       observed_len <- nchar(itd_seq)
     }
+  }
+
+  if (is.na(itd_seq) && !is.na(pre_assembled_seq) && nchar(pre_assembled_seq) > 0L) {
+    itd_seq      <- pre_assembled_seq
+    imputed      <- FALSE
+    observed_seq <- itd_seq
+    observed_len <- nchar(itd_seq)
   }
 
   if (!is.na(itd_seq) && !is.na(best_len) && best_len > 0L &&
@@ -455,9 +463,12 @@
                             min_length = NULL, max_length = NULL,
                             ptd_mode = FALSE, ptd_allow_asymmetric = TRUE) {
   with(thresholds, {
-    if (!is.null(min_length) && !is.na(metrics$Length) && metrics$Length < min_length)
+
+    if (!is.null(min_length) && !is.na(metrics$Length) &&
+        metrics$Length > 0L && metrics$Length < min_length)
       return(FALSE)
-    if (!is.null(max_length) && !is.na(metrics$Length) && metrics$Length > max_length)
+    if (!is.null(max_length) && !is.na(metrics$Length) &&
+        metrics$Length > 0L && metrics$Length > max_length)
       return(FALSE)
     if (!is.na(metrics$CoverageDrop)         && metrics$CoverageDrop         < min_coverage_drop)       return(FALSE)
     if (!is.na(metrics$MedianMicrohomology)  && metrics$MedianMicrohomology  < min_microhomology)       return(FALSE)
@@ -470,9 +481,11 @@
     if (!is.na(metrics$SoftclipFraction)     && metrics$SoftclipFraction     < min_softclip_fraction)  return(FALSE)
     if (!is.na(metrics$UniqueBreakpoints)    && metrics$UniqueBreakpoints    < min_unique_breakpoints)  return(FALSE)
     if (!is.na(metrics$ITDReadCoverage)      && metrics$ITDReadCoverage      < min_itd_read_coverage)  return(FALSE)
+
     if (!is.na(metrics$SequenceImputed) && isTRUE(metrics$SequenceImputed) &&
         !isTRUE(metrics$SequencePartial) &&
-        !is.na(metrics$Length) && metrics$Length > 40L)                                                 return(FALSE)
+        !is.na(metrics$Length) && metrics$Length > 40L && metrics$Length <= 500L)
+      return(FALSE)
 
     # ---- Soft-clip side filters (ITD vs PTD) ----
     left  <- metrics$LeftSoftclipCount

@@ -103,7 +103,6 @@
 
   add_seg <- function(raw_start, raw_end, disp_len, type, exon_label = NA_character_) {
     if (raw_end < raw_start || disp_len <= 0L) return()
-    nonlocal <<- NULL
     segs[[length(segs) + 1L]] <<- data.frame(
       raw_start = as.numeric(raw_start),
       raw_end = as.numeric(raw_end),

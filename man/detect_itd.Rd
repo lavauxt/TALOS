@@ -78,6 +78,11 @@ detect_itd(
   use_kmers = TRUE,
   exon_padding = 0L,
   prefer_extended_length = TRUE,
+  ptd_allow_asymmetric = TRUE,
+  ptd_use_local_assembly = TRUE,
+  merge_ptd_intervals = FALSE,
+  merge_gap = 500L,
+  min_ptd_length = 200L,
   ...
 )
 }
@@ -227,6 +232,16 @@ detect_itd(
 \item{prefer_extended_length}{If TRUE and duplication length > nominal_read_len,
 use extension-based ITD length (mode of itdsize_ext) and refined breakpoint
 as the primary call. Default TRUE.}
+
+\item{ptd_allow_asymmetric}{Allow PTD detection with soft-clips on only one side (default TRUE).}
+
+\item{ptd_use_local_assembly}{Attempt to reconstruct duplication from soft-clips (default TRUE).}
+
+\item{merge_ptd_intervals}{If TRUE, merge overlapping/adjacent large duplication intervals into a single PTD call (default FALSE).}
+
+\item{merge_gap}{Maximum gap (bp) between intervals to merge (default 500).}
+
+\item{min_ptd_length}{Minimum length (bp) for intervals to be considered for merging (default 200).}
 
 \item{...}{Other parameters passed to the underlying engine.}
 
