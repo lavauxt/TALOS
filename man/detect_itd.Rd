@@ -42,6 +42,7 @@ detect_itd(
   min_microhomology = 0,
   min_discordant_ratio = 0,
   min_entropy = 0,
+  min_alignment_score = 0.2,
   detect_orientation = TRUE,
   do_annotate_hotspots = TRUE,
   hotspot_db_path = NULL,
@@ -56,7 +57,7 @@ detect_itd(
   compute_hgvs = TRUE,
   html_report = TRUE,
   use_gviz = TRUE,
-  min_itd_read_coverage = 0,
+  min_itd_read_coverage = 50,
   max_reads_in_region = 2e+05,
   add_config_to_report = FALSE,
   max_pairwise_alignments = 30L,
@@ -65,12 +66,12 @@ detect_itd(
   include_timestamp = TRUE,
   output_sep = "_",
   global_log = TRUE,
-  min_side_softclip_reads = 20,
+  min_side_softclip_reads = 0,
   max_side_ratio = 10,
-  min_softclip_pct_side = 1,
-  min_left_softclip_pct_wt = 1,
-  min_right_softclip_pct_wt = 1,
-  min_abs_side_softclip = 20,
+  min_softclip_pct_side = 0,
+  min_left_softclip_pct_wt = 0,
+  min_right_softclip_pct_wt = 0,
+  min_abs_side_softclip = 0,
   max_itd_length = 1000,
   convert_long_to_ptd = TRUE,
   min_length = NULL,
@@ -161,6 +162,8 @@ detect_itd(
 
 \item{min_entropy}{Sequence repeat complexity baseline.}
 
+\item{min_alignment_score}{Minimum sequence identity (0–1) between read-derived ITD sequence and the corresponding reference segment. Bypassed automatically for imputed sequences (default 0.2).}
+
 \item{detect_orientation}{Check inverse loops.}
 
 \item{hotspot_db_path}{Path to SQLite lookup DB.}
@@ -187,7 +190,7 @@ detect_itd(
 
 \item{use_gviz}{Use graphical views.}
 
-\item{min_itd_read_coverage}{Post-calc check ratio.}
+\item{min_itd_read_coverage}{Minimum percentage of the ITD length that must be covered by supporting reads (default 50). Low values indicate the sequence was largely imputed rather than directly observed. KMT2A is automatically relaxed to 10 to accommodate large PTDs where only the junctions are read-covered.}
 
 \item{max_reads_in_region}{Loading safeguard.}
 
@@ -205,17 +208,17 @@ detect_itd(
 
 \item{global_log}{Write all logs (config, compute time, errors) to a single file (default TRUE).}
 
-\item{min_side_softclip_reads}{Minimum number of reads with soft‑clip on each side (default 20).}
+\item{min_side_softclip_reads}{Minimum number of reads with soft‑clip on each side (default 0, i.e. disabled).}
 
 \item{max_side_ratio}{Maximum ratio of left/right soft‑clip counts before filtering (default 10).}
 
-\item{min_softclip_pct_side}{Minimum percentage of supporting reads that must have a soft‑clip on each side (default 1.0).}
+\item{min_softclip_pct_side}{Minimum percentage of supporting reads that must have a soft‑clip on each side (default 0, i.e. disabled).}
 
-\item{min_left_softclip_pct_wt}{Minimum percentage of wildtype reads with left soft‑clip (default 1.0).}
+\item{min_left_softclip_pct_wt}{Minimum percentage of wildtype reads with left soft‑clip (default 0, i.e. disabled).}
 
-\item{min_right_softclip_pct_wt}{Minimum percentage of wildtype reads with right soft‑clip (default 1.0).}
+\item{min_right_softclip_pct_wt}{Minimum percentage of wildtype reads with right soft‑clip (default 0, i.e. disabled).}
 
-\item{min_abs_side_softclip}{Minimum absolute soft‑clip count on each side (default 20).}
+\item{min_abs_side_softclip}{Minimum absolute soft‑clip count on each side (default 0, i.e. disabled).}
 
 \item{max_itd_length}{Maximum duplication length to consider as ITD; longer duplications are automatically converted to PTD (zero length) if \code{convert_long_to_ptd} is TRUE (default 1000).}
 

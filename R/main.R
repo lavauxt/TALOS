@@ -41,6 +41,7 @@
 #' @param min_microhomology Required MH length.
 #' @param min_discordant_ratio Required ratio length (for filtering).
 #' @param min_entropy Sequence repeat complexity baseline.
+#' @param min_alignment_score Minimum sequence identity (0–1) between read-derived ITD sequence and the corresponding reference segment. Bypassed automatically for imputed sequences (default 0.2).
 #' @param detect_orientation Check inverse loops.
 #' @param annotate_hotspots SQLite DB lookups.
 #' @param hotspot_db_path Path to SQLite lookup DB.
@@ -55,7 +56,7 @@
 #' @param compute_hgvs Produce HGVS format (only works if transcript is assigned).
 #' @param html_report HTML overview toggle.
 #' @param use_gviz Use graphical views.
-#' @param min_itd_read_coverage Post-calc check ratio.
+#' @param min_itd_read_coverage Minimum percentage of the ITD length that must be covered by supporting reads (default 50). Low values indicate the sequence was largely imputed rather than directly observed. KMT2A is automatically relaxed to 10 to accommodate large PTDs where only the junctions are read-covered.
 #' @param max_reads_in_region Loading safeguard.
 #' @param add_config_to_report Render configs in results.
 #' @param max_pairwise_alignments Max limit for computationally heavy sub-alignments.
@@ -64,12 +65,12 @@
 #' @param include_timestamp Include timestamp in output filenames (default TRUE).
 #' @param output_sep Separator between filename parts (default "_").
 #' @param global_log Write all logs (config, compute time, errors) to a single file (default TRUE).
-#' @param min_side_softclip_reads Minimum number of reads with soft‑clip on each side (default 20).
+#' @param min_side_softclip_reads Minimum number of reads with soft‑clip on each side (default 0, i.e. disabled).
 #' @param max_side_ratio Maximum ratio of left/right soft‑clip counts before filtering (default 10).
-#' @param min_softclip_pct_side Minimum percentage of supporting reads that must have a soft‑clip on each side (default 1.0).
-#' @param min_left_softclip_pct_wt Minimum percentage of wildtype reads with left soft‑clip (default 1.0).
-#' @param min_right_softclip_pct_wt Minimum percentage of wildtype reads with right soft‑clip (default 1.0).
-#' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 20).
+#' @param min_softclip_pct_side Minimum percentage of supporting reads that must have a soft‑clip on each side (default 0, i.e. disabled).
+#' @param min_left_softclip_pct_wt Minimum percentage of wildtype reads with left soft‑clip (default 0, i.e. disabled).
+#' @param min_right_softclip_pct_wt Minimum percentage of wildtype reads with right soft‑clip (default 0, i.e. disabled).
+#' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 0, i.e. disabled).
 #' @param max_itd_length Maximum duplication length to consider as ITD; longer duplications are automatically converted to PTD (zero length) if \code{convert_long_to_ptd} is TRUE (default 1000).
 #' @param convert_long_to_ptd If TRUE, duplications longer than \code{max_itd_length} are reported as PTDs (length 0). If FALSE, they are skipped (default TRUE).
 #' @param min_length Minimum duplication length to report (NULL = no lower bound).  
@@ -98,21 +99,22 @@ detect_itd <- function(
     min_mean_support_mapq = 0, max_breakpoint_spread = Inf, min_softclip_fraction = 0,
     min_unique_breakpoints = 0, min_coverage_drop = 1.0, coverage_window = 200,
     min_microhomology = 0, min_discordant_ratio = 0, min_entropy = 0,
+    min_alignment_score = 0.2,
     detect_orientation = TRUE, do_annotate_hotspots = TRUE, hotspot_db_path = NULL,
     compute_alignment_score = TRUE, compute_support_bases = TRUE,
     compute_consistency = TRUE, compute_itd_coverage = TRUE,
     compute_coverage_drop = TRUE, compute_microhomology = TRUE,
     compute_repeat_entropy = TRUE, compute_discordant_ratio = TRUE,
     compute_hgvs = TRUE, html_report = TRUE, use_gviz = TRUE,
-    min_itd_read_coverage = 0, max_reads_in_region = 200000,
+    min_itd_read_coverage = 50, max_reads_in_region = 200000,
     add_config_to_report = FALSE, max_pairwise_alignments = 30L,
     include_sample = TRUE, include_gene = TRUE, include_timestamp = TRUE,
     output_sep = "_", global_log = TRUE,
-    min_side_softclip_reads = 20, max_side_ratio = 10,
-    min_softclip_pct_side = 1.0,
-    min_left_softclip_pct_wt = 1.0,
-    min_right_softclip_pct_wt = 1.0,
-    min_abs_side_softclip = 20,
+    min_side_softclip_reads = 0, max_side_ratio = 10,
+    min_softclip_pct_side = 0,
+    min_left_softclip_pct_wt = 0,
+    min_right_softclip_pct_wt = 0,
+    min_abs_side_softclip = 0,
     max_itd_length = 1000,
     convert_long_to_ptd = TRUE,
     min_length = NULL,     
@@ -303,6 +305,7 @@ detect_itd <- function(
       min_mean_support_mapq = min_mean_support_mapq, max_breakpoint_spread = max_breakpoint_spread,
       min_softclip_fraction = min_softclip_fraction, min_unique_breakpoints = min_unique_breakpoints,
       min_itd_read_coverage = min_itd_read_coverage,
+      min_alignment_score   = min_alignment_score,
       min_side_softclip_reads = min_side_softclip_reads,
       max_side_ratio          = max_side_ratio,
       min_softclip_pct_side   = min_softclip_pct_side,
@@ -614,12 +617,12 @@ detect_itd <- function(
 #' @param include_timestamp Include timestamp in filenames
 #' @param output_sep Separator for filename parts
 #' @param global_log Write all logs to a single file
-#' @param min_side_softclip_reads Minimum number of reads with soft‑clip on each side (default 20).
+#' @param min_side_softclip_reads Minimum number of reads with soft‑clip on each side (default 0, i.e. disabled).
 #' @param max_side_ratio Maximum ratio of left/right soft‑clip counts before filtering (default 10).
-#' @param min_softclip_pct_side Minimum percentage of supporting reads with soft‑clip on each side (default 1.0).
-#' @param min_left_softclip_pct_wt Minimum percentage of wildtype reads with left soft‑clip (default 1.0).
-#' @param min_right_softclip_pct_wt Minimum percentage of wildtype reads with right soft‑clip (default 1.0).
-#' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 20).
+#' @param min_softclip_pct_side Minimum percentage of supporting reads with soft‑clip on each side (default 0, i.e. disabled).
+#' @param min_left_softclip_pct_wt Minimum percentage of wildtype reads with left soft‑clip (default 0, i.e. disabled).
+#' @param min_right_softclip_pct_wt Minimum percentage of wildtype reads with right soft‑clip (default 0, i.e. disabled).
+#' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 0, i.e. disabled).
 #' @param max_itd_length Maximum duplication length to consider as ITD; longer duplications are automatically converted to PTD (zero length) if \code{convert_long_to_ptd} is TRUE (default 1000).
 #' @param convert_long_to_ptd If TRUE, duplications longer than \code{max_itd_length} are reported as PTDs (length 0). If FALSE, they are skipped (default TRUE).
 #' @param min_length Minimum duplication length to report (default NULL, no lower bound).  
@@ -646,7 +649,8 @@ talos <- function(
     min_mean_support_mapq = NULL, max_breakpoint_spread = NULL,
     min_softclip_fraction = NULL, min_unique_breakpoints = NULL,
     min_coverage_drop = NULL, coverage_window = NULL, min_microhomology = NULL,
-    min_discordant_ratio = NULL, min_entropy = NULL, detect_orientation = NULL,
+    min_discordant_ratio = NULL, min_entropy = NULL, min_alignment_score = NULL,
+    detect_orientation = NULL,
     do_annotate_hotspots = NULL, hotspot_db_path = NULL,
     compute_alignment_score = TRUE, compute_support_bases = TRUE,
     compute_consistency = TRUE, compute_itd_coverage = TRUE,
@@ -693,19 +697,20 @@ talos <- function(
     min_strand_bias = 0, max_strand_bias = 1, min_mean_support_mapq = 0,
     max_breakpoint_spread = Inf, min_softclip_fraction = 0, min_unique_breakpoints = 0,
     min_coverage_drop = 1.0, coverage_window = 200, min_microhomology = 0,
-    min_discordant_ratio = 0, min_entropy = 0, detect_orientation = TRUE,
+    min_discordant_ratio = 0, min_entropy = 0, min_alignment_score = 0.2,
+    detect_orientation = TRUE,
     do_annotate_hotspots = TRUE, compute_alignment_score = TRUE, compute_support_bases = TRUE,
     compute_consistency = TRUE, compute_itd_coverage = TRUE,
     compute_coverage_drop = TRUE, compute_microhomology = TRUE,
     compute_repeat_entropy = TRUE, compute_discordant_ratio = TRUE,
     compute_hgvs = TRUE,
-    html_report = TRUE, use_gviz = TRUE, min_itd_read_coverage = 0,
+    html_report = TRUE, use_gviz = TRUE, min_itd_read_coverage = 50,
     max_pairwise_alignments = 30L,
-    min_side_softclip_reads = 20, max_side_ratio = 10,
-    min_softclip_pct_side = 1.0,
-    min_left_softclip_pct_wt = 1.0,
-    min_right_softclip_pct_wt = 1.0,
-    min_abs_side_softclip = 20,
+    min_side_softclip_reads = 0, max_side_ratio = 10,
+    min_softclip_pct_side = 0,
+    min_left_softclip_pct_wt = 0,
+    min_right_softclip_pct_wt = 0,
+    min_abs_side_softclip = 0,
     max_itd_length = 1000,
     convert_long_to_ptd = TRUE,
     min_length = NULL,       
@@ -737,10 +742,16 @@ talos <- function(
   if (gene == "KMT2A") {
     if (verbose) message("[TALOS] Applying relaxed thresholds for KMT2A PTD detection")
     p$min_support             <- min(p$min_support, 5L)
+    # min_side_softclip_reads and min_abs_side_softclip already default to 0;
+    # min() clamps would be a no-op but are kept for explicitness if a user
+    # overrides those params to a non-zero value.
     p$min_side_softclip_reads <- min(p$min_side_softclip_reads, 10L)
     p$min_abs_side_softclip   <- min(p$min_abs_side_softclip,   10L)
     p$min_coverage_drop       <- min(p$min_coverage_drop, 1.0)
     p$ptd_allow_asymmetric    <- TRUE
+    # Large PTDs span thousands of bp; reads cover only the junctions, so
+    # ITDReadCoverage is structurally low even for real calls. Relax to 10 %.
+    p$min_itd_read_coverage   <- min(p$min_itd_read_coverage, 10)
   }
   
   if (is.null(config$exons)) config$exons <- config$target_exons
@@ -759,7 +770,8 @@ talos <- function(
     min_softclip_fraction = p$min_softclip_fraction, min_unique_breakpoints = p$min_unique_breakpoints,
     min_coverage_drop = p$min_coverage_drop, coverage_window = p$coverage_window,
     min_microhomology = p$min_microhomology, min_discordant_ratio = p$min_discordant_ratio,
-    min_entropy = p$min_entropy, detect_orientation = p$detect_orientation,
+    min_entropy = p$min_entropy, min_alignment_score = p$min_alignment_score,
+    detect_orientation = p$detect_orientation,
     do_annotate_hotspots = p$do_annotate_hotspots, hotspot_db_path = hotspot_db_path,
     compute_alignment_score = p$compute_alignment_score, compute_support_bases = p$compute_support_bases,
     compute_consistency = p$compute_consistency, compute_itd_coverage = p$compute_itd_coverage,

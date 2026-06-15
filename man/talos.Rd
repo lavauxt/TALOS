@@ -34,6 +34,7 @@ talos(
   min_microhomology = NULL,
   min_discordant_ratio = NULL,
   min_entropy = NULL,
+  min_alignment_score = NULL,
   detect_orientation = NULL,
   do_annotate_hotspots = NULL,
   hotspot_db_path = NULL,
@@ -110,17 +111,17 @@ talos(
 
 \item{global_log}{Write all logs to a single file}
 
-\item{min_side_softclip_reads}{Minimum number of reads with soft‑clip on each side (default 20).}
+\item{min_side_softclip_reads}{Minimum number of reads with soft‑clip on each side (default 0, i.e. disabled).}
 
 \item{max_side_ratio}{Maximum ratio of left/right soft‑clip counts before filtering (default 10).}
 
-\item{min_softclip_pct_side}{Minimum percentage of supporting reads with soft‑clip on each side (default 1.0).}
+\item{min_softclip_pct_side}{Minimum percentage of supporting reads with soft‑clip on each side (default 0, i.e. disabled).}
 
-\item{min_left_softclip_pct_wt}{Minimum percentage of wildtype reads with left soft‑clip (default 1.0).}
+\item{min_left_softclip_pct_wt}{Minimum percentage of wildtype reads with left soft‑clip (default 0, i.e. disabled).}
 
-\item{min_right_softclip_pct_wt}{Minimum percentage of wildtype reads with right soft‑clip (default 1.0).}
+\item{min_right_softclip_pct_wt}{Minimum percentage of wildtype reads with right soft‑clip (default 0, i.e. disabled).}
 
-\item{min_abs_side_softclip}{Minimum absolute soft‑clip count on each side (default 20).}
+\item{min_abs_side_softclip}{Minimum absolute soft‑clip count on each side (default 0, i.e. disabled).}
 
 \item{max_itd_length}{Maximum duplication length to consider as ITD; longer duplications are automatically converted to PTD (zero length) if \code{convert_long_to_ptd} is TRUE (default 1000).}
 

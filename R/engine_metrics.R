@@ -410,6 +410,16 @@
     }
   }
 
+  # ---- Artifact flag: fully-imputed sequence that is self-fulfilling
+  # (imputed from reference then compared against the same reference).
+  # Restored from old code: only flag when fully imputed (not partial
+  # read+ref) and sequence identity is ~100%.
+  artifact_suspect <- isTRUE(imputed) && !isTRUE(sequence_partial) &&
+                      !is.na(ref_match_total) && ref_match_total >= 99.0
+
+  if (debug && artifact_suspect)
+    message(sprintf("  [ARTIFACT] bp=%d fully imputed + 100%% ref match", len_specific_bp))
+
   if (verbose) message("[TALOS] Metrics computed: support=", corrected_support,
                        ", AF=", round(raw_af, 4), ", length=", best_len)
 
@@ -450,7 +460,8 @@
     PEOrientationFF = pe_orientation_ff,
     PEOrientationRR = pe_orientation_rr,
     PEOrientationOther = pe_orientation_other,
-    PEOrientationDominant = pe_orientation_dominant
+    PEOrientationDominant = pe_orientation_dominant,
+    ArtifactSuspect = artifact_suspect
   )
 }
 
@@ -463,6 +474,20 @@
                             min_length = NULL, max_length = NULL,
                             ptd_mode = FALSE, ptd_allow_asymmetric = TRUE) {
   with(thresholds, {
+
+    # ---- Restored from old code: reject self-fulfilling imputed artifacts ----
+    # ArtifactSuspect is TRUE only when sequence was fully imputed from the
+    # reference AND the resulting sequence matches the reference exactly —
+    # i.e. the call is circular evidence of itself.
+    if (isTRUE(metrics$ArtifactSuspect)) return(FALSE)
+
+    # ---- Restored from old code: low alignment score (read-derived only) ----
+    # AlignmentScore is NA for imputed sequences; the !is.na() guard means
+    # this filter is bypassed for imputed calls, exactly as in the old code.
+    # Guard additionally for SequenceImputed to be safe under the new metric.
+    if (!is.na(metrics$AlignmentScore) &&
+        !isTRUE(metrics$SequenceImputed) &&
+        metrics$AlignmentScore < min_alignment_score) return(FALSE)
 
     if (!is.null(min_length) && !is.na(metrics$Length) &&
         metrics$Length > 0L && metrics$Length < min_length)
@@ -482,10 +507,10 @@
     if (!is.na(metrics$UniqueBreakpoints)    && metrics$UniqueBreakpoints    < min_unique_breakpoints)  return(FALSE)
     if (!is.na(metrics$ITDReadCoverage)      && metrics$ITDReadCoverage      < min_itd_read_coverage)  return(FALSE)
 
-    if (!is.na(metrics$SequenceImputed) && isTRUE(metrics$SequenceImputed) &&
-        !isTRUE(metrics$SequencePartial) &&
-        !is.na(metrics$Length) && metrics$Length > 40L && metrics$Length <= 500L)
-      return(FALSE)
+    # NOTE: The broad imputed-length filter (SequenceImputed && Length 41-500)
+    # that was present in the first refactor has been removed. It was not in
+    # the reference (old) code and caused significant sensitivity loss.
+    # Self-fulfilling imputed calls are now caught exclusively by ArtifactSuspect.
 
     # ---- Soft-clip side filters (ITD vs PTD) ----
     left  <- metrics$LeftSoftclipCount

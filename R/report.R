@@ -330,30 +330,43 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
     )
   }
 
-  itd_labels <- paste0("  ", sprintf("%d bp | VAF %s%% | %s", dup_lens, vafs, orient_display))
+  # Clean ITD labels: omit orientation segment when absent to avoid trailing " | "
+  itd_labels <- ifelse(
+    nchar(trimws(orient_display)) > 0,
+    sprintf("%d bp | VAF %s%% | %s", dup_lens, vafs, trimws(orient_display)),
+    sprintf("%d bp | VAF %s%%",      dup_lens, vafs)
+  )
+
   itd_track  <- Gviz::AnnotationTrack(
     start = round(axis_ctx$transform_pos(breakpoints)), end = round(axis_ctx$transform_pos(dup_ends)), chromosome = chrom,
     genome = genome_build, name = ifelse(length(breakpoints) > 1, "ITDs", "ITD"),
-    id = itd_labels, group = itd_labels, groupAnnotation = "group", just.group = "right",
-    showFeatureId = FALSE, fill = "#f39c12", col = "#c0392b",
-    fontcolor.group = "#4a1c00", cex.group = 0.8, cex.title = 0.9,
+    id = itd_labels,
+    stacking = "full",
+    showFeatureId = TRUE, just = "right",
+    fill = "#f39c12", col = "#c0392b",
+    fontcolor.feature = "#4a1c00", cex.feature = max(0.55, 0.8 - 0.04 * length(breakpoints)),
+    cex.title = 0.9,
     rotation.title = 0, background.title = "transparent", col.border.title = NA, fontcolor.title = "black"
   )
 
   axis_track <- Gviz::GenomeAxisTrack(cex = 0.7, labelPos = "below", add35 = FALSE, add53 = FALSE, col = "black",
                                      at = axis_ctx$exon_centers, labels = axis_ctx$exon_labels)
+
+  # Track sizes: coverage and ITD-coverage reduced; ITD track grows with call count
+  # so every call gets enough vertical room and labels don't overlap.
+  itd_h <- max(1.5, 0.55 * length(breakpoints))
   if (!is.null(grtrack) && !is.null(itd_cov_track)) {
     track_list <- list(axis_track, grtrack, cov_track, itd_cov_track, itd_track)
-    t_sizes <- c(0.9, 0.9, 5.0, 1.3, max(0.35, 0.10 * length(breakpoints)))
+    t_sizes <- c(0.5, 0.65, 2.2, 0.75, itd_h)
   } else if (!is.null(grtrack)) {
     track_list <- list(axis_track, grtrack, cov_track, itd_track)
-    t_sizes <- c(0.9, 0.9, 5.0, max(0.35, 0.10 * length(breakpoints)))
+    t_sizes <- c(0.5, 0.65, 2.2, itd_h)
   } else if (!is.null(itd_cov_track)) {
     track_list <- list(axis_track, cov_track, itd_cov_track, itd_track)
-    t_sizes <- c(0.9, 5.0, 1.3, max(0.35, 0.10 * length(breakpoints)))
+    t_sizes <- c(0.5, 2.2, 0.75, itd_h)
   } else {
     track_list <- list(axis_track, cov_track, itd_track)
-    t_sizes <- c(0.9, 5.0, max(0.35, 0.10 * length(breakpoints)))
+    t_sizes <- c(0.5, 2.2, itd_h)
   }
 
   grDevices::pdf(output_pdf, width = width, height = height, onefile = TRUE)
@@ -537,6 +550,9 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
   }
 
   pal <- c("#e67e22", "#e74c3c", "#9b59b6", "#1abc9c", "#3498db", "#f39c12", "#c0392b", "#8e44ad", "#16a085", "#2980b9")
+  # Adaptive vertical step: tighten spacing when many ITDs so they all fit in the panel
+  y_step  <- max(0.10, min(0.18, 0.85 / max(1L, nrow(itd_df))))
+  y_range_max <- max(1.1, nrow(itd_df) * y_step + 0.30)
   itd_cov_df <- .build_itd_cov_display(itd_df, dup_ends, axis_ctx)
   p_itd_cov <- plotly::plot_ly()
   if (nrow(itd_cov_df) > 0) {
@@ -555,7 +571,7 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
     row      <- itd_df[i, ]
     vaf_str  <- sprintf("%.1f%%", row$AlleleFrequency * 100)
     col_i    <- pal[((i - 1L) %% length(pal)) + 1L]
-    y_pos    <- 0.1 + (i - 1L) * 0.18
+    y_pos    <- 0.05 + (i - 1L) * y_step
     tip_text <- paste0("<b>ITD ", i, "</b><br>",
                        "Breakpoint: ", row$GenomicPosition, "<br>",
                        "Length: ", row$Length, " bp<br>",
@@ -577,12 +593,14 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
     p_itd <- p_itd |> plotly::add_trace(x = c(x0, x1), y = c(y_pos, y_pos), type = "scatter", mode = "lines", line = list(color = col_i, width = 14), name = label, text = tip_text, hoverinfo = "text", showlegend = TRUE) |> plotly::add_trace(x = x0, y = y_pos, type = "scatter", mode = "markers", marker = list(symbol = "line-ns", size = 14, color = col_i, line = list(color = "white", width = 2)), hoverinfo = "skip", showlegend = FALSE)
   }
 
-  p_itd <- plotly::layout(p_itd, xaxis = list(title = paste0(chrom, " (compressed ", genome_build, ")"), gridcolor = "#e8e8e8", range = c(axis_ctx$disp_from, axis_ctx$disp_to), rangeslider = list(visible = FALSE)), yaxis = list(title = "ITDs", showticklabels = FALSE, range = c(0, max(1.15, nrow(itd_df) * 0.18 + 0.35)), fixedrange = TRUE), legend = list(orientation = "h", x = 0, y = -0.35, font = list(size = 11)), plot_bgcolor = "white", paper_bgcolor = "white")
+  p_itd <- plotly::layout(p_itd, xaxis = list(title = paste0(chrom, " (compressed ", genome_build, ")"), gridcolor = "#e8e8e8", range = c(axis_ctx$disp_from, axis_ctx$disp_to), rangeslider = list(visible = FALSE)), yaxis = list(title = "ITDs", showticklabels = FALSE, range = c(0, y_range_max), fixedrange = TRUE), legend = list(orientation = "h", x = 0, y = -0.18, font = list(size = 9), tracegroupgap = 0), plot_bgcolor = "white", paper_bgcolor = "white")
 
   title_text <- if (!is.null(sample_name)) paste0("TALOS • ", sample_name, "  |  ", gene_config$gene, "  |  ", nrow(itd_df), " ITD(s)  |  ", genome_build) else paste0("TALOS • ", gene_config$gene, "  |  ", nrow(itd_df), " ITD(s)  |  ", genome_build)
 
-  fig <- plotly::subplot(p_cov, p_exon, p_itd_cov, p_itd, nrows = 4, shareX = TRUE, heights = c(0.42, 0.14, 0.14, 0.30))
-  fig <- plotly::layout(fig, title = list(text = title_text, x = 0.5, font = list(size = 14)), hovermode = "x unified", showlegend = TRUE, margin = list(t = 60, l = 60, r = 40, b = 90))
+  # Heights: coverage reduced (was 0.42), ITD-cov reduced (was 0.14),
+  # ITD panel expanded (was 0.30) so all calls and their labels have room.
+  fig <- plotly::subplot(p_cov, p_exon, p_itd_cov, p_itd, nrows = 4, shareX = TRUE, heights = c(0.26, 0.10, 0.09, 0.55))
+  fig <- plotly::layout(fig, title = list(text = title_text, x = 0.5, font = list(size = 14)), hovermode = "x unified", showlegend = TRUE, margin = list(t = 60, l = 60, r = 40, b = 75))
   
   if (show_config) {
     config_text <- paste("Config:", paste("Targeted exons:", paste(unique(gene_config$target_exons$exon_idx), collapse = ",")), paste("Transcript:", ifelse(is.na(gene_config$transcript), "none", gene_config$transcript)), paste("CDS offset:", gene_config$cds_offset), sep = " | ")
