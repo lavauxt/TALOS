@@ -12,6 +12,19 @@
 # Optional fields
 # ───────────────
 #   cds_offset:      Integer override.  If omitted, auto-computed from the CDS.
+#   gene_settings:   Per-gene parameter overrides (see below).
+#                    Any key in this block overrides the package default and
+#                    is itself overridable by an explicit caller argument.
+#
+# ALU detection settings  (used by detect_alu() / talos_alu())
+# ─────────────────────────────────────────────────────────────
+# Add an `alu_settings:` block with one or more of:
+#   min_support:       Minimum supporting reads to report an insertion.
+#   min_alu_score:     Minimum normalised Smith-Waterman score (0–1).
+#   min_clip_len:      Minimum soft-clip length to attempt ALU alignment (bp).
+#   cluster_tolerance: Clustering radius for insertion sites (bp).
+#   min_tsd:           Minimum target-site duplication length (0 = disabled).
+#   vaf_threshold:     Minimum allele frequency.
 #
 # Offline / manual mode  (use_db = FALSE)
 # ──────────────────────────────────────
@@ -31,11 +44,23 @@
 #
 # ============================================================================
 
+# ── ITD / PTD genes ──────────────────────────────────────────────────────────
+
 FLT3:
-  transcript: NM_004119       # FLT3 ITD / TKD region
+  transcript: NM_004119         # FLT3 ITD / TKD region
   targeted_exons: [14, 15]
   build: hg19
-  cds_offset: 93            
+  cds_offset: 93
+  gene_settings:
+    # ITD detection settings
+    min_itd_read_coverage: 50   # raised from 30 to avoid FP low-coverage calls
+  alu_settings:
+    # FLT3 exons 14–15 are not a known ALU target; conservative defaults.
+    min_support:       5
+    min_alu_score:     0.65
+    min_clip_len:      30
+    cluster_tolerance: 15
+    min_tsd:           4
 
 KMT2A:
   transcript: NM_005933
@@ -48,18 +73,68 @@ KMT2A:
     max_itd_length: 30000
     convert_long_to_ptd: TRUE
     min_coverage_drop: 0
-    max_missing_kmers: 0.8 
+    max_missing_kmers: 0.8
     min_length: 1000
     merge_ptd_intervals: TRUE
-    merge_gap: 10 
+    merge_gap: 10
     min_ptd_length: 200
+  alu_settings:
+    # KMT2A introns are large and historically prone to ALU-mediated
+    # rearrangements; use relaxed thresholds.
+    min_support:       3
+    min_alu_score:     0.60
+    min_clip_len:      25
+    cluster_tolerance: 20
+    min_tsd:           3
+    vaf_threshold:     0.005
 
 BCOR:
-  transcript: NM_001123385    # BCOR internal tandem duplication, exon 15
+  transcript: NM_001123385      # BCOR internal tandem duplication, exon 15
   targeted_exons: [15]
   build: hg19
+  alu_settings:
+    min_support:       4
+    min_alu_score:     0.62
+    min_clip_len:      25
+    cluster_tolerance: 15
+    min_tsd:           4
 
 UBTF:
-  transcript: NM_014233       # UBTF tandem duplication, exon 13
+  transcript: NM_014233         # UBTF tandem duplication, exon 13
   targeted_exons: [13]
   build: hg19
+  alu_settings:
+    min_support:       4
+    min_alu_score:     0.62
+    min_clip_len:      25
+    cluster_tolerance: 15
+    min_tsd:           4
+
+# ── ALU insertion target regions (whole-gene or regulatory) ──────────────────
+# These entries are used exclusively with detect_alu() / talos_alu().
+# They define wider windows (all exons) because ALU insertions can fall
+# anywhere in the gene body, not just in the previously targeted exons.
+
+FLT3_ALU:
+  transcript: NM_004119
+  targeted_exons: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]
+  build: hg19
+  cds_offset: 93
+  alu_settings:
+    min_support:       3
+    min_alu_score:     0.60
+    min_clip_len:      25
+    cluster_tolerance: 15
+    min_tsd:           3
+
+KMT2A_ALU:
+  transcript: NM_005933
+  targeted_exons: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30]
+  build: hg19
+  alu_settings:
+    min_support:       3
+    min_alu_score:     0.58       # slightly relaxed for large intronic regions
+    min_clip_len:      25
+    cluster_tolerance: 25
+    min_tsd:           3
+    vaf_threshold:     0.005

@@ -2,7 +2,7 @@
 % Please edit documentation in R/report.R
 \name{talos_html_report}
 \alias{talos_html_report}
-\title{Generate an HTML report for TALOS results}
+\title{Generate an HTML report for TALOS ITD/PTD or ALU results}
 \usage{
 talos_html_report(
   result_df,
@@ -11,24 +11,30 @@ talos_html_report(
   output_file = "TALOS_report.html",
   title = "TALOS Analysis Report",
   show_config = FALSE,
-  ...
+  mode = c("itd", "alu")
 )
 }
 \arguments{
-\item{result_df}{Data frame from \code{\link{talos}}.}
+\item{result_df}{Data frame from \code{\link{talos}} or \code{\link{detect_alu}}.}
 
-\item{bam_paths}{Named character vector.}
+\item{bam_paths}{Named character vector of BAM paths (optional; used to
+generate interactive plotly widgets). Names must match \code{result_df$Sample}.}
 
-\item{gene_configs}{Named list of gene configs.}
+\item{gene_configs}{Named list of resolved gene config lists.}
 
 \item{output_file}{Path to the output HTML file.}
 
-\item{title}{Report title.}
+\item{title}{Report title string.}
 
-\item{show_config}{Include configuration details.}
+\item{show_config}{Include per-gene configuration block in the report.}
 
-\item{...}{Unused compatibility parameters.}
+\item{mode}{\code{"itd"} (default) or \code{"alu"}.}
+}
+\value{
+Invisibly, the normalised path to the written HTML file.
 }
 \description{
-Generate an HTML report for TALOS results
+Renders the external template at \code{inst/rmd/TALOS_report.Rmd}.
+For development (package not installed), falls back to
+\code{./inst/rmd/TALOS_report.Rmd} relative to the working directory.
 }

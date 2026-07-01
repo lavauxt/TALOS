@@ -611,63 +611,195 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
 }
 
 
-#' Generate an HTML report for TALOS results
-#' @param result_df Data frame from \code{\link{talos}}.
-#' @param bam_paths Named character vector.
-#' @param gene_configs Named list of gene configs.
+# ============================================================================
+# Patch for report.R – talos_html_report() rewrite
+# ============================================================================
+# Code-review changes applied:
+#   [CR-2] Remove `...` forwarded to rmarkdown::render(); use explicit params.
+#   [CR-8] Replace fragile inline Rmd generation with external template file
+#          installed at inst/rmd/TALOS_report.Rmd.
+#   [CR-9] Add `mode` parameter to support ALU reports via the same template.
+#   [CR-10] Validate output path before attempting to write.
+# ============================================================================
+
+#' Generate an HTML report for TALOS ITD/PTD or ALU results
+#'
+#' Renders the external template at \code{inst/rmd/TALOS_report.Rmd}.
+#' For development (package not installed), falls back to
+#' \code{./inst/rmd/TALOS_report.Rmd} relative to the working directory.
+#'
+#' @param result_df   Data frame from \code{\link{talos}} or \code{\link{detect_alu}}.
+#' @param bam_paths   Named character vector of BAM paths (optional; used to
+#'   generate interactive plotly widgets). Names must match \code{result_df$Sample}.
+#' @param gene_configs Named list of resolved gene config lists.
 #' @param output_file Path to the output HTML file.
-#' @param title Report title.
-#' @param show_config Include configuration details.
-#' @param ... Unused compatibility parameters.
+#' @param title       Report title string.
+#' @param show_config Include per-gene configuration block in the report.
+#' @param mode        \code{"itd"} (default) or \code{"alu"}.
+#' @return Invisibly, the normalised path to the written HTML file.
 #' @export
-talos_html_report <- function(result_df, bam_paths = NULL, gene_configs = NULL, output_file = "TALOS_report.html", title = "TALOS Analysis Report", show_config = FALSE, ...) {
+talos_html_report <- function(result_df,
+                               bam_paths    = NULL,
+                               gene_configs = NULL,
+                               output_file  = "TALOS_report.html",
+                               title        = "TALOS Analysis Report",
+                               show_config  = FALSE,
+                               mode         = c("itd", "alu")) {
+
+  mode <- match.arg(mode)
+
+  # ── Dependency check ──────────────────────────────────────────────────
   needs <- c("rmarkdown", "DT")
   missing_pkg <- needs[!vapply(needs, requireNamespace, logical(1L), quietly = TRUE)]
-  if (length(missing_pkg) > 0) stop("Please install: ", paste(missing_pkg, collapse = ", "))
+  if (length(missing_pkg) > 0L)
+    stop("Please install: ", paste(missing_pkg, collapse = ", "))
 
-  if (!grepl("^[A-Za-z]:|^/", output_file)) output_file <- file.path(getwd(), output_file)
+  # ── Resolve template path ─────────────────────────────────────────────
+  template_path <- system.file("rmd", "TALOS_report.Rmd", package = "TALOS")
+  if (!nzchar(template_path) || !file.exists(template_path)) {
+    # Development fallback: look relative to the package root
+    template_path <- file.path("inst", "rmd", "TALOS_report.Rmd")
+  }
+  if (!file.exists(template_path))
+    stop(
+      "TALOS_report.Rmd not found. Expected at:\n  ",
+      system.file("rmd", "TALOS_report.Rmd", package = "TALOS"),
+      "\nRe-install the package or ensure inst/rmd/TALOS_report.Rmd exists."
+    )
+
+  # ── Resolve output path ───────────────────────────────────────────────
+  if (!grepl("^[A-Za-z]:|^/", output_file))
+    output_file <- file.path(getwd(), output_file)
   output_dir <- dirname(output_file)
-  if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+  if (!dir.exists(output_dir))
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
+  # ── Build plotly widgets ──────────────────────────────────────────────
   plot_widgets <- list()
   has_plotly   <- requireNamespace("plotly", quietly = TRUE)
-  if (has_plotly && !is.null(bam_paths) && !is.null(gene_configs)) {
+
+  if (mode == "itd" && has_plotly &&
+      !is.null(bam_paths) && !is.null(gene_configs)) {
     for (sn in names(bam_paths)) {
       bam <- bam_paths[[sn]]
       if (!file.exists(bam)) next
       for (gn in names(gene_configs)) {
-        sub_df <- result_df[result_df$Sample == sn & result_df$Gene == gn, , drop = FALSE]
-        if (nrow(sub_df) == 0) next
+        sub_df <- result_df[result_df$Sample == sn &
+                              result_df$Gene   == gn, , drop = FALSE]
+        if (nrow(sub_df) == 0L) next
         key <- paste(sn, gn, sep = "_")
-        plot_widgets[[key]] <- tryCatch(plot_talos_interactive(sub_df, gene_configs[[gn]], bam, sn, show_config = show_config), error = function(e) { message(sprintf("[HTML report] Could not generate plot for %s/%s: %s", sn, gn, conditionMessage(e))); NULL })
+        plot_widgets[[key]] <- tryCatch(
+          plot_talos_interactive(sub_df, gene_configs[[gn]], bam, sn,
+                                  show_config = show_config),
+          error = function(e) {
+            message(sprintf(
+              "[HTML report] Could not generate plot for %s/%s: %s",
+              sn, gn, conditionMessage(e)
+            ))
+            NULL
+          }
+        )
       }
     }
   }
 
-  rmd_template <- tempfile(fileext = ".Rmd")
-  on.exit(unlink(rmd_template, force = TRUE), add = TRUE)
-
-  rmd_lines <- c(
-    "---", paste0('title: "', gsub('"', "'", title), '"'), "output:", "  html_document:", "    self_contained: true", "    theme: flatly", "    toc: true", "    toc_float: true", "params:", "  result_df: NULL", "  plot_widgets: NULL", "  gene_configs: NULL", "  has_plotly: false", "  show_config: false", "---", "", "```{r setup, include=FALSE}", "knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE)", "library(DT)", "```", "",
-    "## Results summary", "```{r results-table}",
-    "cols_hide <- c('ITD_Sequence','ITDCoverageRLE','SequenceImputed','SequencePartial','LeftSoftclipPctWT','RightSoftclipPctWT')",
-    "cols_show <- setdiff(names(params$result_df), cols_hide)",
-    "df_disp   <- params$result_df[, cols_show, drop=FALSE]",
-    "if ('AlleleFrequency' %in% colnames(df_disp)) df_disp$AlleleFrequency <- sprintf('%.1f%%', df_disp$AlleleFrequency * 100)",
-    "# Format softclip percentages",
-    "if ('LeftSoftclipPctSupport' %in% colnames(df_disp)) df_disp$LeftSoftclipPctSupport <- ifelse(is.na(df_disp$LeftSoftclipPctSupport), 'N/A', paste0(round(df_disp$LeftSoftclipPctSupport,1), '%'))",
-    "if ('RightSoftclipPctSupport' %in% colnames(df_disp)) df_disp$RightSoftclipPctSupport <- ifelse(is.na(df_disp$RightSoftclipPctSupport), 'N/A', paste0(round(df_disp$RightSoftclipPctSupport,1), '%'))",
-    "DT::datatable(df_disp, filter='top', options=list(scrollX=TRUE, pageLength=25, dom='Bfrtip'), extensions='Buttons')",
-    "```", "",
-    "## Variant details", "```{r variant-details, results='asis'}",
-    "if (nrow(params$result_df) == 0) { cat('*No variants detected.*\\n') } else { groups <- unique(params$result_df[, c('Sample','Gene')]); for (gi in seq_len(nrow(groups))) { sn <- groups$Sample[gi]; gn <- groups$Gene[gi]; cat('\\n\\n### Sample:', sn, '\\u2014', gn, '\\n\\n'); if (isTRUE(params$has_plotly)) { key <- paste(sn, gn, sep='_'); wgt <- params$plot_widgets[[key]]; if (!is.null(wgt)) { print(htmltools::tagList(wgt)) } else { cat('*Interactive plot not available.*\\n') } }; sub_df <- params$result_df[params$result_df$Sample==sn & params$result_df$Gene==gn, , drop=FALSE]; for (vi in seq_len(nrow(sub_df))) { row <- sub_df[vi, ]; hgvs_str <- ifelse(is.na(row$HGVS_cDNA), 'N/A', row$HGVS_cDNA); cat(sprintf('\\n\\n#### Variant %d: %s\\n', vi, hgvs_str)); cat(sprintf('* **VAF:** %.1f%%\\n', row$AlleleFrequency*100)); cat(sprintf('* **Length:** %d bp\\n', row$Length)); cat(sprintf('* **Breakpoint:** %s\\n', row$GenomicPosition)); cat(sprintf('* **Region:** %s\\n', ifelse(is.na(row$Region),'N/A',row$Region))); cat(sprintf('* **Orientation:** %s\\n', ifelse(is.na(row$Orientation),'?',row$Orientation))); cat(sprintf('* **Hotspot:** %s\\n', ifelse(isTRUE(row$Hotspot),row$HotspotName,'No'))); cat(sprintf('* **RefMatch:** %s\\n', ifelse(is.na(row$RefMatch_Observed),'N/A',paste0(round(row$RefMatch_Observed,1),'%')))); cat(sprintf('* **ITD Read Coverage:** %s\\n', ifelse(is.na(row$ITDReadCoverage),'N/A',paste0(round(row$ITDReadCoverage,1),'%')))); cat(sprintf('* **Sequence Source:** %s\\n', ifelse(is.na(row$SequenceSource),'N/A',row$SequenceSource))); cat(sprintf('* **Left Softclip Count:** %d (%.1f%% of support)\\n', row$LeftSoftclipCount, ifelse(is.na(row$LeftSoftclipPctSupport),0,row$LeftSoftclipPctSupport))); cat(sprintf('* **Right Softclip Count:** %d (%.1f%% of support)\\n', row$RightSoftclipCount, ifelse(is.na(row$RightSoftclipPctSupport),0,row$RightSoftclipPctSupport))); if (!is.na(row$ITD_Sequence) && nchar(row$ITD_Sequence) > 0) { cat(sprintf('* **ITD Sequence:** <details><summary>Show (%d bp)</summary><pre>%s</pre></details>\\n', nchar(row$ITD_Sequence), row$ITD_Sequence)) } }; if (isTRUE(params$show_config)) { cat('\\n\\n#### Analysis configuration\\n'); cfg_str <- sprintf(paste0('* **Transcript:** %s\\n* **CDS offset:** %d\\n* **Targeted exons:** %s\\n* **Genomic window:** %d-%d\\n'), ifelse(is.na(params$gene_configs[[gn]]$transcript), 'none', params$gene_configs[[gn]]$transcript), params$gene_configs[[gn]]$cds_offset, paste(unique(params$gene_configs[[gn]]$target_exons$exon_idx), collapse=','), params$gene_configs[[gn]]$genomic_start, params$gene_configs[[gn]]$genomic_end); cat(cfg_str) } } }",
-    "```"
+  # ── Render ────────────────────────────────────────────────────────────
+  rmarkdown::render(
+    input       = template_path,
+    output_file = output_file,
+    params      = list(
+      result_df    = result_df,
+      plot_widgets = plot_widgets,
+      gene_configs = gene_configs,
+      has_plotly   = has_plotly && length(plot_widgets) > 0L,
+      show_config  = show_config,
+      title        = title,
+      mode         = mode
+    ),
+    quiet = TRUE
   )
-  writeLines(rmd_lines, rmd_template)
 
-  rmarkdown::render(rmd_template, output_file = output_file, params = list(result_df = result_df, plot_widgets = plot_widgets, gene_configs = gene_configs, has_plotly = has_plotly, show_config = show_config), quiet = TRUE, ...)
   message("HTML report written to: ", normalizePath(output_file))
   invisible(output_file)
+}
+
+.write_talos_output <- function(final_df, base_name, output_folder, sample_name,
+                                gene_config, ref_dna, bam_path, write_vcf, plot,
+                                html_report, verbose, add_config_to_report = FALSE) {
+  if (is.null(base_name) || nrow(final_df) == 0L) {
+    return(invisible(NULL))
+  }
+
+  sample_folder <- file.path(output_folder, sample_name)
+  if (!dir.exists(sample_folder)) {
+    dir.create(sample_folder, recursive = TRUE, showWarnings = FALSE)
+  }
+
+  tsv_file <- file.path(sample_folder, paste0(base_name, ".tsv"))
+
+  for (col in names(final_df)) {
+    if (is.list(final_df[[col]])) {
+      final_df[[col]] <- vapply(
+        final_df[[col]],
+        function(x) {
+          if (length(x) == 0L || all(is.na(x))) NA_character_ else paste(x, collapse = ";")
+        },
+        FUN.VALUE = character(1),
+        USE.NAMES = FALSE
+      )
+    }
+  }
+
+  utils::write.table(
+    final_df,
+    file = tsv_file,
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE,
+    na = "."
+  )
+
+  if (isTRUE(write_vcf)) {
+    vcf_file <- file.path(sample_folder, paste0(base_name, ".vcf"))
+    write_itd_vcf(
+      itd_df = final_df,
+      ref_dna = ref_dna,
+      genomic_start = gene_config$genomic_start,
+      chrom = gene_config$chrom,
+      sample_name = sample_name,
+      genome_build = gene_config$build,
+      vcf_path = vcf_file,
+      overwrite = TRUE
+    )
+  }
+
+  if (isTRUE(plot) && exists("plot_talos_report", mode = "function")) {
+    pdf_file <- file.path(sample_folder, paste0(base_name, ".pdf"))
+    plot_talos_report(
+      itd_row = final_df,
+      gene_config = gene_config,
+      bam_path = bam_path,
+      sample_name = sample_name,
+      output_pdf = pdf_file,
+      show_config = add_config_to_report
+    )
+  }
+
+  if (isTRUE(html_report) && nrow(final_df) > 0L && requireNamespace("rmarkdown", quietly = TRUE)) {
+    report_file <- file.path(sample_folder, paste0(base_name, "_report.html"))
+    bam_vec <- stats::setNames(bam_path, sample_name)
+    config_list <- stats::setNames(list(gene_config), gene_config$gene)
+    talos_html_report(
+      result_df = final_df,
+      bam_paths = bam_vec,
+      gene_configs = config_list,
+      output_file = report_file,
+      title = paste("TALOS Report –", gene_config$gene, sample_name),
+      show_config = add_config_to_report
+    )
+  }
+
+  invisible(tsv_file)
 }
 
 # ============================================================================

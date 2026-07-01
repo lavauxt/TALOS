@@ -1,0 +1,246 @@
+---
+title: "`r params$title`"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    self_contained: true
+    theme: flatly
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3
+    number_sections: false
+params:
+  result_df:    NULL   # data.frame – full TALOS results
+  plot_widgets: NULL   # named list of plotly htmlwidgets, key = "<sample>_<gene>"
+  gene_configs: NULL   # named list of resolved gene config lists
+  has_plotly:   false  # logical – whether plotly is available
+  show_config:  false  # logical – render per-gene configuration block
+  title:        "TALOS Analysis Report"
+  mode:         "itd"  # "itd" | "alu"   (controls column names & section labels)
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+
+library(DT)
+if (isTRUE(params$has_plotly)) {
+  library(plotly)
+  library(htmltools)
+}
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+.fmt_pct <- function(x, digits = 1L)
+  ifelse(is.na(x), "N/A", paste0(round(x, digits), "%"))
+
+.fmt_na <- function(x)
+  ifelse(is.na(x) | x == "", "N/A", as.character(x))
+
+# Columns we never show in the summary table (internal / verbose)
+.HIDE_COLS <- c(
+  "ITD_Sequence", "ITDCoverageRLE", "SequenceImputed", "SequencePartial",
+  "LeftSoftclipPctWT", "RightSoftclipPctWT",
+  # ALU-mode internals
+  "ALU_RawScore", "TSD_RawSeq_Left", "TSD_RawSeq_Right"
+)
+
+# ── Tidy result_df for display ─────────────────────────────────────────────
+result_df <- params$result_df
+
+if (!is.null(result_df) && nrow(result_df) > 0) {
+  if ("AlleleFrequency" %in% colnames(result_df))
+    result_df$AlleleFrequency <- .fmt_pct(result_df$AlleleFrequency * 100)
+  if ("LeftSoftclipPctSupport" %in% colnames(result_df))
+    result_df$LeftSoftclipPctSupport  <- .fmt_pct(result_df$LeftSoftclipPctSupport)
+  if ("RightSoftclipPctSupport" %in% colnames(result_df))
+    result_df$RightSoftclipPctSupport <- .fmt_pct(result_df$RightSoftclipPctSupport)
+  # ALU-specific columns
+  if ("PolyALength" %in% colnames(result_df))
+    result_df$PolyALength <- .fmt_na(result_df$PolyALength)
+}
+
+cols_show  <- setdiff(names(result_df), .HIDE_COLS)
+df_display <- if (!is.null(result_df)) result_df[, cols_show, drop = FALSE] else data.frame()
+
+is_alu <- isTRUE(params$mode == "alu")
+event_label <- if (is_alu) "insertion" else "ITD"
+Events_label <- if (is_alu) "ALU Insertions" else "ITDs"
+```
+
+---
+
+## Results summary
+
+```{r results-table}
+if (nrow(df_display) == 0) {
+  cat("*No variants detected.*\n")
+} else {
+  DT::datatable(
+    df_display,
+    filter     = "top",
+    rownames   = FALSE,
+    extensions = "Buttons",
+    options    = list(
+      scrollX    = TRUE,
+      pageLength = 25,
+      dom        = "Bfrtip",
+      buttons    = list("copy", "csv", "excel"),
+      columnDefs = list(list(className = "dt-center", targets = "_all"))
+    ),
+    caption = htmltools::tags$caption(
+      style = "caption-side: top; font-weight: bold; font-size: 1em;",
+      sprintf(
+        "%s detected: %d %s across %d sample(s)",
+        Events_label,
+        nrow(result_df),
+        event_label,
+        length(unique(result_df$Sample))
+      )
+    )
+  )
+}
+```
+
+---
+
+## Variant details
+
+```{r variant-details, results='asis'}
+if (is.null(result_df) || nrow(result_df) == 0) {
+  cat("*No variants detected.*\n")
+} else {
+  groups <- unique(result_df[, c("Sample", "Gene"), drop = FALSE])
+
+  for (gi in seq_len(nrow(groups))) {
+    sn <- groups$Sample[gi]
+    gn <- groups$Gene[gi]
+
+    cat(sprintf("\n\n### Sample: %s \u2014 %s\n\n", sn, gn))
+
+    # ── Interactive plot ──────────────────────────────────────────────────
+    if (isTRUE(params$has_plotly)) {
+      key <- paste(sn, gn, sep = "_")
+      wgt <- params$plot_widgets[[key]]
+      if (!is.null(wgt)) {
+        print(htmltools::tagList(wgt))
+      } else {
+        cat("*Interactive plot not available for this sample/gene.*\n")
+      }
+    }
+
+    sub_df <- result_df[result_df$Sample == sn & result_df$Gene == gn, , drop = FALSE]
+
+    for (vi in seq_len(nrow(sub_df))) {
+      row <- sub_df[vi, ]
+
+      if (is_alu) {
+        # ── ALU-mode header ──────────────────────────────────────────
+        hdr <- sprintf(
+          "ALU insertion %d @ %s (%s)",
+          vi,
+          .fmt_na(row$InsertionSite),
+          .fmt_na(row$ALUSubtype)
+        )
+        cat(sprintf("\n\n#### %s\n\n", hdr))
+        cat(sprintf("* **Insertion site:** %s\n",     .fmt_na(row$InsertionSite)))
+        cat(sprintf("* **ALU subtype:** %s\n",        .fmt_na(row$ALUSubtype)))
+        cat(sprintf("* **Orientation:** %s\n",        .fmt_na(row$ALUOrientation)))
+        cat(sprintf("* **TSD length:** %s bp\n",      .fmt_na(row$TSD_Length)))
+        cat(sprintf("* **TSD sequence:** `%s`\n",     .fmt_na(row$TSD_Sequence)))
+        cat(sprintf("* **Poly-A tail:** %s nt\n",     .fmt_na(row$PolyALength)))
+        cat(sprintf("* **5\u2019 truncation:** %s bp\n", .fmt_na(row$ALU5pTruncation)))
+        cat(sprintf("* **Supporting reads:** %s\n",   .fmt_na(row$SupportingReads)))
+        cat(sprintf("* **VAF:** %s\n",                .fmt_pct(as.numeric(sub("%", "", row$AlleleFrequency)))))
+        cat(sprintf("* **Mean MAPQ:** %s\n",          .fmt_na(row$MeanSupportMAPQ)))
+        cat(sprintf("* **Hotspot:** %s\n",
+          if (isTRUE(row$Hotspot)) .fmt_na(row$HotspotName) else "No"))
+        if (!is.na(row$ALU_Sequence) && nchar(as.character(row$ALU_Sequence)) > 0) {
+          cat(sprintf(
+            "* **Matched ALU sequence:** <details><summary>Show (%d bp)</summary><pre>%s</pre></details>\n",
+            nchar(as.character(row$ALU_Sequence)),
+            row$ALU_Sequence
+          ))
+        }
+      } else {
+        # ── ITD-mode header ──────────────────────────────────────────
+        hgvs_str <- .fmt_na(row$HGVS_cDNA)
+        cat(sprintf("\n\n#### Variant %d: %s\n\n", vi, hgvs_str))
+        cat(sprintf("* **VAF:** %s\n",
+          if ("AlleleFrequency" %in% names(row)) row$AlleleFrequency
+          else .fmt_pct(row$AlleleFrequency_raw * 100)))
+        cat(sprintf("* **Length:** %d bp\n",         as.integer(row$Length)))
+        cat(sprintf("* **Breakpoint:** %s\n",         .fmt_na(row$GenomicPosition)))
+        cat(sprintf("* **Region:** %s\n",             .fmt_na(row$Region)))
+        cat(sprintf("* **Exon:** %s\n",               .fmt_na(row$ExonNumber)))
+        cat(sprintf("* **Orientation:** %s\n",        .fmt_na(row$Orientation)))
+        cat(sprintf("* **Hotspot:** %s\n",
+          if (isTRUE(row$Hotspot)) .fmt_na(row$HotspotName) else "No"))
+        cat(sprintf("* **RefMatch:** %s\n",           .fmt_pct(row$RefMatch_Observed)))
+        cat(sprintf("* **ITD Read Coverage:** %s\n",  .fmt_pct(row$ITDReadCoverage)))
+        cat(sprintf("* **Support reads:** %s\n",      .fmt_na(row$SupportingReads)))
+        cat(sprintf("* **Sequence source:** %s\n",    .fmt_na(row$SequenceSource)))
+        cat(sprintf("* **Left softclip:** %s (%.1f%% of support)\n",
+          .fmt_na(row$LeftSoftclipCount),
+          { v <- suppressWarnings(as.numeric(row$LeftSoftclipPctSupport)); ifelse(is.na(v), 0, v) }))
+        cat(sprintf("* **Right softclip:** %s (%.1f%% of support)\n",
+          .fmt_na(row$RightSoftclipCount),
+          { v <- suppressWarnings(as.numeric(row$RightSoftclipPctSupport)); ifelse(is.na(v), 0, v) }))
+        cat(sprintf("* **HGVS cDNA:** `%s`\n",       .fmt_na(row$HGVS_cDNA)))
+        cat(sprintf("* **HGVS Protein:** `%s`\n",    .fmt_na(row$HGVS_Protein)))
+        if (!is.na(row$ITD_Sequence) && nchar(as.character(row$ITD_Sequence)) > 0) {
+          cat(sprintf(
+            "* **ITD Sequence:** <details><summary>Show (%d bp)</summary><pre>%s</pre></details>\n",
+            nchar(as.character(row$ITD_Sequence)),
+            row$ITD_Sequence
+          ))
+        }
+      }
+    }
+
+    # ── Per-gene config block ─────────────────────────────────────────────
+    if (isTRUE(params$show_config) && !is.null(params$gene_configs[[gn]])) {
+      cfg <- params$gene_configs[[gn]]
+      cat("\n\n#### Analysis configuration\n\n")
+      cat(sprintf("* **Transcript:** %s\n",      ifelse(is.na(cfg$transcript), "none", cfg$transcript)))
+      cat(sprintf("* **CDS offset:** %d\n",      cfg$cds_offset))
+      cat(sprintf("* **Targeted exons:** %s\n",  paste(unique(cfg$target_exons$exon_idx), collapse = ", ")))
+      cat(sprintf("* **Genomic window:** %d\u2013%d\n", cfg$genomic_start, cfg$genomic_end))
+    }
+  }
+}
+```
+
+---
+
+## Run information
+
+```{r run-info}
+info_df <- data.frame(
+  Item  = c("Report generated", "TALOS version", "R version",
+            "Total variants", "Samples", "Genes", "Mode"),
+  Value = c(
+    format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"),
+    tryCatch(as.character(utils::packageVersion("TALOS")), error = function(e) "dev"),
+    R.version.string,
+    as.character(if (is.null(result_df)) 0L else nrow(result_df)),
+    paste(unique(result_df$Sample), collapse = ", "),
+    paste(unique(result_df$Gene),   collapse = ", "),
+    toupper(params$mode)
+  ),
+  stringsAsFactors = FALSE
+)
+
+DT::datatable(
+  info_df,
+  rownames  = FALSE,
+  filter    = "none",
+  options   = list(dom = "t", paging = FALSE, ordering = FALSE),
+  colnames  = c("", "")
+)
+```
