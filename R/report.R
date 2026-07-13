@@ -723,88 +723,15 @@ talos_html_report <- function(result_df,
   invisible(output_file)
 }
 
-.write_talos_output <- function(final_df, base_name, output_folder, sample_name,
-                                gene_config, ref_dna, bam_path, write_vcf, plot,
-                                html_report, verbose, add_config_to_report = FALSE) {
-  if (is.null(base_name) || nrow(final_df) == 0L) {
-    return(invisible(NULL))
-  }
-
-  sample_folder <- file.path(output_folder, sample_name)
-  if (!dir.exists(sample_folder)) {
-    dir.create(sample_folder, recursive = TRUE, showWarnings = FALSE)
-  }
-
-  tsv_file <- file.path(sample_folder, paste0(base_name, ".tsv"))
-
-  for (col in names(final_df)) {
-    if (is.list(final_df[[col]])) {
-      final_df[[col]] <- vapply(
-        final_df[[col]],
-        function(x) {
-          if (length(x) == 0L || all(is.na(x))) NA_character_ else paste(x, collapse = ";")
-        },
-        FUN.VALUE = character(1),
-        USE.NAMES = FALSE
-      )
-    }
-  }
-
-  utils::write.table(
-    final_df,
-    file = tsv_file,
-    sep = "\t",
-    quote = FALSE,
-    row.names = FALSE,
-    na = "."
-  )
-
-  if (isTRUE(write_vcf)) {
-    vcf_file <- file.path(sample_folder, paste0(base_name, ".vcf"))
-    write_itd_vcf(
-      itd_df = final_df,
-      ref_dna = ref_dna,
-      genomic_start = gene_config$genomic_start,
-      chrom = gene_config$chrom,
-      sample_name = sample_name,
-      genome_build = gene_config$build,
-      vcf_path = vcf_file,
-      overwrite = TRUE
-    )
-  }
-
-  if (isTRUE(plot) && exists("plot_talos_report", mode = "function")) {
-    pdf_file <- file.path(sample_folder, paste0(base_name, ".pdf"))
-    plot_talos_report(
-      itd_row = final_df,
-      gene_config = gene_config,
-      bam_path = bam_path,
-      sample_name = sample_name,
-      output_pdf = pdf_file,
-      show_config = add_config_to_report
-    )
-  }
-
-  if (isTRUE(html_report) && nrow(final_df) > 0L && requireNamespace("rmarkdown", quietly = TRUE)) {
-    report_file <- file.path(sample_folder, paste0(base_name, "_report.html"))
-    bam_vec <- stats::setNames(bam_path, sample_name)
-    config_list <- stats::setNames(list(gene_config), gene_config$gene)
-    talos_html_report(
-      result_df = final_df,
-      bam_paths = bam_vec,
-      gene_configs = config_list,
-      output_file = report_file,
-      title = paste("TALOS Report –", gene_config$gene, sample_name),
-      show_config = add_config_to_report
-    )
-  }
-
-  invisible(tsv_file)
-}
-
 # ============================================================================
 # .write_talos_output – fixed with vapply and length sanity check
 # ============================================================================
+# NOTE (code review): this function used to be defined TWICE in this file.
+# The earlier definition (TSV + VCF + PDF + HTML only, no plotly widget file)
+# was silently shadowed by this later one, since R keeps the last definition
+# in a source()'d file. That made the earlier copy dead code — any future
+# edit made to it would have had zero effect, which is a maintenance trap.
+# The duplicate has been removed; this is now the single source of truth.
 .write_talos_output <- function(final_df, base_name, output_folder, sample_name,
                                 gene_config, ref_dna, bam_path, write_vcf, plot,
                                 html_report, verbose, add_config_to_report = FALSE) {

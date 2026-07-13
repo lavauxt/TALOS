@@ -538,6 +538,12 @@
           # ITD: additional checks already covered
         } else {
           # PTD symmetric (original)
+          # BUGFIX: when both sides are 0, min(left,right)==0 -> 0/0 == NaN,
+          # and `if (NaN > x)` throws "missing value where TRUE/FALSE needed".
+          # Treat "both sides zero support" as a straightforward fail rather
+          # than crashing the whole detection run.
+          if (max(left, right) == 0L) return(FALSE)
+          if (min(left, right) == 0L) return(FALSE)
           if (max(left, right) / min(left, right) > max_side_ratio) return(FALSE)
           if (left < min_abs_side_softclip || right < min_abs_side_softclip) return(FALSE)
           lp <- metrics$LeftSoftclipPctSupport;  rp <- metrics$RightSoftclipPctSupport
