@@ -314,6 +314,7 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
       transcriptAnnotation = "none", exonAnnotation = "exon",
       showExonId = TRUE, fontsize = 11, cex.feature = 1.0,
       fontcolor.feature = "black", shape = "box",
+      stackHeight = 0.45,
       background.title = "transparent", col.border.title = NA,
       fontcolor.title = "black"
     )
@@ -337,11 +338,21 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
     sprintf("%d bp | VAF %s%%",      dup_lens, vafs)
   )
 
+  # NB: without an explicit `group`, Gviz has no reliable way to tell the ITD
+  # features apart, so with >1 ITD it was drawing every feature on the SAME
+  # stacking row -- `stacking = "full"` alone did not separate them, and the
+  # feature-id labels (drawn beside each box) rendered on top of one another
+  # whenever two calls were close together. Giving every feature its own
+  # group forces one row per ITD regardless of how close they are.
+  itd_group <- factor(seq_along(breakpoints), levels = seq_along(breakpoints))
+
   itd_track  <- Gviz::AnnotationTrack(
     start = round(axis_ctx$transform_pos(breakpoints)), end = round(axis_ctx$transform_pos(dup_ends)), chromosome = chrom,
     genome = genome_build, name = ifelse(length(breakpoints) > 1, "ITDs", "ITD"),
     id = itd_labels,
+    group = itd_group,
     stacking = "full",
+    stackHeight = 0.45,
     showFeatureId = TRUE, just = "right",
     fill = "#f39c12", col = "#c0392b",
     fontcolor.feature = "#4a1c00", cex.feature = max(0.55, 0.8 - 0.04 * length(breakpoints)),
@@ -352,9 +363,12 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   axis_track <- Gviz::GenomeAxisTrack(cex = 0.7, labelPos = "below", add35 = FALSE, add53 = FALSE, col = "black",
                                      at = axis_ctx$exon_centers, labels = axis_ctx$exon_labels)
 
-  # Track sizes: coverage and ITD-coverage reduced; ITD track grows with call count
-  # so every call gets enough vertical room and labels don't overlap.
-  itd_h <- max(1.5, 0.55 * length(breakpoints))
+  # Track sizes: each ITD now reliably renders on its own row (see itd_group
+  # fix above) and stackHeight = 0.45 keeps each row's box thin, so the panel
+  # no longer needs the old, oversized per-row allowance to avoid overlap.
+  # ITD-coverage ("ITD cov reads") track size (0.75) is intentionally left
+  # unchanged -- only the ITDs annotation track below it is being resized.
+  itd_h <- max(1.0, 0.4 * length(breakpoints))
   if (!is.null(grtrack) && !is.null(itd_cov_track)) {
     track_list <- list(axis_track, grtrack, cov_track, itd_cov_track, itd_track)
     t_sizes <- c(0.5, 0.65, 2.2, 0.75, itd_h)
@@ -780,19 +794,11 @@ talos_html_report <- function(result_df,
     pdf_path <- pdf_file
   }
 
-  widget_path <- NULL
-  if (requireNamespace("plotly", quietly = TRUE)) {
-    wgt <- tryCatch(plot_talos_interactive(final_df, gene_config, bam_path, sample_name, show_config = add_config_to_report), error = function(e) NULL)
-    if (!is.null(wgt)) {
-      widget_file <- file.path(sample_folder, paste0(base_name, "_interactive.html"))
-      if (requireNamespace("htmlwidgets", quietly = TRUE)) {
-        htmlwidgets::saveWidget(wgt, widget_file, selfcontained = TRUE, title = paste0("TALOS – ", sample_name, " | ", gene_config$gene))
-        if (verbose) message(sprintf("Interactive plot saved to: %s", widget_file))
-        widget_path <- widget_file
-      }
-    }
-  }
-
+  # Single unified HTML report: talos_html_report() embeds the
+  # plot_talos_interactive() plotly widget directly alongside the full
+  # metrics table, so there is exactly one HTML deliverable per sample
+  # (no separate standalone widget-only file).
+  report_path <- NULL
   if (html_report && nrow(final_df) > 0) {
     if (!requireNamespace("rmarkdown", quietly = TRUE)) { warning("rmarkdown not installed. Cannot generate HTML report.") } 
     else {
@@ -801,9 +807,10 @@ talos_html_report <- function(result_df,
       config_list <- setNames(list(gene_config), gene_config$gene)
       suppressWarnings(talos_html_report(result_df = final_df, bam_paths = bam_vec, gene_configs = config_list, output_file = report_file, title = paste("TALOS Report –", gene_config$gene, sample_name), show_config = add_config_to_report))
       if (verbose) message(sprintf("HTML report written to: %s", report_file))
+      report_path <- report_file
     }
   }
-  invisible(list(tsv = tsv_file, widget = widget_path, pdf = pdf_path))
+  invisible(list(tsv = tsv_file, report = report_path, pdf = pdf_path))
 }
 
 .log_duration <- function(gene_name, sample_name, start_time, verbose = TRUE) {

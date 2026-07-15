@@ -42,10 +42,19 @@ if (isTRUE(params$has_plotly)) {
 .fmt_na <- function(x)
   ifelse(is.na(x) | x == "", "N/A", as.character(x))
 
+# Some columns (e.g. LeftSoftclipPctSupport) get pre-formatted into "56.4%"
+# strings below for the summary table, while others (e.g. LeftSoftclipPctWT)
+# stay raw numeric. This parses either shape back to one decimal safely,
+# instead of re-running as.numeric() on an already-%-suffixed string (which
+# returns NA and was previously silently displayed as 0).
+.fmt_pct_val <- function(x) {
+  v <- suppressWarnings(as.numeric(gsub("%", "", as.character(x))))
+  ifelse(is.na(v), "N/A", sprintf("%.1f", v))
+}
+
 # Columns we never show in the summary table (internal / verbose)
 .HIDE_COLS <- c(
   "ITD_Sequence", "ITDCoverageRLE", "SequenceImputed", "SequencePartial",
-  "LeftSoftclipPctWT", "RightSoftclipPctWT",
   # ALU-mode internals
   "ALU_RawScore", "TSD_RawSeq_Left", "TSD_RawSeq_Right"
 )
@@ -60,9 +69,27 @@ if (!is.null(result_df) && nrow(result_df) > 0) {
     result_df$LeftSoftclipPctSupport  <- .fmt_pct(result_df$LeftSoftclipPctSupport)
   if ("RightSoftclipPctSupport" %in% colnames(result_df))
     result_df$RightSoftclipPctSupport <- .fmt_pct(result_df$RightSoftclipPctSupport)
+  if ("LeftSoftclipPctWT" %in% colnames(result_df))
+    result_df$LeftSoftclipPctWT  <- .fmt_pct(result_df$LeftSoftclipPctWT)
+  if ("RightSoftclipPctWT" %in% colnames(result_df))
+    result_df$RightSoftclipPctWT <- .fmt_pct(result_df$RightSoftclipPctWT)
   # ALU-specific columns
   if ("PolyALength" %in% colnames(result_df))
     result_df$PolyALength <- .fmt_na(result_df$PolyALength)
+
+  # Genome Build isn't a column of result_df itself -- like the PDF, it comes
+  # from each row's gene config -- so it's derived here and placed right
+  # after Gene for parity with the PDF's per-variant "Genome Build" row.
+  if ("Gene" %in% colnames(result_df)) {
+    result_df$GenomeBuild <- vapply(result_df$Gene, function(g) {
+      cfg <- params$gene_configs[[g]]
+      if (is.null(cfg) || is.null(cfg$build) || is.na(cfg$build)) "custom" else as.character(cfg$build)
+    }, character(1))
+    ord <- names(result_df)
+    gene_pos <- match("Gene", ord)
+    ord <- append(ord[ord != "GenomeBuild"], "GenomeBuild", after = gene_pos)
+    result_df <- result_df[, ord, drop = FALSE]
+  }
 }
 
 cols_show  <- setdiff(names(result_df), .HIDE_COLS)
@@ -124,17 +151,41 @@ if (is.null(result_df) || nrow(result_df) == 0) {
     cat(sprintf("\n\n### Sample: %s \u2014 %s\n\n", sn, gn))
 
     # ── Interactive plot ──────────────────────────────────────────────────
+    # NB: printing an htmlwidget directly inside a for-loop mixed with cat()
+    # (as opposed to it being the sole, top-level auto-printed value of a
+    # chunk) does not reliably get its JS library picked up by pandoc's
+    # self-contained bundling -- the widget's container div and data get
+    # written out, but the Plotly.js runtime itself silently gets dropped,
+    # so nothing ever renders.
+    #
+    # The fix is NOT to re-bundle the whole ~3-4MB Plotly.js library per
+    # widget (an earlier version of this did that via saveWidget()+iframe,
+    # which is why the report started eating all the RAM/disk with more
+    # than a few variants). Instead, register each widget's dependency
+    # directly into knitr's own metadata store with knit_meta_add() -- this
+    # is the same mechanism the auto-print path uses, it dedupes across
+    # calls, so Plotly.js still only gets embedded ONCE for the whole
+    # document (exactly like jQuery/DataTables already do for the two DT
+    # tables above), no matter how many sample/gene widgets are printed.
     if (isTRUE(params$has_plotly)) {
       key <- paste(sn, gn, sep = "_")
       wgt <- params$plot_widgets[[key]]
       if (!is.null(wgt)) {
-        print(htmltools::tagList(wgt))
+        wgt_tags <- htmltools::as.tags(wgt)
+        knitr::knit_meta_add(htmltools::findDependencies(wgt_tags))
+        cat(htmltools::renderTags(wgt_tags)$html)
+        cat("\n")
       } else {
         cat("*Interactive plot not available for this sample/gene.*\n")
       }
     }
 
     sub_df <- result_df[result_df$Sample == sn & result_df$Gene == gn, , drop = FALSE]
+
+    # Same lookup plot_talos_report() uses for the PDF's "Genome Build" row --
+    # this isn't a column on result_df itself, it comes from the gene config.
+    grp_cfg <- params$gene_configs[[gn]]
+    grp_genome_build <- if (is.null(grp_cfg) || is.null(grp_cfg$build) || is.na(grp_cfg$build)) "custom" else as.character(grp_cfg$build)
 
     for (vi in seq_len(nrow(sub_df))) {
       row <- sub_df[vi, ]
@@ -169,65 +220,65 @@ if (is.null(result_df) || nrow(result_df) == 0) {
         }
       } else {
         # ── ITD-mode header ──────────────────────────────────────────
-        # Field set below mirrors the "Variant Summary" table printed on
-        # page 2 of plot_talos_report()'s PDF, so the HTML and PDF reports
-        # show the same information (previously several PDF-only metrics —
-        # WildtypeReads, DepthAtBreakpoint, StrandBias, MeanSupportMAPQ,
-        # SupportConsistency, LengthPE, LengthExt, the WT-side softclip
-        # percentages, and the paired-end softclip/orientation metrics —
-        # were missing from the HTML per-variant view).
+        # This list is field-for-field identical to the 32-row "Variant
+        # Summary" table on page 2 of plot_talos_report()'s PDF -- same
+        # metrics, same order, same labels -- so the two reports are
+        # directly comparable. Sample/Gene/Genome Build are repeated here
+        # per variant (as they are per ITD column in the PDF) even though
+        # they're also shown in the section header above.
         hgvs_str <- .fmt_na(row$HGVS_cDNA)
         cat(sprintf("\n\n#### Variant %d: %s\n\n", vi, hgvs_str))
-        cat(sprintf("* **VAF:** %s\n",
-          if ("AlleleFrequency" %in% names(row)) row$AlleleFrequency
-          else .fmt_pct(row$AlleleFrequency_raw * 100)))
-        cat(sprintf("* **Length:** %d bp\n",         as.integer(row$Length)))
+        cat(sprintf("* **Sample:** %s\n",             .fmt_na(sn)))
+        cat(sprintf("* **Gene:** %s\n",               .fmt_na(row$Gene)))
+        cat(sprintf("* **Genome Build:** %s\n",       grp_genome_build))
+        cat(sprintf("* **Genomic Position:** %s\n",   .fmt_na(row$GenomicPosition)))
+        cat(sprintf("* **Length (bp):** %d\n",        as.integer(row$Length)))
         pe_str <- if (!is.null(row$LengthPE) && !is.na(row$LengthPE))
           sprintf("%d bp (%d pairs)", as.integer(row$LengthPE),
                   as.integer(if (!is.null(row$LengthPE_NSpanning)) row$LengthPE_NSpanning else 0L))
         else "N/A"
-        cat(sprintf("* **Length (paired-end estimate):** %s\n", pe_str))
-        cat(sprintf("* **Length (extension estimate):** %s bp\n",
+        cat(sprintf("* **Length PE (bp):** %s\n", pe_str))
+        cat(sprintf("* **Length Ext (bp):** %s\n",
           ifelse(is.null(row$LengthExt) || is.na(row$LengthExt), "N/A", as.character(row$LengthExt))))
-        cat(sprintf("* **Breakpoint:** %s\n",         .fmt_na(row$GenomicPosition)))
+        cat(sprintf("* **VAF (%%):** %s\n",
+          if ("AlleleFrequency" %in% names(row)) row$AlleleFrequency
+          else .fmt_pct(row$AlleleFrequency_raw * 100)))
+        cat(sprintf("* **Supporting Reads:** %s\n",   .fmt_na(row$SupportingReads)))
+        cat(sprintf("* **Wildtype Reads:** %s\n",     .fmt_na(row$WildtypeReads)))
+        cat(sprintf("* **Depth at Breakpoint:** %s\n",.fmt_na(row$DepthAtBreakpoint)))
+        cat(sprintf("* **HGVS cDNA:** `%s`\n",        .fmt_na(row$HGVS_cDNA)))
+        cat(sprintf("* **HGVS Protein:** `%s`\n",     .fmt_na(row$HGVS_Protein)))
         cat(sprintf("* **Region:** %s\n",             .fmt_na(row$Region)))
-        cat(sprintf("* **Exon:** %s\n",               .fmt_na(row$ExonNumber)))
+        cat(sprintf("* **Exon Number:** %s\n",        .fmt_na(row$ExonNumber)))
         cat(sprintf("* **Orientation:** %s\n",        .fmt_na(row$Orientation)))
         cat(sprintf("* **Hotspot:** %s\n",
           if (isTRUE(row$Hotspot)) .fmt_na(row$HotspotName) else "No"))
-        cat(sprintf("* **Supporting reads:** %s\n",   .fmt_na(row$SupportingReads)))
-        cat(sprintf("* **Wildtype reads:** %s\n",     .fmt_na(row$WildtypeReads)))
-        cat(sprintf("* **Depth at breakpoint:** %s\n",.fmt_na(row$DepthAtBreakpoint)))
-        cat(sprintf("* **RefMatch:** %s\n",           .fmt_pct(row$RefMatch_Observed)))
-        cat(sprintf("* **ITD Read Coverage:** %s\n",  .fmt_pct(row$ITDReadCoverage)))
-        cat(sprintf("* **Sequence source:** %s\n",    .fmt_na(row$SequenceSource)))
-        cat(sprintf("* **Strand bias:** %s\n",
+        cat(sprintf("* **Strand Bias:** %s\n",
           ifelse(is.na(row$StrandBias), "N/A", sprintf("%.3f", row$StrandBias))))
-        cat(sprintf("* **Mean support MAPQ:** %s\n",
+        cat(sprintf("* **Mean MAPQ:** %s\n",
           ifelse(is.na(row$MeanSupportMAPQ), "N/A", sprintf("%.1f", row$MeanSupportMAPQ))))
-        cat(sprintf("* **Support consistency:** %s\n",
+        cat(sprintf("* **Support Consistency:** %s\n",
           ifelse(is.na(row$SupportConsistency), "N/A", paste0(round(row$SupportConsistency), "%"))))
-        cat(sprintf("* **Left softclip:** %s (%.1f%% of support, %.1f%% of WT)\n",
-          .fmt_na(row$LeftSoftclipCount),
-          { v <- suppressWarnings(as.numeric(row$LeftSoftclipPctSupport)); ifelse(is.na(v), 0, v) },
-          { v <- suppressWarnings(as.numeric(row$LeftSoftclipPctWT));      ifelse(is.na(v), 0, v) }))
-        cat(sprintf("* **Right softclip:** %s (%.1f%% of support, %.1f%% of WT)\n",
-          .fmt_na(row$RightSoftclipCount),
-          { v <- suppressWarnings(as.numeric(row$RightSoftclipPctSupport)); ifelse(is.na(v), 0, v) },
-          { v <- suppressWarnings(as.numeric(row$RightSoftclipPctWT));      ifelse(is.na(v), 0, v) }))
-        if (!is.null(row$PESoftclipSupport) || !is.null(row$PEOrientationDominant)) {
-          pe_orient <- if (is.null(row$PEOrientationDominant) || is.na(row$PEOrientationDominant)) "N/A"
-            else sprintf("%s (FR=%s RF=%s FF=%s RR=%s)", row$PEOrientationDominant,
+        cat(sprintf("* **RefMatch (%%):** %s\n",      .fmt_pct(row$RefMatch_Observed)))
+        cat(sprintf("* **ITD Read Coverage (%%):** %s\n", .fmt_pct(row$ITDReadCoverage)))
+        cat(sprintf("* **Sequence Source:** %s\n",    .fmt_na(row$SequenceSource)))
+        cat(sprintf("* **Left Softclip Count:** %s\n",  ifelse(is.na(row$LeftSoftclipCount), "0", as.character(row$LeftSoftclipCount))))
+        cat(sprintf("* **Right Softclip Count:** %s\n", ifelse(is.na(row$RightSoftclipCount), "0", as.character(row$RightSoftclipCount))))
+        cat(sprintf("* **Left Softclip %% (Support):** %s\n",  .fmt_pct_val(row$LeftSoftclipPctSupport)))
+        cat(sprintf("* **Right Softclip %% (Support):** %s\n", .fmt_pct_val(row$RightSoftclipPctSupport)))
+        cat(sprintf("* **Left Softclip %% (WT):** %s\n",       .fmt_pct_val(row$LeftSoftclipPctWT)))
+        cat(sprintf("* **Right Softclip %% (WT):** %s\n",      .fmt_pct_val(row$RightSoftclipPctWT)))
+        cat(sprintf("* **PE Softclip Support:** %s\n",
+          ifelse(is.null(row$PESoftclipSupport) || is.na(row$PESoftclipSupport), "N/A", as.character(row$PESoftclipSupport))))
+        cat(sprintf("* **PE Event-size Pairs:** %s\n",
+          ifelse(is.null(row$PESoftclipEventPairs) || is.na(row$PESoftclipEventPairs), "N/A", as.character(row$PESoftclipEventPairs))))
+        cat(sprintf("* **PE Long-span Pairs:** %s\n",
+          ifelse(is.null(row$PESoftclipLongPairs) || is.na(row$PESoftclipLongPairs), "N/A", as.character(row$PESoftclipLongPairs))))
+        cat(sprintf("* **PE Orientation:** %s\n",
+          ifelse(is.null(row$PEOrientationDominant) || is.na(row$PEOrientationDominant), "N/A",
+                 sprintf("%s (FR=%s RF=%s FF=%s RR=%s)", row$PEOrientationDominant,
                          .fmt_na(row$PEOrientationFR), .fmt_na(row$PEOrientationRF),
-                         .fmt_na(row$PEOrientationFF), .fmt_na(row$PEOrientationRR))
-          cat(sprintf("* **Paired-end support:** softclip=%s, event-size pairs=%s, long-span pairs=%s, orientation=%s\n",
-            ifelse(is.null(row$PESoftclipSupport) || is.na(row$PESoftclipSupport), "N/A", as.character(row$PESoftclipSupport)),
-            ifelse(is.null(row$PESoftclipEventPairs) || is.na(row$PESoftclipEventPairs), "N/A", as.character(row$PESoftclipEventPairs)),
-            ifelse(is.null(row$PESoftclipLongPairs) || is.na(row$PESoftclipLongPairs), "N/A", as.character(row$PESoftclipLongPairs)),
-            pe_orient))
-        }
-        cat(sprintf("* **HGVS cDNA:** `%s`\n",       .fmt_na(row$HGVS_cDNA)))
-        cat(sprintf("* **HGVS Protein:** `%s`\n",    .fmt_na(row$HGVS_Protein)))
+                         .fmt_na(row$PEOrientationFF), .fmt_na(row$PEOrientationRR)))))
         if (!is.na(row$ITD_Sequence) && nchar(as.character(row$ITD_Sequence)) > 0) {
           cat(sprintf(
             "* **ITD Sequence:** <details><summary>Show (%d bp)</summary><pre>%s</pre></details>\n",
