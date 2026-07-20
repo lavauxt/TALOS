@@ -563,3 +563,30 @@
   ux <- unique(x)
   ux[which.max(tabulate(match(x, ux)))]
 }
+
+# ---------------------------------------------------------------------------
+# Debug helper: render one candidate's full metrics as a single log line.
+# Called from detect_itd() (main.R) right after .compute_variant_metrics() /
+# .apply_filters(), when debug = TRUE, so that EVERY candidate cluster is
+# written to the log -- not just the ones that survive filtering. This is
+# what lets you see, post-hoc, exactly why a real variant got dropped.
+# ---------------------------------------------------------------------------
+.format_candidate_debug <- function(metrics, passed) {
+  fields <- c(
+    "GenomicPosition", "Length", "LengthExt", "SupportingReads", "WildtypeReads",
+    "DepthAtBreakpoint", "AlleleFrequency", "CoverageDrop", "MedianMicrohomology",
+    "DiscordantRatio", "RepeatEntropy", "StrandBias", "MeanSupportMAPQ",
+    "BreakpointSpread", "SoftclipFraction", "UniqueBreakpoints", "ITDReadCoverage",
+    "AlignmentScore", "SequenceImputed", "SequencePartial", "ArtifactSuspect",
+    "LeftSoftclipCount", "RightSoftclipCount", "LeftSoftclipPctSupport",
+    "RightSoftclipPctSupport", "LeftSoftclipPctWT", "RightSoftclipPctWT"
+  )
+  kv <- vapply(fields, function(f) {
+    v <- metrics[[f]]
+    if (is.null(v) || (length(v) == 1L && is.na(v))) return(paste0(f, "=NA"))
+    if (is.numeric(v)) v <- format(round(v, 4), trim = TRUE)
+    paste0(f, "=", v)
+  }, character(1))
+  sprintf("[CANDIDATE] %s -> %s", paste(kv, collapse = " "),
+          if (isTRUE(passed)) "KEPT" else "FILTERED")
+}

@@ -18,7 +18,12 @@
 #' @param output_folder Output folder path.
 #' @param write_vcf Generate VCF report.
 #' @param verbose Logging enabled.
-#' @param debug Debug info.
+#' @param debug If TRUE, writes one line per candidate cluster (its full computed
+#'   metrics, plus whether it was KEPT or FILTERED by \code{.apply_filters()}) to
+#'   the log via \code{log_msg()} -- i.e. to \code{global_log_file} when
+#'   \code{global_log = TRUE}, and to console when \code{verbose = TRUE}. Also
+#'   enables a handful of extra diagnostic \code{message()} calls elsewhere
+#'   (e.g. coverage-drop fallback, artifact-suspect flagging).
 #' @param nominal_read_len Assumed length.
 #' @param max_correction Size-bias correction cap.
 #' @param plot Output PDF.
@@ -325,7 +330,12 @@ detect_itd <- function(
         refined_clusters <- .cluster_breakpoints(ext_valid$breakpoint_refined, cluster_tolerance)
         for (rcl in refined_clusters) {
           rcl_reads <- ext_valid[ext_valid$breakpoint_refined %in% rcl, ]
-          if (nrow(rcl_reads) < 3) next
+          if (nrow(rcl_reads) < 3) {
+            if (debug) log_msg(sprintf(
+              "[CANDIDATE] GenomicPosition=%s SupportingReads=%d -> SKIPPED (refined cluster has <3 supporting reads; metrics not computed, min_support/other filters never applied)",
+              as.character(round(median(rcl, na.rm = TRUE))), nrow(rcl_reads)))
+            next
+          }
           
           best_len <- .mode(rcl_reads$itdsize)
           median_bp <- as.integer(median(rcl_reads$breakpoint_refined, na.rm = TRUE))
@@ -339,7 +349,12 @@ detect_itd <- function(
           support_rows <- rbind(support_rows, additional)
           support_rows <- unique(support_rows)
           
-          if (nrow(support_rows) == 0) next
+          if (nrow(support_rows) == 0) {
+            if (debug) log_msg(sprintf(
+              "[CANDIDATE] GenomicPosition=%d SupportingReads=0 -> SKIPPED (no bp_df rows matched refined cluster; metrics not computed)",
+              median_bp))
+            next
+          }
           
           length_ext <- best_len
           if (verbose) {
@@ -364,9 +379,12 @@ detect_itd <- function(
             pre_assembled_seq = .lookup_assembled_seq(median_bp, ptd_assembled_seqs),
             debug = debug, verbose = verbose
           )
-          if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length,
-                                                  ptd_mode = ptd_mode, ptd_allow_asymmetric = ptd_allow_asymmetric))
-            results[[length(results) + 1L]] <- metrics
+          if (!is.null(metrics)) {
+            passed <- .apply_filters(metrics, thresholds, min_length, max_length,
+                                      ptd_mode = ptd_mode, ptd_allow_asymmetric = ptd_allow_asymmetric)
+            if (debug) log_msg(.format_candidate_debug(metrics, passed))
+            if (passed) results[[length(results) + 1L]] <- metrics
+          }
         }
       }
     }
@@ -393,7 +411,12 @@ detect_itd <- function(
       
       for (cl in clusters) {
         cluster_candidates <- which(cand_breakpoints %in% cl)
-        if (length(cluster_candidates) == 0) next
+        if (length(cluster_candidates) == 0) {
+          if (debug) log_msg(sprintf(
+            "[CANDIDATE] GenomicPosition=%s SupportingReads=0 -> SKIPPED (no candidates matched cluster; metrics not computed)",
+            as.character(round(median(cl, na.rm = TRUE)))))
+          next
+        }
         
         # Try to use extension data within this original cluster
         ext_sizes <- c()
@@ -441,9 +464,12 @@ detect_itd <- function(
             pre_assembled_seq = .lookup_assembled_seq(median_bp, ptd_assembled_seqs),
             debug = debug, verbose = verbose
           )
-          if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length,
-                                                  ptd_mode = ptd_mode, ptd_allow_asymmetric = ptd_allow_asymmetric))
-            results[[length(results) + 1L]] <- metrics
+          if (!is.null(metrics)) {
+            passed <- .apply_filters(metrics, thresholds, min_length, max_length,
+                                      ptd_mode = ptd_mode, ptd_allow_asymmetric = ptd_allow_asymmetric)
+            if (debug) log_msg(.format_candidate_debug(metrics, passed))
+            if (passed) results[[length(results) + 1L]] <- metrics
+          }
           next
         }
         
@@ -481,9 +507,12 @@ detect_itd <- function(
             pre_assembled_seq = .lookup_assembled_seq(round(median(cl)), ptd_assembled_seqs),
             debug = debug, verbose = verbose
           )
-          if (!is.null(metrics) && .apply_filters(metrics, thresholds, min_length, max_length,
-                                                  ptd_mode = ptd_mode, ptd_allow_asymmetric = ptd_allow_asymmetric))
-            results[[length(results) + 1L]] <- metrics
+          if (!is.null(metrics)) {
+            passed <- .apply_filters(metrics, thresholds, min_length, max_length,
+                                      ptd_mode = ptd_mode, ptd_allow_asymmetric = ptd_allow_asymmetric)
+            if (debug) log_msg(.format_candidate_debug(metrics, passed))
+            if (passed) results[[length(results) + 1L]] <- metrics
+          }
         }
       }
     }
@@ -636,6 +665,9 @@ detect_itd <- function(
 #' @param merge_gap Maximum gap (bp) between intervals to merge (default 500).
 #' @param min_ptd_length Minimum length (bp) for intervals to be considered for merging (default 200).
 #' @param verbose Print progress messages (default TRUE).
+#' @param debug If TRUE, logs full per-candidate metrics (kept or filtered, including
+#'   candidates dropped before metrics were even computed) to the log file. See
+#'   \code{\link{detect_itd}}.
 #' @param ... Extra settings.
 #' @export
 talos <- function(
@@ -681,6 +713,7 @@ talos <- function(
     merge_gap = NULL,                
     min_ptd_length = NULL,           
     verbose = TRUE,
+    debug = FALSE,
     ...
 ) {
   
@@ -801,6 +834,7 @@ talos <- function(
     merge_gap = p$merge_gap,
     min_ptd_length = p$min_ptd_length,
     verbose = verbose,
+    debug = debug,
     ...
   )
 }

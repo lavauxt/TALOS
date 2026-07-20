@@ -642,7 +642,8 @@ get_gene_config <- function(
     all_exons       = all_exons_gr,
     cds_offset      = cds_offset,
     bsgenome_obj    = bs_obj,
-    gene_settings   = entry$gene_settings
+    gene_settings   = entry$gene_settings,
+    alu_settings    = entry$alu_settings
   )
 }
 

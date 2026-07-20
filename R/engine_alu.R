@@ -645,9 +645,9 @@ detect_alu <- function(
 #'
 #' Calls \code{\link{get_gene_config}} then \code{\link{detect_alu}}.
 #' Gene-specific ALU settings can be provided in \code{gene_config.yaml}
-#' under a \code{gene_settings:} block with keys:
+#' under an \code{alu_settings:} block with keys:
 #'   \code{min_support}, \code{min_alu_score}, \code{min_clip_len},
-#'   \code{cluster_tolerance}, \code{min_tsd}.
+#'   \code{min_mapq}, \code{cluster_tolerance}, \code{vaf_threshold}, \code{min_tsd}.
 #'
 #' @inheritParams detect_alu
 #' @param gene       Gene symbol (must be present in \code{yaml_path}).
@@ -687,7 +687,7 @@ talos_alu <- function(
   config       <- get_gene_config(gene, build, padding, yaml_path,
                                   bsgenome, exon_padding)
   config$build <- build
-  yaml_vals    <- config$gene_settings %||% list()
+  yaml_vals    <- config$alu_settings %||% list()
 
   # Hard defaults for ALU detection
   defaults <- list(

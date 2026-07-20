@@ -51,16 +51,7 @@ FLT3:
   targeted_exons: [14, 15]
   build: hg19
   cds_offset: 93
-  gene_settings:
-    # ITD detection settings
-    min_itd_read_coverage: 50   # raised from 30 to avoid FP low-coverage calls
-  alu_settings:
-    # FLT3 exons 14–15 are not a known ALU target; conservative defaults.
-    min_support:       5
-    min_alu_score:     0.65
-    min_clip_len:      30
-    cluster_tolerance: 15
-    min_tsd:           4
+
 
 KMT2A:
   transcript: NM_005933
@@ -78,37 +69,18 @@ KMT2A:
     merge_ptd_intervals: TRUE
     merge_gap: 10
     min_ptd_length: 200
-  alu_settings:
-    # KMT2A introns are large and historically prone to ALU-mediated
-    # rearrangements; use relaxed thresholds.
-    min_support:       3
-    min_alu_score:     0.60
-    min_clip_len:      25
-    cluster_tolerance: 20
-    min_tsd:           3
-    vaf_threshold:     0.005
+
 
 BCOR:
   transcript: NM_001123385      # BCOR internal tandem duplication, exon 15
   targeted_exons: [15]
   build: hg19
-  alu_settings:
-    min_support:       4
-    min_alu_score:     0.62
-    min_clip_len:      25
-    cluster_tolerance: 15
-    min_tsd:           4
+
 
 UBTF:
   transcript: NM_014233         # UBTF tandem duplication, exon 13
   targeted_exons: [13]
   build: hg19
-  alu_settings:
-    min_support:       4
-    min_alu_score:     0.62
-    min_clip_len:      25
-    cluster_tolerance: 15
-    min_tsd:           4
 
 # ── ALU insertion target regions (whole-gene or regulatory) ──────────────────
 # These entries are used exclusively with detect_alu() / talos_alu().
