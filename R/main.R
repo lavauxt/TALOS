@@ -1,6 +1,15 @@
 # ============================================================================
-# Main detection function (Memory Optimized)
+# TALOS – Main Detection Function (Memory Optimized + Graph PTD)
 # ============================================================================
+
+# ---- External dependencies (assumed loaded via package) ----
+# These are sourced from other modules in the package:
+#   utils.R, engine_bam.R, engine_candidates.R, engine_metrics.R, report.R, etc.
+# However, for completeness, we include essential helpers at the end of this file.
+
+# ---------------------------------------------------------------------------
+# detect_itd: Primary ITD/PTD detection function
+# ---------------------------------------------------------------------------
 
 #' Detect ITDs/PTDs using the TALOS Algorithm
 #'
@@ -18,13 +27,8 @@
 #' @param output_folder Output folder path.
 #' @param write_vcf Generate VCF report.
 #' @param verbose Logging enabled.
-#' @param debug If TRUE, writes one line per candidate cluster (its full computed
-#'   metrics, plus whether it was KEPT or FILTERED by \code{.apply_filters()}) to
-#'   the log via \code{log_msg()} -- i.e. to \code{global_log_file} when
-#'   \code{global_log = TRUE}, and to console when \code{verbose = TRUE}. Also
-#'   enables a handful of extra diagnostic \code{message()} calls elsewhere
-#'   (e.g. coverage-drop fallback, artifact-suspect flagging).
-#' @param nominal_read_len Assumed length.
+#' @param debug If TRUE, writes one line per candidate cluster.
+#' @param nominal_read_len Assumed read length.
 #' @param max_correction Size-bias correction cap.
 #' @param plot Output PDF.
 #' @param sample_name Extracted/assigned sample name.
@@ -90,6 +94,12 @@
 #' @param merge_ptd_intervals If TRUE, merge overlapping/adjacent large duplication intervals into a single PTD call (default FALSE).
 #' @param merge_gap Maximum gap (bp) between intervals to merge (default 500).
 #' @param min_ptd_length Minimum length (bp) for intervals to be considered for merging (default 200).
+#' @param use_exon_graph If TRUE, additionally run the directed exon-graph PTD
+#'        reconstruction (requires exon annotations in gene_config$all_exons).
+#'        Graph-derived candidates supplement rather than replace the legacy
+#'        candidate extraction below; the two are combined and reconciled by
+#'        the merge_ptd_intervals step. No longer requires ptd_mode=TRUE.
+#'        Default FALSE.
 #' @param ... Other parameters passed to the underlying engine.
 #' @return Data frame of ITD calls with diagnostic columns, invisibly.
 #' @export
@@ -131,7 +141,8 @@ detect_itd <- function(
     ptd_use_local_assembly = TRUE,
     merge_ptd_intervals = FALSE,      
     merge_gap = 500L,                 
-    min_ptd_length = 200L,            
+    min_ptd_length = 200L,
+    use_exon_graph = FALSE,   # <--- NEW PARAMETER
     ...
 ) {
   
@@ -188,7 +199,6 @@ detect_itd <- function(
       log_msg(sprintf("Global log saved to: %s", global_log_file))
     }
   }, add = TRUE)
-  # NOTE: .mode() is defined in engine_metrics.R and does not need a local copy here.
   
   tryCatch({
     # Use genomic_ref_seq from gene_config
@@ -211,7 +221,6 @@ detect_itd <- function(
     
     if (length(all_reads) == 0) {
       log_msg("No reads found in target region.")
-      .log_duration(gene_name, sample_name, start_time, verbose)
       return(data.frame())
     }
     
@@ -227,11 +236,102 @@ detect_itd <- function(
       }
     }
     
-    # ---- Candidate extraction (PTD improvements) ----
+    # ---- Candidate extraction ----
     candidates <- list()
+    bp_df <- data.frame()
+    
+    # --------------------------------------------------------------------
+    # EXON GRAPH PTD EXTRACTION (supplementary evidence source; additive,
+    # not a replacement for legacy extraction below -- see roxygen note on
+    # use_exon_graph). No longer gated on ptd_mode: KMT2A's own gene_config
+    # sets ptd_mode=FALSE (it relies on convert_long_to_ptd + merge_ptd_intervals
+    # instead), so requiring ptd_mode=TRUE here made this branch unreachable
+    # for the gene it was built for.
+    # --------------------------------------------------------------------
+    if (use_exon_graph && !is.null(gene_config$all_exons)) {
+      if (verbose) message("[TALOS] Running Exon-Graph PTD reconstruction...")
+      
+      # Ensure the graph extractor is available (sourced from engine_graph_ptd.R)
+      if (!exists("extract_graph_candidates", mode = "function")) {
+        stop("extract_graph_candidates() not found. Please source engine_graph_ptd.R")
+      }
+      
+      # 1. Run Graph Candidate Extraction
+      graph_cycles <- extract_graph_candidates(bam_path, gene_config)
+      
+      if (length(graph_cycles) > 0) {
+        graph_candidates <- list()
+        for (cand in graph_cycles) {
+          # 2. Extract supporting reads for this specific cycle
+          support_qnames <- unlist(strsplit(cand$support_qnames, ";"))
+          junction_reads <- all_reads[.safe_qnames(all_reads) %in% support_qnames]
+          
+          if (length(junction_reads) == 0) next
+          
+          # 3. Refine breakpoint using KDE over junction reads
+          junction_bps <- c(BiocGenerics::start(junction_reads), BiocGenerics::end(junction_reads))
+          refined_bp <- .kde_breakpoint(junction_bps)
+          local_bp   <- refined_bp - gene_config$genomic_start + 1L
+          
+          # 4. Local de Bruijn assembly for a representative junction sequence
+          #    (shared consensus attached to every per-read candidate below;
+          #    per-read stats -- mapq/strand/cigar -- stay genuine per read)
+          sc_seqs <- sapply(seq_len(length(junction_reads)), function(i) {
+            sc <- .get_softclips(GenomicAlignments::cigar(junction_reads)[i], 
+                                 as.character(S4Vectors::mcols(junction_reads)$seq[i]))
+            paste(na.omit(c(sc$lead, sc$trail)), collapse="")
+          })
+          mapqs <- S4Vectors::mcols(junction_reads)$mapq
+          
+          junction_seq <- .build_local_debruijn(sc_seqs)
+          if (is.na(junction_seq)) {
+            junction_seq <- .assemble_weighted_consensus(sc_seqs, mapqs)
+          }
+          
+          # 5. One candidate PER REAL SUPPORTING READ (not one fabricated row
+          #    per cycle). .compute_variant_metrics() computes
+          #    raw_support <- length(unique(support_rows$read_name)) and
+          #    rejects the whole candidate if raw_support < min_support; a
+          #    single shared placeholder read_name made raw_support always
+          #    equal 1, so no graph-derived candidate could ever pass that
+          #    filter regardless of how much real evidence backed it.
+          read_qnames  <- .safe_qnames(junction_reads)
+          read_mapqs   <- S4Vectors::mcols(junction_reads)$mapq; read_mapqs[is.na(read_mapqs)] <- 0L
+          read_flags   <- S4Vectors::mcols(junction_reads)$flag
+          read_reverse <- bitwAnd(read_flags, 0x10L) != 0L
+          read_cigars  <- GenomicAlignments::cigar(junction_reads)
+          
+          for (r in seq_len(length(junction_reads))) {
+            graph_candidates[[length(graph_candidates) + 1]] <- list(
+              read_name         = read_qnames[r],
+              local_breakpoint  = local_bp,
+              length            = 0L, # zero length flags this as a PTD candidate, as elsewhere
+              type              = "ptd_graph",
+              mapq              = read_mapqs[r],
+              is_reverse        = read_reverse[r],
+              cigar             = read_cigars[r],
+              read_seq          = junction_seq,
+              itd_seq           = junction_seq
+            )
+          }
+        }
+        if (length(graph_candidates) > 0) {
+          candidates <- c(candidates, graph_candidates)
+          if (verbose) message("[TALOS] Graph extraction contributed ", length(graph_candidates),
+                               " read-level PTD candidate(s) from ", length(graph_cycles), " cycle(s).")
+        }
+      } else {
+        log_msg("Graph extraction found no PTD cycles.")
+      }
+    }
+    
+    # ---- LEGACY CANDIDATE EXTRACTION (always runs; graph evidence above, if
+    # any, is additive -- both sources feed the same clustering/merge step
+    # below, so a real PTD found by either or both is reconciled into one call) ----
+    legacy_candidates <- list()
     if (ptd_mode && use_cigar_bp) {
       # PTD fast path: soft-clip extraction
-      candidates <- .extract_candidates_ptd(all_reads, gene_config$genomic_start, ref_len, verbose = verbose)
+      legacy_candidates <- .extract_candidates_ptd(all_reads, gene_config$genomic_start, ref_len, verbose = verbose)
       # If requested, also run standard k‑mer based detection (for jumps) and merge
       if (use_kmers) {
         jump_candidates <- .extract_candidates_standard(
@@ -241,13 +341,13 @@ detect_itd <- function(
           max_itd_length = max_itd_length, convert_long_to_ptd = convert_long_to_ptd,
           verbose = verbose
         )
-        candidates <- c(candidates, jump_candidates)
+        legacy_candidates <- c(legacy_candidates, jump_candidates)
       }
     } else if (!use_kmers) {
-      candidates <- .extract_candidates_cigar(all_reads, gene_config$genomic_start, ref_len,
+      legacy_candidates <- .extract_candidates_cigar(all_reads, gene_config$genomic_start, ref_len,
                                               min_size = min_size, verbose = verbose)
     } else {
-      candidates <- .extract_candidates_standard(
+      legacy_candidates <- .extract_candidates_standard(
         reads = all_reads, ref_kmers = ref_kmers, ptd_mode = ptd_mode, min_size = min_size,
         max_missing_kmers = max_missing_kmers, refine_bp = refine_bp, use_cigar_bp = use_cigar_bp,
         genomic_start = gene_config$genomic_start, ref_dna = ref_dna,
@@ -255,20 +355,19 @@ detect_itd <- function(
         verbose = verbose
       )
     }
+    candidates <- c(candidates, legacy_candidates)
     
     if (length(candidates) == 0) {
       log_msg("No candidate reads (clips or k-mer jumps) found.")
       return(data.frame())
     }
+    bp_df <- .candidates_to_df(candidates, gene_config$genomic_start)
     
-    bp_df    <- .candidates_to_df(candidates, gene_config$genomic_start)
+    # ---- Clustering and metrics (unchanged) ----
     clusters <- .cluster_breakpoints(bp_df$breakpoint, cluster_tolerance)
     
-    # ---- Local assembly for PTD clusters (reactivated) ----
-    # Assembled sequences are stored keyed by cluster-median genomic BP so that
-    # .compute_variant_metrics() can use them as a higher-quality fallback for
-    # itd_seq when no sequence can be extracted from individual reads.
-    ptd_assembled_seqs <- list()   # character, keyed by as.character(median_bp)
+    # ---- Local assembly for PTD clusters (legacy path) ----
+    ptd_assembled_seqs <- list()
     if (ptd_mode && ptd_use_local_assembly && nrow(bp_df) > 0) {
       for (cl in clusters) {
         cl_df <- bp_df[bp_df$breakpoint %in% cl, ]
@@ -281,8 +380,7 @@ detect_itd <- function(
         }
       }
     }
-
-    # Helper: retrieve the nearest stored consensus within `tol` bp
+    
     .lookup_assembled_seq <- function(bp, store, tol = 50L) {
       if (length(store) == 0L) return(NA_character_)
       keys <- suppressWarnings(as.integer(names(store)))
@@ -523,13 +621,20 @@ detect_itd <- function(
     }
     
     final_df <- do.call(rbind, lapply(results, function(x) as.data.frame(x, stringsAsFactors = FALSE)))
+    final_df$MergedFromN <- 1L   # overwritten below for rows produced by interval merging
     
     # ========== MERGE PTD INTERVALS ==========
     # Merges scattered large-duplication calls (e.g. KMT2A PTD breakpoints detected
     # across multiple exons) into a single interval.  Only rows whose Length >=
     # min_ptd_length participate; rows below the threshold are kept as-is alongside
     # the merged result.
-    if (merge_ptd_intervals && !ptd_mode && nrow(final_df) > 0) {
+    # NOTE: previously gated on `!ptd_mode`, which made this mutually
+    # exclusive with the exon-graph branch above (gated on ptd_mode==TRUE in
+    # the original code). Merging is about the genomic geometry of the final
+    # calls, not which extraction mode produced them, so it now runs whenever
+    # requested regardless of ptd_mode -- this is also what lets it clean up
+    # near-duplicate back-edges the graph engine may emit for the same event.
+    if (merge_ptd_intervals && nrow(final_df) > 0) {
       keep <- which(!is.na(final_df$Length) & final_df$Length >= min_ptd_length)
       skip <- setdiff(seq_len(nrow(final_df)), keep)   # rows NOT eligible for merging
       if (length(keep) >= 2) {
@@ -544,21 +649,34 @@ detect_itd <- function(
         )
         merged_gr <- GenomicRanges::reduce(gr, min.gapwidth = merge_gap)
         if (length(merged_gr) > 0) {
+          # Map each eligible row (gr[j], i.e. original row keep[j]) to the
+          # merged interval it falls inside, so every stat below is
+          # aggregated from the rows that actually belong to THIS group --
+          # not from `keep` as a whole. The previous version used the global
+          # `keep` set (and the globally-leftmost row as `template`) for
+          # every output group, which is why all 3 KMT2A fragments came out
+          # with identical SupportingReads/WildtypeReads/StrandBias/MAPQ/PE
+          # figures regardless of which fragment they represented.
+          hits <- GenomicRanges::findOverlaps(gr, merged_gr)
+          group_of <- integer(length(gr))
+          group_of[S4Vectors::queryHits(hits)] <- S4Vectors::subjectHits(hits)
+          
           merged_rows <- lapply(seq_along(merged_gr), function(i) {
+            grp_keep <- keep[group_of == i]   # rows belonging to THIS merged interval only
+            
             mg_start <- GenomicRanges::start(merged_gr[i])
-            mg_end   <- GenomicRanges::end(merged_gr[i])
             mg_len   <- GenomicRanges::width(merged_gr[i])
-
-            tmpl_idx <- keep[which.min(final_df$GenomicPosition[keep])]
+            
+            tmpl_idx <- grp_keep[which.min(final_df$GenomicPosition[grp_keep])]
             template <- final_df[tmpl_idx, ]
-
+            
             template$GenomicPosition  <- mg_start
             template$Length           <- mg_len
             template$ITD_Sequence     <- NA_character_
             template$HGVS_cDNA        <- NA_character_
             template$HGVS_Protein     <- NA_character_
-            template$SupportingReads  <- sum(final_df$SupportingReads[keep], na.rm = TRUE)
-            template$WildtypeReads    <- sum(final_df$WildtypeReads[keep],   na.rm = TRUE)
+            template$SupportingReads  <- sum(final_df$SupportingReads[grp_keep], na.rm = TRUE)
+            template$WildtypeReads    <- sum(final_df$WildtypeReads[grp_keep],   na.rm = TRUE)
             template$DepthAtBreakpoint <- template$SupportingReads + template$WildtypeReads
             template$AlleleFrequency  <- if (template$DepthAtBreakpoint > 0L)
               template$SupportingReads / template$DepthAtBreakpoint else NA_real_
@@ -576,6 +694,32 @@ detect_itd <- function(
             template$RightSoftclipPctSupport <- NA_real_
             template$LeftSoftclipPctWT    <- NA_real_
             template$RightSoftclipPctWT   <- NA_real_
+            # LengthPE/LengthExt are local, breakpoint-specific extension
+            # estimates; like ITD_Sequence/HGVS above they don't have one
+            # clean meaning once several fragments are pooled into a wider
+            # span, so they're nulled rather than left showing one
+            # fragment's stale value across every merged row.
+            template$LengthPE            <- NA_real_
+            template$LengthPE_NSpanning  <- NA_integer_
+            template$LengthExt           <- NA_integer_
+            # These ARE meaningful pooled across the group's real supporting
+            # reads, so aggregate them properly instead of inheriting
+            # whichever single row happened to be picked as `template`.
+            template$StrandBias          <- round(mean(final_df$StrandBias[grp_keep], na.rm = TRUE), 4)
+            template$MeanSupportMAPQ     <- round(mean(final_df$MeanSupportMAPQ[grp_keep], na.rm = TRUE), 1)
+            template$PESoftclipSupport   <- sum(final_df$PESoftclipSupport[grp_keep], na.rm = TRUE)
+            template$PESoftclipEventPairs <- sum(final_df$PESoftclipEventPairs[grp_keep], na.rm = TRUE)
+            template$PESoftclipLongPairs <- sum(final_df$PESoftclipLongPairs[grp_keep], na.rm = TRUE)
+            template$PEOrientationFR     <- sum(final_df$PEOrientationFR[grp_keep], na.rm = TRUE)
+            template$PEOrientationRF     <- sum(final_df$PEOrientationRF[grp_keep], na.rm = TRUE)
+            template$PEOrientationFF     <- sum(final_df$PEOrientationFF[grp_keep], na.rm = TRUE)
+            template$PEOrientationRR     <- sum(final_df$PEOrientationRR[grp_keep], na.rm = TRUE)
+            template$PEOrientationOther  <- sum(final_df$PEOrientationOther[grp_keep], na.rm = TRUE)
+            pe_counts <- c(FR = template$PEOrientationFR, RF = template$PEOrientationRF,
+                          FF = template$PEOrientationFF, RR = template$PEOrientationRR,
+                          Other = template$PEOrientationOther)
+            template$PEOrientationDominant <- if (all(pe_counts == 0)) NA_character_
+                                              else names(pe_counts)[which.max(pe_counts)]
             template$SequenceImputed  <- TRUE
             template$SequencePartial  <- TRUE
             template$SequenceSource   <- "merged_intervals"
@@ -583,6 +727,7 @@ detect_itd <- function(
             template$HotspotName <- NA_character_
             template$Region      <- NA_character_   
             template$ExonNumber  <- NA_integer_
+            template$MergedFromN <- length(grp_keep)
             template
           })
           merged_df <- do.call(rbind, merged_rows)
@@ -621,7 +766,6 @@ detect_itd <- function(
     )
     
     log_msg(sprintf("Analysis completed successfully. %d variant(s) found.", nrow(final_df)))
-    .log_duration(gene_name, sample_name, start_time, verbose)
     return(final_df)
     
   }, error = function(e) {
@@ -631,44 +775,20 @@ detect_itd <- function(
   })
 }
 
-#' TALOS wrapper with automatic exon fetching
-#' @param bam_path BAM file context path.
-#' @param gene Gene symbol (e.g., "FLT3")
-#' @param build "hg19" or "hg38"
-#' @param yaml_path Path to optional YAML config overrides
-#' @param padding Base pairs mapped on bounds (default 500L).
-#' @param compute_discordant_ratio Boolean: whether to compute discordant pair metric (default TRUE).
-#' @param add_config_to_report Include config in plots/HTML report
-#' @param max_pairwise_alignments Limit maximum sequences for robust alignment matching
-#' @param output_prefix Base name prefix (default "TALOS")
-#' @param include_sample Include sample name in filenames
-#' @param include_gene Include gene name in filenames
-#' @param include_timestamp Include timestamp in filenames
-#' @param output_sep Separator for filename parts
-#' @param global_log Write all logs to a single file
-#' @param min_side_softclip_reads Minimum number of reads with soft‑clip on each side (default 0, i.e. disabled).
-#' @param max_side_ratio Maximum ratio of left/right soft‑clip counts before filtering (default 10).
-#' @param min_softclip_pct_side Minimum percentage of supporting reads with soft‑clip on each side (default 0, i.e. disabled).
-#' @param min_left_softclip_pct_wt Minimum percentage of wildtype reads with left soft‑clip (default 0, i.e. disabled).
-#' @param min_right_softclip_pct_wt Minimum percentage of wildtype reads with right soft‑clip (default 0, i.e. disabled).
-#' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 0, i.e. disabled).
-#' @param max_itd_length Maximum duplication length to consider as ITD; longer duplications are automatically converted to PTD (zero length) if \code{convert_long_to_ptd} is TRUE (default 1000).
-#' @param convert_long_to_ptd If TRUE, duplications longer than \code{max_itd_length} are reported as PTDs (length 0). If FALSE, they are skipped (default TRUE).
-#' @param min_length Minimum duplication length to report (default NULL, no lower bound).  
-#' @param max_length Maximum duplication length to report (default NULL, no upper bound).  
-#' @param use_kmers Enable k-mer based analysis (default TRUE).
-#' @param exon_padding Number of flanking exons to add to the genomic window (default 0).
-#' @param prefer_extended_length If TRUE, use extension-based length for ITDs longer than read length (default TRUE).
-#' @param ptd_allow_asymmetric Allow PTD detection with soft-clips on only one side (default TRUE).
-#' @param ptd_use_local_assembly Attempt to reconstruct duplication from soft-clips (default TRUE).
-#' @param merge_ptd_intervals If TRUE, merge overlapping/adjacent large duplication intervals into a single PTD call (default FALSE).
-#' @param merge_gap Maximum gap (bp) between intervals to merge (default 500).
-#' @param min_ptd_length Minimum length (bp) for intervals to be considered for merging (default 200).
-#' @param verbose Print progress messages (default TRUE).
-#' @param debug If TRUE, logs full per-candidate metrics (kept or filtered, including
-#'   candidates dropped before metrics were even computed) to the log file. See
-#'   \code{\link{detect_itd}}.
-#' @param ... Extra settings.
+# ============================================================================
+# Helper functions for graph-based PTD assembly (.kde_breakpoint,
+# .build_local_debruijn, .simple_overlap_assembly, .assemble_weighted_consensus)
+# now live ONLY in engine_assembly.R -- this file must be sourced alongside
+# main.R. They were previously duplicated verbatim here, which is a DRY
+# violation (two copies that can silently drift; whichever file happens to
+# be sourced last would silently win).
+# ============================================================================
+
+# ============================================================================
+# TALOS wrapper with automatic exon fetching
+# ============================================================================
+
+#' @rdname detect_itd
 #' @export
 talos <- function(
     bam_path, gene, build = "hg19", padding = 500L,
@@ -712,6 +832,7 @@ talos <- function(
     merge_ptd_intervals = NULL,      
     merge_gap = NULL,                
     min_ptd_length = NULL,           
+    use_exon_graph = NULL,   # NEW
     verbose = TRUE,
     debug = FALSE,
     ...
@@ -753,7 +874,8 @@ talos <- function(
     ptd_use_local_assembly = TRUE,
     merge_ptd_intervals = FALSE,
     merge_gap = 500L,
-    min_ptd_length = 200L
+    min_ptd_length = 200L,
+    use_exon_graph = FALSE
   )
   
   yaml_vals <- config$gene_settings
@@ -775,16 +897,13 @@ talos <- function(
   if (gene == "KMT2A") {
     if (verbose) message("[TALOS] Applying relaxed thresholds for KMT2A PTD detection")
     p$min_support             <- min(p$min_support, 5L)
-    # min_side_softclip_reads and min_abs_side_softclip already default to 0;
-    # min() clamps would be a no-op but are kept for explicitness if a user
-    # overrides those params to a non-zero value.
     p$min_side_softclip_reads <- min(p$min_side_softclip_reads, 10L)
     p$min_abs_side_softclip   <- min(p$min_abs_side_softclip,   10L)
     p$min_coverage_drop       <- min(p$min_coverage_drop, 1.0)
     p$ptd_allow_asymmetric    <- TRUE
-    # Large PTDs span thousands of bp; reads cover only the junctions, so
-    # ITDReadCoverage is structurally low even for real calls. Relax to 10 %.
     p$min_itd_read_coverage   <- min(p$min_itd_read_coverage, 10)
+    # Enable graph mode by default for KMT2A if not explicitly set
+    if (is.null(use_exon_graph)) p$use_exon_graph <- TRUE
   }
   
   if (is.null(config$exons)) config$exons <- config$target_exons
@@ -833,6 +952,7 @@ talos <- function(
     merge_ptd_intervals = p$merge_ptd_intervals,
     merge_gap = p$merge_gap,
     min_ptd_length = p$min_ptd_length,
+    use_exon_graph = p$use_exon_graph,
     verbose = verbose,
     debug = debug,
     ...

@@ -67,8 +67,21 @@ KMT2A:
     max_missing_kmers: 0.8
     min_length: 1000
     merge_ptd_intervals: TRUE
-    merge_gap: 10
+    # Was 10bp -- far smaller than the real gaps between fragments of the
+    # same large PTD (observed ~500-1100bp between breakpoint clusters
+    # spanning multiple exons/introns), so genuinely-single events were
+    # being reported as 2-3 separate rows. 1500bp covers the observed gaps
+    # with margin; revisit if a real sample needs a wider window.
+    merge_gap: 1500
     min_ptd_length: 200
+  # Settings for the exon-graph PTD engine (engine_graph_ptd.R). KMT2A
+  # introns run into the multiple-kb range, so the nearest-exon mapping
+  # needs a much wider cutoff than the 250bp that made sense for a
+  # short-intron gene; buffer_bp controls how far past the gene body the
+  # supplementary-BAM evidence scan looks.
+  graph_settings:
+    max_exon_distance: 5000
+    buffer_bp: 15000
 
 
 BCOR:

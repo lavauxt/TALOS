@@ -33,7 +33,8 @@ Imports:
     Rsamtools,
     S4Vectors,
     yaml,
-    GenomeInfoDbData
+    GenomeInfoDbData,
+    Gviz
 Suggests:
     AnnotationFilter,
     BiocManager,
@@ -49,7 +50,6 @@ Suggests:
     ensembldb,
     fastmatch,
     gridExtra,
-    Gviz,
     htmlwidgets,
     knitr,
     plotly,
