@@ -2,6 +2,7 @@
 % Please edit documentation in R/main.R
 \name{detect_itd}
 \alias{detect_itd}
+\alias{talos}
 \title{Detect ITDs/PTDs using the TALOS Algorithm}
 \usage{
 detect_itd(
@@ -84,6 +85,87 @@ detect_itd(
   merge_ptd_intervals = FALSE,
   merge_gap = 500L,
   min_ptd_length = 200L,
+  use_exon_graph = FALSE,
+  ...
+)
+
+talos(
+  bam_path,
+  gene,
+  build = "hg19",
+  padding = 500L,
+  min_support = NULL,
+  min_size = NULL,
+  max_correction = NULL,
+  max_missing_kmers = NULL,
+  plot = TRUE,
+  sample_name = NULL,
+  filter_intronic = NULL,
+  ptd_mode = NULL,
+  use_cigar_bp = NULL,
+  refine_bp = NULL,
+  min_mapq = NULL,
+  min_wt_reads = NULL,
+  cluster_tolerance = NULL,
+  vaf_threshold = NULL,
+  min_strand_bias = NULL,
+  max_strand_bias = NULL,
+  min_mean_support_mapq = NULL,
+  max_breakpoint_spread = NULL,
+  min_softclip_fraction = NULL,
+  min_unique_breakpoints = NULL,
+  min_coverage_drop = NULL,
+  coverage_window = NULL,
+  min_microhomology = NULL,
+  min_discordant_ratio = NULL,
+  min_entropy = NULL,
+  min_alignment_score = NULL,
+  detect_orientation = NULL,
+  do_annotate_hotspots = NULL,
+  hotspot_db_path = NULL,
+  compute_alignment_score = TRUE,
+  compute_support_bases = TRUE,
+  compute_consistency = TRUE,
+  compute_itd_coverage = TRUE,
+  compute_coverage_drop = TRUE,
+  compute_microhomology = TRUE,
+  compute_repeat_entropy = TRUE,
+  compute_discordant_ratio = TRUE,
+  compute_hgvs = TRUE,
+  min_itd_read_coverage = NULL,
+  html_report = NULL,
+  use_gviz = NULL,
+  bsgenome = NULL,
+  yaml_path = system.file("extdata", "gene_config.yaml", package = "TALOS"),
+  add_config_to_report = FALSE,
+  max_pairwise_alignments = NULL,
+  output_prefix = "TALOS",
+  include_sample = TRUE,
+  include_gene = TRUE,
+  include_timestamp = TRUE,
+  output_sep = "_",
+  global_log = TRUE,
+  min_side_softclip_reads = NULL,
+  max_side_ratio = NULL,
+  min_softclip_pct_side = NULL,
+  min_left_softclip_pct_wt = NULL,
+  min_right_softclip_pct_wt = NULL,
+  min_abs_side_softclip = NULL,
+  max_itd_length = NULL,
+  convert_long_to_ptd = NULL,
+  min_length = NULL,
+  max_length = NULL,
+  use_kmers = TRUE,
+  exon_padding = 0L,
+  prefer_extended_length = NULL,
+  ptd_allow_asymmetric = NULL,
+  ptd_use_local_assembly = NULL,
+  merge_ptd_intervals = NULL,
+  merge_gap = NULL,
+  min_ptd_length = NULL,
+  use_exon_graph = NULL,
+  verbose = TRUE,
+  debug = FALSE,
   ...
 )
 }
@@ -116,9 +198,9 @@ detect_itd(
 
 \item{verbose}{Logging enabled.}
 
-\item{debug}{Debug info.}
+\item{debug}{If TRUE, writes one line per candidate cluster.}
 
-\item{nominal_read_len}{Assumed length.}
+\item{nominal_read_len}{Assumed read length.}
 
 \item{max_correction}{Size-bias correction cap.}
 
@@ -245,6 +327,13 @@ as the primary call. Default TRUE.}
 \item{merge_gap}{Maximum gap (bp) between intervals to merge (default 500).}
 
 \item{min_ptd_length}{Minimum length (bp) for intervals to be considered for merging (default 200).}
+
+\item{use_exon_graph}{If TRUE, additionally run the directed exon-graph PTD
+reconstruction (requires exon annotations in gene_config$all_exons).
+Graph-derived candidates supplement rather than replace the legacy
+candidate extraction below; the two are combined and reconciled by
+the merge_ptd_intervals step. No longer requires ptd_mode=TRUE.
+Default FALSE.}
 
 \item{...}{Other parameters passed to the underlying engine.}
 

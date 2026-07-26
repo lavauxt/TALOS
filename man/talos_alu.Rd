@@ -83,7 +83,7 @@ data.frame of ALU insertions (invisibly).
 \description{
 Calls \code{\link{get_gene_config}} then \code{\link{detect_alu}}.
 Gene-specific ALU settings can be provided in \code{gene_config.yaml}
-under a \code{gene_settings:} block with keys:
+under an \code{alu_settings:} block with keys:
   \code{min_support}, \code{min_alu_score}, \code{min_clip_len},
-  \code{cluster_tolerance}, \code{min_tsd}.
+  \code{min_mapq}, \code{cluster_tolerance}, \code{vaf_threshold}, \code{min_tsd}.
 }
