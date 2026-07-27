@@ -403,6 +403,7 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
                "Supporting Reads", "Wildtype Reads", "Depth at Breakpoint", "HGVS cDNA", "HGVS Protein", 
                "Region", "Exon Number", "Orientation", "Hotspot", "Strand Bias", "Mean MAPQ", 
                "Support Consistency", "RefMatch (%)", "ITD Read Coverage (%)", "Sequence Source",
+               "Merged From N Fragment(s)",
                "Left Softclip Count", "Right Softclip Count", "Left Softclip % (Support)", "Right Softclip % (Support)",
                "Left Softclip % (WT)", "Right Softclip % (WT)",
                "PE Softclip Support", "PE Event-size Pairs", "PE Long-span Pairs", "PE Orientation"),
@@ -432,8 +433,22 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
       ifelse(is.na(row$RefMatch_Observed), "N/A", paste0(round(row$RefMatch_Observed, 1), "%")), 
       ifelse(is.na(row$ITDReadCoverage), "N/A", paste0(round(row$ITDReadCoverage, 1), "%")), 
       ifelse(is.na(row$SequenceSource), "N/A", row$SequenceSource),
-      ifelse(is.na(row$LeftSoftclipCount), "0", as.character(row$LeftSoftclipCount)),
-      ifelse(is.na(row$RightSoftclipCount), "0", as.character(row$RightSoftclipCount)),
+      {
+        n_merged <- if (is.null(row$MergedFromN) || is.na(row$MergedFromN)) 1L else as.integer(row$MergedFromN)
+        flagged  <- isTRUE(row$MergeFragmentWarning)
+        if (n_merged <= 1L) "1 (not merged)"
+        else sprintf("%d%s", n_merged, if (flagged) " (!! unusually high !!)" else "")
+      },
+      # NOTE: these were previously displayed as "0" whenever NA, which
+      # misrepresented "not computed for this row" (e.g. a genuinely
+      # ambiguous multi-fragment merge, prior to the merge-aggregation fix)
+      # as "confirmed zero soft-clip reads". Softclip counts are always a
+      # real (possibly zero) integer for any non-merged call, and are now
+      # summed rather than nulled for merged calls too, so NA should no
+      # longer occur in practice -- but if it ever does, "N/A" is the
+      # honest label, matching every sibling field in this table.
+      ifelse(is.na(row$LeftSoftclipCount), "N/A", as.character(row$LeftSoftclipCount)),
+      ifelse(is.na(row$RightSoftclipCount), "N/A", as.character(row$RightSoftclipCount)),
       ifelse(is.na(row$LeftSoftclipPctSupport), "N/A", sprintf("%.1f", row$LeftSoftclipPctSupport)),
       ifelse(is.na(row$RightSoftclipPctSupport), "N/A", sprintf("%.1f", row$RightSoftclipPctSupport)),
       ifelse(is.na(row$LeftSoftclipPctWT), "N/A", sprintf("%.1f", row$LeftSoftclipPctWT)),

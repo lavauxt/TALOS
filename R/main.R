@@ -94,6 +94,14 @@
 #' @param merge_ptd_intervals If TRUE, merge overlapping/adjacent large duplication intervals into a single PTD call (default FALSE).
 #' @param merge_gap Maximum gap (bp) between intervals to merge (default 500).
 #' @param min_ptd_length Minimum length (bp) for intervals to be considered for merging (default 200).
+#' @param max_plausible_fragments If a merged interval pools more than this many
+#'        eligible fragments, it is flagged (\code{MergeFragmentWarning = TRUE})
+#'        rather than silently reported at full confidence: a single true PTD
+#'        has historically fragmented into at most ~2-3 rows pre-merge, so a
+#'        larger pool is more consistent with independent scattered signal
+#'        (e.g. repeat-driven misalignment) getting merged by genomic
+#'        proximity alone. Informational only -- does not remove rows from
+#'        the result. Default 4.
 #' @param use_exon_graph If TRUE, additionally run the directed exon-graph PTD
 #'        reconstruction (requires exon annotations in gene_config$all_exons).
 #'        Graph-derived candidates supplement rather than replace the legacy
@@ -142,6 +150,7 @@ detect_itd <- function(
     merge_ptd_intervals = FALSE,      
     merge_gap = 500L,                 
     min_ptd_length = 200L,
+    max_plausible_fragments = 4L,
     use_exon_graph = FALSE,   # <--- NEW PARAMETER
     ...
 ) {
@@ -440,7 +449,25 @@ detect_itd <- function(
           
           # Find all original candidate rows that support this refined cluster
           support_read_names <- rcl_reads$read_name
-          support_rows <- bp_df[bp_df$read_name %in% support_read_names, ]
+          # BUGFIX: previously this matched by read_name alone, with no check
+          # that the matched bp_df row was actually near median_bp. A read
+          # whose QNAME had a SEPARATE candidate entry somewhere else in the
+          # captured region (e.g. its own unrelated softclip/jump candidate
+          # from a completely different breakpoint) was pulled into THIS
+          # cluster's support_rows purely because the name matched -- even
+          # though every downstream metric computed from support_rows
+          # (softclip side counts, extracted ITD sequence, strand bias,
+          # MAPQ, and especially BreakpointSpread) implicitly assumes every
+          # row is local evidence for median_bp. In practice this showed up
+          # as BreakpointSpread of 10-16kb on single, unmerged clusters in a
+          # ~20kb gene body -- i.e. reads from opposite ends of the capture
+          # window being silently pooled into one breakpoint's support.
+          # Requiring the same proximity check already used for `additional`
+          # below closes the gap; genuine within-cluster reads still pass it
+          # since their pre-refinement breakpoint is already close to
+          # median_bp by construction.
+          support_rows <- bp_df[bp_df$read_name %in% support_read_names &
+                                abs(bp_df$breakpoint - median_bp) <= cluster_tolerance, ]
           # Also include any other reads whose original breakpoint is within tolerance of median_bp
           additional <- bp_df[abs(bp_df$breakpoint - median_bp) <= cluster_tolerance & 
                               !(bp_df$read_name %in% support_read_names), ]
@@ -622,6 +649,22 @@ detect_itd <- function(
     
     final_df <- do.call(rbind, lapply(results, function(x) as.data.frame(x, stringsAsFactors = FALSE)))
     final_df$MergedFromN <- 1L   # overwritten below for rows produced by interval merging
+    final_df$MergeFragmentWarning <- FALSE   # overwritten below for rows produced by interval merging
+    # Hotspot/HotspotName/Region/ExonNumber aren't populated for real until
+    # annotate_hotspots()/.annotate_exonic_region() run further down (they
+    # operate on the full final_df, merged and un-merged rows alike). But
+    # the merge block below sets placeholder values on ITS rows before that
+    # point -- if these columns don't exist on every row yet, that only adds
+    # them to SOME rows (whichever ones pass through the merge lapply, and
+    # even then only the multi-fragment ones under the current n_members>1
+    # guard), so a later rbind against a row that never got these columns
+    # (a singleton merge-group row, or a `skip` row that never entered the
+    # merge block at all) fails with "numbers of columns... do not match".
+    # Defining them uniformly here, before either rbind, closes that gap.
+    final_df$Hotspot     <- FALSE
+    final_df$HotspotName <- NA_character_
+    final_df$Region      <- NA_character_
+    final_df$ExonNumber  <- NA_integer_
     
     # ========== MERGE PTD INTERVALS ==========
     # Merges scattered large-duplication calls (e.g. KMT2A PTD breakpoints detected
@@ -663,6 +706,7 @@ detect_itd <- function(
           
           merged_rows <- lapply(seq_along(merged_gr), function(i) {
             grp_keep <- keep[group_of == i]   # rows belonging to THIS merged interval only
+            n_members <- length(grp_keep)
             
             mg_start <- GenomicRanges::start(merged_gr[i])
             mg_len   <- GenomicRanges::width(merged_gr[i])
@@ -670,43 +714,91 @@ detect_itd <- function(
             tmpl_idx <- grp_keep[which.min(final_df$GenomicPosition[grp_keep])]
             template <- final_df[tmpl_idx, ]
             
+            # Support-weighted mean helper: weights each member by its OWN
+            # (pre-aggregation) SupportingReads, so a fragment backed by
+            # hundreds of reads contributes more to the pooled score than
+            # one barely clearing min_support. With n_members == 1 this is
+            # just that member's own value, so singleton "merges" are
+            # unaffected -- weighting only changes anything once there
+            # really are multiple fragments to reconcile.
+            support_w <- final_df$SupportingReads[grp_keep]
+            support_w[is.na(support_w) | support_w < 0] <- 0
+            wmean <- function(vals, digits = NA_integer_) {
+              ok <- !is.na(vals) & support_w > 0
+              if (!any(ok)) return(NA_real_)
+              out <- stats::weighted.mean(vals[ok], support_w[ok])
+              if (!is.na(digits)) out <- round(out, digits)
+              out
+            }
+            
             template$GenomicPosition  <- mg_start
             template$Length           <- mg_len
-            template$ITD_Sequence     <- NA_character_
-            template$HGVS_cDNA        <- NA_character_
-            template$HGVS_Protein     <- NA_character_
             template$SupportingReads  <- sum(final_df$SupportingReads[grp_keep], na.rm = TRUE)
             template$WildtypeReads    <- sum(final_df$WildtypeReads[grp_keep],   na.rm = TRUE)
             template$DepthAtBreakpoint <- template$SupportingReads + template$WildtypeReads
             template$AlleleFrequency  <- if (template$DepthAtBreakpoint > 0L)
               template$SupportingReads / template$DepthAtBreakpoint else NA_real_
-            template$RefMatch_Observed    <- NA_real_
-            template$RefMatch_Total       <- NA_real_
-            template$ITDReadCoverage      <- NA_real_
-            template$ITDCoverageRLE       <- NA_character_
-            template$SupportConsistency   <- NA_real_
-            template$AlignmentScore       <- NA_real_
-            template$TotalSupportBases    <- NA_integer_
-            template$LeftSoftclipCount    <- NA_integer_
-            template$RightSoftclipCount   <- NA_integer_
-            template$BothSoftclipCount    <- NA_integer_
-            template$LeftSoftclipPctSupport  <- NA_real_
-            template$RightSoftclipPctSupport <- NA_real_
-            template$LeftSoftclipPctWT    <- NA_real_
-            template$RightSoftclipPctWT   <- NA_real_
-            # LengthPE/LengthExt are local, breakpoint-specific extension
-            # estimates; like ITD_Sequence/HGVS above they don't have one
-            # clean meaning once several fragments are pooled into a wider
-            # span, so they're nulled rather than left showing one
-            # fragment's stale value across every merged row.
-            template$LengthPE            <- NA_real_
-            template$LengthPE_NSpanning  <- NA_integer_
-            template$LengthExt           <- NA_integer_
-            # These ARE meaningful pooled across the group's real supporting
-            # reads, so aggregate them properly instead of inheriting
-            # whichever single row happened to be picked as `template`.
-            template$StrandBias          <- round(mean(final_df$StrandBias[grp_keep], na.rm = TRUE), 4)
-            template$MeanSupportMAPQ     <- round(mean(final_df$MeanSupportMAPQ[grp_keep], na.rm = TRUE), 1)
+            
+            # ---- Directly additive counts: sum across members instead of
+            # blanking. These have no cross-fragment ambiguity (unlike a
+            # single "the sequence" or "the HGVS position") -- "how many
+            # total soft-clip bases/reads across every supporting read in
+            # this merged span" is just as well-defined as SupportingReads
+            # itself, which was already being summed above. ----
+            template$TotalSupportBases  <- as.integer(sum(final_df$TotalSupportBases[grp_keep],  na.rm = TRUE))
+            template$LeftSoftclipCount  <- as.integer(sum(final_df$LeftSoftclipCount[grp_keep],   na.rm = TRUE))
+            template$RightSoftclipCount <- as.integer(sum(final_df$RightSoftclipCount[grp_keep],  na.rm = TRUE))
+            template$BothSoftclipCount  <- as.integer(sum(final_df$BothSoftclipCount[grp_keep],   na.rm = TRUE))
+            # Percentages re-derived from the summed counts above rather
+            # than nulled, mirroring exactly how they're computed for a
+            # single (non-merged) candidate in .compute_variant_metrics().
+            template$LeftSoftclipPctSupport  <- if (template$SupportingReads > 0L)
+              template$LeftSoftclipCount  / template$SupportingReads * 100 else NA_real_
+            template$RightSoftclipPctSupport <- if (template$SupportingReads > 0L)
+              template$RightSoftclipCount / template$SupportingReads * 100 else NA_real_
+            template$LeftSoftclipPctWT  <- if (template$WildtypeReads > 0L)
+              template$LeftSoftclipCount  / template$WildtypeReads * 100 else NA_real_
+            template$RightSoftclipPctWT <- if (template$WildtypeReads > 0L)
+              template$RightSoftclipCount / template$WildtypeReads * 100 else NA_real_
+            
+            # ---- Quality/consistency scores: support-weighted mean across
+            # members instead of blanking. These describe "how well does the
+            # supporting evidence match/agree, on average, across this
+            # region" -- a meaningful pooled quantity even without one
+            # canonical sequence, unlike ITD_Sequence/HGVS/LengthPE/LengthExt
+            # below which are tied to a single specific breakpoint. ----
+            template$RefMatch_Observed  <- wmean(final_df$RefMatch_Observed[grp_keep], 1L)
+            template$RefMatch_Total     <- wmean(final_df$RefMatch_Total[grp_keep],    1L)
+            template$ITDReadCoverage    <- wmean(final_df$ITDReadCoverage[grp_keep])
+            template$SupportConsistency <- wmean(final_df$SupportConsistency[grp_keep])
+            template$AlignmentScore     <- wmean(final_df$AlignmentScore[grp_keep])
+            template$StrandBias         <- wmean(final_df$StrandBias[grp_keep], 4L)
+            template$MeanSupportMAPQ    <- wmean(final_df$MeanSupportMAPQ[grp_keep], 1L)
+            
+            # ---- Genuinely single-breakpoint / single-sequence fields:
+            # "the" ITD sequence, HGVS position, PE insert-size estimate, or
+            # extension length only make sense for ONE specific breakpoint.
+            # Only null these when fragments are ACTUALLY being pooled
+            # (n_members > 1); a singleton group (an isolated candidate that
+            # happened to pass through this code path without merging with
+            # anything) has nothing ambiguous about it and should keep every
+            # value .compute_variant_metrics() already computed for it. ----
+            if (n_members > 1L) {
+              template$ITD_Sequence       <- NA_character_
+              template$HGVS_cDNA          <- NA_character_
+              template$HGVS_Protein       <- NA_character_
+              template$ITDCoverageRLE     <- NA_character_
+              template$LengthPE           <- NA_real_
+              template$LengthPE_NSpanning <- NA_integer_
+              template$LengthExt          <- NA_integer_
+              template$SequenceImputed    <- TRUE
+              template$SequencePartial    <- TRUE
+              template$SequenceSource     <- "merged_intervals"
+              template$Hotspot     <- FALSE
+              template$HotspotName <- NA_character_
+              template$Region      <- NA_character_
+              template$ExonNumber  <- NA_integer_
+            }
             template$PESoftclipSupport   <- sum(final_df$PESoftclipSupport[grp_keep], na.rm = TRUE)
             template$PESoftclipEventPairs <- sum(final_df$PESoftclipEventPairs[grp_keep], na.rm = TRUE)
             template$PESoftclipLongPairs <- sum(final_df$PESoftclipLongPairs[grp_keep], na.rm = TRUE)
@@ -720,14 +812,30 @@ detect_itd <- function(
                           Other = template$PEOrientationOther)
             template$PEOrientationDominant <- if (all(pe_counts == 0)) NA_character_
                                               else names(pe_counts)[which.max(pe_counts)]
-            template$SequenceImputed  <- TRUE
-            template$SequencePartial  <- TRUE
-            template$SequenceSource   <- "merged_intervals"
-            template$Hotspot     <- FALSE
-            template$HotspotName <- NA_character_
-            template$Region      <- NA_character_   
-            template$ExonNumber  <- NA_integer_
-            template$MergedFromN <- length(grp_keep)
+            template$MergedFromN <- n_members
+            # ---- Fragment-count plausibility flag ----
+            # A single real PTD has, in practice, fragmented into at most
+            # ~2-3 reported rows before merging (see merge_gap rationale
+            # above). A group merging together many more clusters than that
+            # is more consistent with several independent (often noise-
+            # driven, e.g. repeat/misalignment) breakpoints in the same
+            # neighbourhood getting glued together by genomic proximity
+            # alone than with one true tandem duplication. This is
+            # informational (kept for review), not a hard filter -- tune
+            # max_plausible_fragments and/or convert to a hard exclusion
+            # once a few more positive/negative control samples confirm
+            # where the real cutoff should sit.
+            template$MergeFragmentWarning <- n_members > max_plausible_fragments
+            if (isTRUE(template$MergeFragmentWarning)) {
+              log_msg(sprintf(
+                paste("WARNING: merged interval at %d (length %d bp) pools %d fragments,",
+                      "exceeding max_plausible_fragments=%d. A single true PTD has",
+                      "historically fragmented into at most ~2-3 rows pre-merge, so this",
+                      "many disjoint clusters merging by proximity alone is more consistent",
+                      "with scattered background signal than one real event -- review before",
+                      "reporting. Flagged via MergeFragmentWarning."),
+                mg_start, mg_len, n_members, max_plausible_fragments))
+            }
             template
           })
           merged_df <- do.call(rbind, merged_rows)
@@ -832,6 +940,7 @@ talos <- function(
     merge_ptd_intervals = NULL,      
     merge_gap = NULL,                
     min_ptd_length = NULL,           
+    max_plausible_fragments = NULL,
     use_exon_graph = NULL,   # NEW
     verbose = TRUE,
     debug = FALSE,
@@ -875,6 +984,7 @@ talos <- function(
     merge_ptd_intervals = FALSE,
     merge_gap = 500L,
     min_ptd_length = 200L,
+    max_plausible_fragments = 4L,
     use_exon_graph = FALSE
   )
   
@@ -952,6 +1062,7 @@ talos <- function(
     merge_ptd_intervals = p$merge_ptd_intervals,
     merge_gap = p$merge_gap,
     min_ptd_length = p$min_ptd_length,
+    max_plausible_fragments = p$max_plausible_fragments,
     use_exon_graph = p$use_exon_graph,
     verbose = verbose,
     debug = debug,

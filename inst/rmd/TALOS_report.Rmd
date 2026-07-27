@@ -262,8 +262,20 @@ if (is.null(result_df) || nrow(result_df) == 0) {
         cat(sprintf("* **RefMatch (%%):** %s\n",      .fmt_pct(row$RefMatch_Observed)))
         cat(sprintf("* **ITD Read Coverage (%%):** %s\n", .fmt_pct(row$ITDReadCoverage)))
         cat(sprintf("* **Sequence Source:** %s\n",    .fmt_na(row$SequenceSource)))
-        cat(sprintf("* **Left Softclip Count:** %s\n",  ifelse(is.na(row$LeftSoftclipCount), "0", as.character(row$LeftSoftclipCount))))
-        cat(sprintf("* **Right Softclip Count:** %s\n", ifelse(is.na(row$RightSoftclipCount), "0", as.character(row$RightSoftclipCount))))
+        {
+          n_merged <- if (is.null(row$MergedFromN) || is.na(row$MergedFromN)) 1L else as.integer(row$MergedFromN)
+          flagged  <- isTRUE(row$MergeFragmentWarning)
+          merged_str <- if (n_merged <= 1L) "1 (not merged)"
+                        else sprintf("%d%s", n_merged, if (flagged) " (!! unusually high !!)" else "")
+          cat(sprintf("* **Merged From N Fragment(s):** %s\n", merged_str))
+        }
+        # Softclip counts are a real (possibly zero) integer for any
+        # non-merged call, and are now summed rather than nulled for merged
+        # calls too (see main.R merge-aggregation fix), so NA should no
+        # longer occur here in practice -- "N/A" (not "0") is still the
+        # honest fallback if it ever does, matching every sibling field.
+        cat(sprintf("* **Left Softclip Count:** %s\n",  ifelse(is.na(row$LeftSoftclipCount), "N/A", as.character(row$LeftSoftclipCount))))
+        cat(sprintf("* **Right Softclip Count:** %s\n", ifelse(is.na(row$RightSoftclipCount), "N/A", as.character(row$RightSoftclipCount))))
         cat(sprintf("* **Left Softclip %% (Support):** %s\n",  .fmt_pct_val(row$LeftSoftclipPctSupport)))
         cat(sprintf("* **Right Softclip %% (Support):** %s\n", .fmt_pct_val(row$RightSoftclipPctSupport)))
         cat(sprintf("* **Left Softclip %% (WT):** %s\n",       .fmt_pct_val(row$LeftSoftclipPctWT)))
