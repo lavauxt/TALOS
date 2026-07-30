@@ -75,6 +75,7 @@
   alignment_score_total<- NA_real_
   total_support_bases  <- NA_integer_
   coverage_drop        <- NA_real_
+  local_coverage        <- NA_real_
   median_microhomology <- NA_real_
   repeat_entropy       <- NA_real_
   discordant_ratio     <- NA_real_
@@ -334,6 +335,13 @@
     if (debug && is.na(coverage_drop)) message("Coverage drop: still NA after fallback")
   }
 
+  # ---- Absolute local coverage (no fallback -- see compute_local_coverage) ----
+  if (!is.null(all_reads_cov)) {
+    local_coverage <- compute_local_coverage(all_reads_cov, gene_config$chrom,
+                                             len_specific_bp, buffer = 10L,
+                                             verbose = debug)
+  }
+
   # ---- Microhomology ----
   if (do_microhomology)
     median_microhomology <- compute_microhomology(support_rows, ref_dna,
@@ -433,6 +441,7 @@
     StrandBias = strand_bias, MeanSupportMAPQ = mean_support_mapq,
     BreakpointSpread = bp_spread, SoftclipFraction = softclip_frac,
     UniqueBreakpoints = unique_bps, CoverageDrop = coverage_drop,
+    LocalCoverage = local_coverage,
     MedianMicrohomology = median_microhomology, DiscordantRatio = discordant_ratio,
     RepeatEntropy = repeat_entropy,
     SequenceImputed = imputed, SequencePartial = sequence_partial,
@@ -496,6 +505,7 @@
         metrics$Length > 0L && metrics$Length > max_length)
       return(FALSE)
     if (!is.na(metrics$CoverageDrop)         && metrics$CoverageDrop         < min_coverage_drop)       return(FALSE)
+    if (!is.na(metrics$LocalCoverage)        && metrics$LocalCoverage        < min_local_coverage)      return(FALSE)
     if (!is.na(metrics$MedianMicrohomology)  && metrics$MedianMicrohomology  < min_microhomology)       return(FALSE)
     if (!is.na(metrics$DiscordantRatio)      && metrics$DiscordantRatio      < min_discordant_ratio)    return(FALSE)
     if (!is.na(metrics$RepeatEntropy)        && metrics$RepeatEntropy        < min_entropy)              return(FALSE)
@@ -574,7 +584,7 @@
 .format_candidate_debug <- function(metrics, passed) {
   fields <- c(
     "GenomicPosition", "Length", "LengthExt", "SupportingReads", "WildtypeReads",
-    "DepthAtBreakpoint", "AlleleFrequency", "CoverageDrop", "MedianMicrohomology",
+    "DepthAtBreakpoint", "AlleleFrequency", "CoverageDrop", "LocalCoverage", "MedianMicrohomology",
     "DiscordantRatio", "RepeatEntropy", "StrandBias", "MeanSupportMAPQ",
     "BreakpointSpread", "SoftclipFraction", "UniqueBreakpoints", "ITDReadCoverage",
     "AlignmentScore", "SequenceImputed", "SequencePartial", "ArtifactSuspect",

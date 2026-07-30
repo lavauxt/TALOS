@@ -39,6 +39,7 @@ detect_itd(
   min_softclip_fraction = 0,
   min_unique_breakpoints = 0,
   min_coverage_drop = 1,
+  min_local_coverage = 0,
   coverage_window = 200,
   min_microhomology = 0,
   min_discordant_ratio = 0,
@@ -85,6 +86,7 @@ detect_itd(
   merge_ptd_intervals = FALSE,
   merge_gap = 500L,
   min_ptd_length = 200L,
+  max_plausible_fragments = 4L,
   use_exon_graph = FALSE,
   ...
 )
@@ -115,6 +117,7 @@ talos(
   min_softclip_fraction = NULL,
   min_unique_breakpoints = NULL,
   min_coverage_drop = NULL,
+  min_local_coverage = NULL,
   coverage_window = NULL,
   min_microhomology = NULL,
   min_discordant_ratio = NULL,
@@ -163,6 +166,7 @@ talos(
   merge_ptd_intervals = NULL,
   merge_gap = NULL,
   min_ptd_length = NULL,
+  max_plausible_fragments = NULL,
   use_exon_graph = NULL,
   verbose = TRUE,
   debug = FALSE,
@@ -327,6 +331,15 @@ as the primary call. Default TRUE.}
 \item{merge_gap}{Maximum gap (bp) between intervals to merge (default 500).}
 
 \item{min_ptd_length}{Minimum length (bp) for intervals to be considered for merging (default 200).}
+
+\item{max_plausible_fragments}{If a merged interval pools more than this many
+eligible fragments, it is flagged (\code{MergeFragmentWarning = TRUE})
+rather than silently reported at full confidence: a single true PTD
+has historically fragmented into at most ~2-3 rows pre-merge, so a
+larger pool is more consistent with independent scattered signal
+(e.g. repeat-driven misalignment) getting merged by genomic
+proximity alone. Informational only -- does not remove rows from
+the result. Default 4.}
 
 \item{use_exon_graph}{If TRUE, additionally run the directed exon-graph PTD
 reconstruction (requires exon annotations in gene_config$all_exons).

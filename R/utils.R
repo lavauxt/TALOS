@@ -443,6 +443,50 @@ compute_coverage_drop <- function(cov_all, chrom, breakpoint,
   ratio
 }
 
+# ---------------------------------------------------------------------------
+# Absolute local coverage at a breakpoint, from the real BAM coverage Rle.
+#
+# Deliberately separate from compute_coverage_drop(): that function measures
+# left/right *imbalance* and returns NA (silently bypassing min_coverage_drop
+# in .apply_filters) whenever depth is too low to compute a ratio -- exactly
+# the "no real coverage here" case we most want to catch. This function
+# reports the raw depth instead, and -- unlike compute_coverage_drop()'s
+# caller in .compute_variant_metrics() -- has no fallback to a coverage Rle
+# built from wildtype_info reads. That fallback pools primary reads across
+# the whole gene body (genomic_start:genomic_end) and can look adequately
+# covered even when the true, position-specific BAM coverage is essentially
+# nothing, which is exactly what let 2604112/2510211/2509250-style intronic
+# artifacts read as well-supported. cov_all here should always be the
+# genuine all_reads_cov Rle.
+compute_local_coverage <- function(cov_all, chrom, breakpoint,
+                                    buffer = 10L, verbose = FALSE) {
+  if (is.null(cov_all)) {
+    if (verbose) message("Local coverage: cov_all is NULL")
+    return(NA_real_)
+  }
+
+  if (inherits(cov_all, "Rle") || is.numeric(cov_all)) {
+    cov_rle <- cov_all
+  } else if (chrom %in% names(cov_all)) {
+    cov_rle <- cov_all[[chrom]]
+  } else {
+    if (verbose) message("Local coverage: chrom missing in cov_all list")
+    return(NA_real_)
+  }
+
+  cov_len   <- length(cov_rle)
+  start_pos <- breakpoint - buffer
+  end_pos   <- breakpoint + buffer
+  if (start_pos < 1L || end_pos > cov_len || start_pos > end_pos) {
+    if (verbose) message("Local coverage: window out of range")
+    return(NA_real_)
+  }
+
+  min_cov <- min(as.numeric(cov_rle[start_pos:end_pos]))
+  if (verbose) message("Local coverage (min over bp+/-", buffer, ") = ", min_cov)
+  min_cov
+}
+
 compute_discordant_ratio <- function(all_pairs, breakpoint, flank = 5000,
                                      min_mapq = 20, insert_size_factor = 2.0) {
   if (is.null(all_pairs) || length(all_pairs) == 0) return(NA_real_)
