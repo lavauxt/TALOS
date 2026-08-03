@@ -42,19 +42,14 @@ if (isTRUE(params$has_plotly)) {
 .fmt_na <- function(x)
   ifelse(is.na(x) | x == "", "N/A", as.character(x))
 
-# Some columns (e.g. LeftSoftclipPctSupport) get pre-formatted into "56.4%"
-# strings below for the summary table, while others (e.g. LeftSoftclipPctWT)
-# stay raw numeric. This parses either shape back to one decimal safely,
-# instead of re-running as.numeric() on an already-%-suffixed string (which
-# returns NA and was previously silently displayed as 0).
 .fmt_pct_val <- function(x) {
   v <- suppressWarnings(as.numeric(gsub("%", "", as.character(x))))
   ifelse(is.na(v), "N/A", sprintf("%.1f", v))
 }
 
-# Columns we never show in the summary table (internal / verbose)
 .HIDE_COLS <- c(
   "ITD_Sequence", "ITDCoverageRLE", "SequenceImputed", "SequencePartial",
+  "SupportConsistency", "SpanMeanCoverage",
   # ALU-mode internals
   "ALU_RawScore", "TSD_RawSeq_Left", "TSD_RawSeq_Right"
 )
@@ -77,9 +72,6 @@ if (!is.null(result_df) && nrow(result_df) > 0) {
   if ("PolyALength" %in% colnames(result_df))
     result_df$PolyALength <- .fmt_na(result_df$PolyALength)
 
-  # Genome Build isn't a column of result_df itself -- like the PDF, it comes
-  # from each row's gene config -- so it's derived here and placed right
-  # after Gene for parity with the PDF's per-variant "Genome Build" row.
   if ("Gene" %in% colnames(result_df)) {
     result_df$GenomeBuild <- vapply(result_df$Gene, function(g) {
       cfg <- params$gene_configs[[g]]
@@ -151,22 +143,6 @@ if (is.null(result_df) || nrow(result_df) == 0) {
     cat(sprintf("\n\n### Sample: %s \u2014 %s\n\n", sn, gn))
 
     # ── Interactive plot ──────────────────────────────────────────────────
-    # NB: printing an htmlwidget directly inside a for-loop mixed with cat()
-    # (as opposed to it being the sole, top-level auto-printed value of a
-    # chunk) does not reliably get its JS library picked up by pandoc's
-    # self-contained bundling -- the widget's container div and data get
-    # written out, but the Plotly.js runtime itself silently gets dropped,
-    # so nothing ever renders.
-    #
-    # The fix is NOT to re-bundle the whole ~3-4MB Plotly.js library per
-    # widget (an earlier version of this did that via saveWidget()+iframe,
-    # which is why the report started eating all the RAM/disk with more
-    # than a few variants). Instead, register each widget's dependency
-    # directly into knitr's own metadata store with knit_meta_add() -- this
-    # is the same mechanism the auto-print path uses, it dedupes across
-    # calls, so Plotly.js still only gets embedded ONCE for the whole
-    # document (exactly like jQuery/DataTables already do for the two DT
-    # tables above), no matter how many sample/gene widgets are printed.
     if (isTRUE(params$has_plotly)) {
       key <- paste(sn, gn, sep = "_")
       wgt <- params$plot_widgets[[key]]
@@ -182,8 +158,6 @@ if (is.null(result_df) || nrow(result_df) == 0) {
 
     sub_df <- result_df[result_df$Sample == sn & result_df$Gene == gn, , drop = FALSE]
 
-    # Same lookup plot_talos_report() uses for the PDF's "Genome Build" row --
-    # this isn't a column on result_df itself, it comes from the gene config.
     grp_cfg <- params$gene_configs[[gn]]
     grp_genome_build <- if (is.null(grp_cfg) || is.null(grp_cfg$build) || is.na(grp_cfg$build)) "custom" else as.character(grp_cfg$build)
 
@@ -220,12 +194,6 @@ if (is.null(result_df) || nrow(result_df) == 0) {
         }
       } else {
         # ── ITD-mode header ──────────────────────────────────────────
-        # This list is field-for-field identical to the 32-row "Variant
-        # Summary" table on page 2 of plot_talos_report()'s PDF -- same
-        # metrics, same order, same labels -- so the two reports are
-        # directly comparable. Sample/Gene/Genome Build are repeated here
-        # per variant (as they are per ITD column in the PDF) even though
-        # they're also shown in the section header above.
         hgvs_str <- .fmt_na(row$HGVS_cDNA)
         cat(sprintf("\n\n#### Variant %d: %s\n\n", vi, hgvs_str))
         cat(sprintf("* **Sample:** %s\n",             .fmt_na(sn)))
@@ -246,6 +214,12 @@ if (is.null(result_df) || nrow(result_df) == 0) {
         cat(sprintf("* **Supporting Reads:** %s\n",   .fmt_na(row$SupportingReads)))
         cat(sprintf("* **Wildtype Reads:** %s\n",     .fmt_na(row$WildtypeReads)))
         cat(sprintf("* **Depth at Breakpoint:** %s\n",.fmt_na(row$DepthAtBreakpoint)))
+        cat(sprintf("* **Local Coverage:** %s\n",
+          ifelse(is.null(row$LocalCoverage) || is.na(row$LocalCoverage), "N/A", as.character(row$LocalCoverage))))
+        cat(sprintf("* **Span Min Coverage (bp):** %s\n",
+          ifelse(is.null(row$SpanMinCoverage) || is.na(row$SpanMinCoverage), "N/A", as.character(row$SpanMinCoverage))))
+        cat(sprintf("* **Span Depth Fold Change:** %s\n",
+          ifelse(is.null(row$SpanDepthFoldChange) || is.na(row$SpanDepthFoldChange), "N/A", sprintf("%.2fx", row$SpanDepthFoldChange))))
         cat(sprintf("* **HGVS cDNA:** `%s`\n",        .fmt_na(row$HGVS_cDNA)))
         cat(sprintf("* **HGVS Protein:** `%s`\n",     .fmt_na(row$HGVS_Protein)))
         cat(sprintf("* **Region:** %s\n",             .fmt_na(row$Region)))
@@ -257,8 +231,6 @@ if (is.null(result_df) || nrow(result_df) == 0) {
           ifelse(is.na(row$StrandBias), "N/A", sprintf("%.3f", row$StrandBias))))
         cat(sprintf("* **Mean MAPQ:** %s\n",
           ifelse(is.na(row$MeanSupportMAPQ), "N/A", sprintf("%.1f", row$MeanSupportMAPQ))))
-        cat(sprintf("* **Support Consistency:** %s\n",
-          ifelse(is.na(row$SupportConsistency), "N/A", paste0(round(row$SupportConsistency), "%"))))
         cat(sprintf("* **RefMatch (%%):** %s\n",      .fmt_pct(row$RefMatch_Observed)))
         cat(sprintf("* **ITD Read Coverage (%%):** %s\n", .fmt_pct(row$ITDReadCoverage)))
         cat(sprintf("* **Sequence Source:** %s\n",    .fmt_na(row$SequenceSource)))
@@ -269,11 +241,7 @@ if (is.null(result_df) || nrow(result_df) == 0) {
                         else sprintf("%d%s", n_merged, if (flagged) " (!! unusually high !!)" else "")
           cat(sprintf("* **Merged From N Fragment(s):** %s\n", merged_str))
         }
-        # Softclip counts are a real (possibly zero) integer for any
-        # non-merged call, and are now summed rather than nulled for merged
-        # calls too (see main.R merge-aggregation fix), so NA should no
-        # longer occur here in practice -- "N/A" (not "0") is still the
-        # honest fallback if it ever does, matching every sibling field.
+
         cat(sprintf("* **Left Softclip Count:** %s\n",  ifelse(is.na(row$LeftSoftclipCount), "N/A", as.character(row$LeftSoftclipCount))))
         cat(sprintf("* **Right Softclip Count:** %s\n", ifelse(is.na(row$RightSoftclipCount), "N/A", as.character(row$RightSoftclipCount))))
         cat(sprintf("* **Left Softclip %% (Support):** %s\n",  .fmt_pct_val(row$LeftSoftclipPctSupport)))

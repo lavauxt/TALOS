@@ -1,10 +1,3 @@
-# ============================================================================
-# TALOS – BAM I/O and read pre-filtering
-# ============================================================================
-
-# ---------------------------------------------------------------------------
-# Streaming BAM loader (with optional read-pair pass and coverage)
-# ---------------------------------------------------------------------------
 .load_bam_data_streaming <- function(bam_path, gene_config,
                                       compute_pairs = FALSE,
                                       max_reads = NULL, chunk_size = 50000L,
@@ -63,7 +56,6 @@
                 pairs = NULL, cov_list = NULL))
   }
 
-  # ---- Robust chromosome name normalisation ----
   current_levels <- GenomeInfoDb::seqlevels(all_reads)
   if (!target_chrom %in% current_levels) {
     converted <- GenomeInfoDb::mapSeqlevels(current_levels, "UCSC")
@@ -81,7 +73,6 @@
   cov_rle_list <- GenomicAlignments::coverage(all_reads)
   cov          <- cov_rle_list[[target_chrom]]
 
-  # ---- Optional paired-end pass (for discordant ratio) ----
   pairs <- NULL
   if (compute_pairs) {
     if (verbose) message("[TALOS] Loading read pairs...")
@@ -115,9 +106,6 @@
 }
 
 
-# ---------------------------------------------------------------------------
-# Pre-filter reads: keep only those with soft-clips or net insertions ≥ threshold
-# ---------------------------------------------------------------------------
 .filter_reads_by_cigar <- function(reads, min_mapq, min_ins_filter,
                                     verbose = FALSE) {
   if (verbose) message("[TALOS] Pre-filtering reads: min_mapq=", min_mapq,

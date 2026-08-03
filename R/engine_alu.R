@@ -1,49 +1,3 @@
-# ============================================================================
-# TALOS – ALU/SINE mobile-element insertion detection (engine_alu.R)
-# ============================================================================
-#
-# Code-review notes on the original TALOS codebase (applied here):
-#   [CR-1]  Long functions split into single-responsibility helpers.
-#   [CR-2]  No bare `...` forwarded to rmarkdown::render(); explicit params only.
-#   [CR-3]  KMT2A gene-specific logic kept in gene_config.yaml, not hard-coded.
-#   [CR-4]  `vapply` used instead of `sapply` throughout for type safety.
-#   [CR-5]  Internal helpers prefixed with `.` to avoid NAMESPACE pollution.
-#   [CR-6]  ALU consensus loaded from inst/extdata (FASTA), not embedded as a
-#           string literal, making subtype extension easy.
-#   [CR-7]  TSD and poly-A detection are independent functions, testable in
-#           isolation.
-#
-# Design overview
-# ───────────────
-# An ALU insertion leaves two signals in a targeted sequencing BAM:
-#
-#   A) Two soft-clip clusters at the insertion site whose clipped sequences
-#      match the ALU consensus (5'-end or 3'-end / poly-A tail).
-#   B) Discordant read pairs where one mate aligns normally and the other
-#      maps to an ALU-rich region of the genome.
-#
-# Detection pipeline:
-#   1. Load soft-clipped reads in the target region (.load_bam_data_streaming,
-#      reused from engine_bam.R).
-#   2. Match soft-clips to ALU consensus using local Smith-Waterman alignment
-#      via Biostrings::pairwiseAlignment.
-#   3. Cluster insertion sites within `cluster_tolerance` bp.
-#   4. For each cluster, detect TSD (target-site duplication) and poly-A tail.
-#   5. Apply quality filters (min_support, min_alu_score, …).
-#   6. Report ALU insertions with subtype, orientation, TSD, and poly-A info.
-#
-# Output columns (one row per insertion):
-#   Sample, Gene, Genome, InsertionSite, ALUSubtype, ALUOrientation,
-#   TSD_Length, TSD_Sequence, PolyALength, ALU5pTruncation, ALU_Sequence,
-#   SupportingReads, WildtypeReads, DepthAtBreakpoint, AlleleFrequency,
-#   MeanSupportMAPQ, StrandBias, Hotspot, HotspotName, Region, ExonNumber
-# ============================================================================
-
-
-# ---------------------------------------------------------------------------
-# Section 1: ALU consensus management
-# ---------------------------------------------------------------------------
-
 #' Load ALU consensus sequences from a FASTA file
 #'
 #' Expects a FASTA with entries named after ALU subfamilies, e.g.:
@@ -74,10 +28,6 @@
     stop("Biostrings required for ALU sequence matching.")
   Biostrings::readDNAStringSet(consensus_fa)
 }
-
-# ---------------------------------------------------------------------------
-# Section 2: Soft-clip / ALU alignment
-# ---------------------------------------------------------------------------
 
 #' Match a single soft-clip sequence against all ALU consensus entries
 #'
@@ -110,12 +60,11 @@
     ref <- alu_seqs[[nm]]
     ref_len <- Biostrings::nchar(ref)
 
-    # Forward alignment (sense insertion)
     aln_fwd <- tryCatch(
       Biostrings::pairwiseAlignment(
         clip_dna, ref,
         type            = "local",
-        substitutionMatrix = "BLOSUM62",  # placeholder; use nucleotide matrix
+        substitutionMatrix = "BLOSUM62", 
         gapOpening      = -10,
         gapExtension    = -0.5,
         scoreOnly       = FALSE
@@ -124,7 +73,7 @@
     )
     if (!is.null(aln_fwd)) {
       raw_score <- Biostrings::score(aln_fwd)
-      norm_score <- raw_score / (nchar(clip_seq) * 1.0)  # rough normalisation
+      norm_score <- raw_score / (nchar(clip_seq) * 1.0)  
       if (norm_score > best$score) {
         best <- list(
           subtype   = nm,
@@ -136,7 +85,6 @@
       }
     }
 
-    # Reverse-complement alignment (antisense insertion)
     aln_rev <- tryCatch(
       Biostrings::pairwiseAlignment(
         clip_rc, ref,
@@ -167,9 +115,6 @@
 }
 
 
-# ---------------------------------------------------------------------------
-# Section 3: ALU-specific biological signals
-# ---------------------------------------------------------------------------
 
 #' Detect poly-A tail in a soft-clip sequence
 #'
@@ -188,8 +133,8 @@
     max(attr(m, "match.length"))
   }
 
-  run_a <- count_run("A{4,}", clip_seq)    # sense  poly-A
-  run_t <- count_run("T{4,}", clip_seq)    # antisense poly-T
+  run_a <- count_run("A{4,}", clip_seq)    
+  run_t <- count_run("T{4,}", clip_seq)    
   best  <- max(run_a, run_t)
   if (best < min_run) 0L else as.integer(best)
 }
@@ -228,15 +173,13 @@
   if (is.na(ins_pos) || ins_pos < 1L || ins_pos > ref_len)
     return(list(tsd_len = NA_integer_, tsd_seq = NA_character_))
 
-  # Upstream flank (max_tsd bases ending at ins_pos)
   up_start <- max(1L, ins_pos - max_tsd)
   up_seq   <- substr(ref_dna, up_start, ins_pos)
 
-  # Downstream flank (max_tsd bases starting just after ins_pos)
+
   dn_end  <- min(ref_len, ins_pos + max_tsd)
   dn_seq  <- substr(ref_dna, ins_pos + 1L, dn_end)
 
-  # Longest common prefix of dn_seq and suffix of up_seq
   best_len <- 0L
   for (tlen in seq_len(min(nchar(up_seq), nchar(dn_seq), max_tsd))) {
     up_suffix <- substr(up_seq, nchar(up_seq) - tlen + 1L, nchar(up_seq))
@@ -251,10 +194,6 @@
   list(tsd_len = as.integer(best_len), tsd_seq = tsd_seq)
 }
 
-
-# ---------------------------------------------------------------------------
-# Section 4: Candidate extraction
-# ---------------------------------------------------------------------------
 
 #' Extract ALU-positive soft-clip candidates from a set of reads
 #'
@@ -312,8 +251,6 @@
 
       poly_a <- .detect_poly_a(clip_seq)
 
-      # Genomic insertion position: leading clip → start of alignment;
-      # trailing clip → end of alignment.
       g_pos <- if (side == "lead") read_starts[i] else BiocGenerics::end(reads[i])
       l_pos <- g_pos - genomic_start + 1L
 
@@ -342,10 +279,6 @@
 }
 
 
-# ---------------------------------------------------------------------------
-# Section 5: Cluster summarisation
-# ---------------------------------------------------------------------------
-
 #' Summarise one ALU insertion cluster into a result row
 #'
 #' @param cluster_df  Subset of the candidate data.frame for one cluster.
@@ -359,7 +292,6 @@
                                     wt_info, alu_seqs, min_support = 3L) {
   if (nrow(cluster_df) < min_support) return(NULL)
 
-  # Best-scoring hit within the cluster determines subtype and orientation
   best_idx  <- which.max(cluster_df$alu_score)
   best_hit  <- cluster_df[best_idx, ]
 
@@ -369,20 +301,16 @@
   n_fwd <- sum(!cluster_df$is_reverse)
   n_rev <- sum( cluster_df$is_reverse)
 
-  # ── TSD ─────────────────────────────────────────────────────────────────
   tsd <- .detect_alu_tsd(ref_dna, local_pos)
 
-  # ── Poly-A ──────────────────────────────────────────────────────────────
   poly_a_len <- max(cluster_df$poly_a_len, na.rm = TRUE)
 
-  # ── 5' truncation ───────────────────────────────────────────────────────
   consensus_len <- tryCatch(
     Biostrings::nchar(alu_seqs[[best_hit$alu_subtype]]),
     error = function(e) NA_integer_
   )
   trunc_5p <- .alu_5p_truncation(best_hit$aln_start, consensus_len)
 
-  # ── Wildtype depth ───────────────────────────────────────────────────────
   wt_at_site <- if (!is.null(wt_info$cov) && local_pos >= 1L &&
                       local_pos <= length(wt_info$cov))
     as.integer(wt_info$cov[local_pos])
@@ -392,7 +320,6 @@
   depth      <- n_support + (wt_at_site %||% 0L)
   vaf        <- if (depth > 0L) n_support / depth else NA_real_
 
-  # ── Best clip sequence (longest observed clip for this cluster) ──────────
   clip_lengths <- nchar(cluster_df$clip_seq)
   best_clip    <- cluster_df$clip_seq[which.max(clip_lengths)]
 
@@ -416,11 +343,6 @@
   )
 }
 
-
-# ---------------------------------------------------------------------------
-# Section 6: Quality filters
-# ---------------------------------------------------------------------------
-
 #' Apply ALU-specific output filters to a result row
 #'
 #' @param row           Single-row data.frame from .summarise_alu_cluster.
@@ -438,10 +360,6 @@
     (min_tsd == 0L || isTRUE(!is.na(row$TSD_Length) && row$TSD_Length >= min_tsd))
 }
 
-
-# ---------------------------------------------------------------------------
-# Section 7: Public entry point
-# ---------------------------------------------------------------------------
 
 #' Detect ALU/SINE mobile-element insertions from a BAM file
 #'
@@ -498,7 +416,6 @@ detect_alu <- function(
     message(sprintf("[ALU] Starting detection | Gene: %s | Sample: %s",
                     gene_name, sample_name))
 
-  # ── 1. Load ALU consensus sequences ────────────────────────────────────
   alu_seqs <- tryCatch(
     .load_alu_consensus(consensus_fa),
     error = function(e) {
@@ -509,7 +426,6 @@ detect_alu <- function(
     message(sprintf("[ALU] Loaded %d ALU consensus sequences: %s",
                     length(alu_seqs), paste(names(alu_seqs), collapse = ", ")))
 
-  # ── 2. Load BAM reads ──────────────────────────────────────────────────
   bam_data  <- .load_bam_data_streaming(
     bam_path, gene_config,
     compute_pairs = FALSE,
@@ -523,12 +439,10 @@ detect_alu <- function(
     return(data.frame())
   }
 
-  # ── 3. MAPQ filter ─────────────────────────────────────────────────────
   mapqs <- S4Vectors::mcols(all_reads)$mapq
   mapqs[is.na(mapqs)] <- 0L
   all_reads_for_wt <- all_reads[mapqs >= min_mapq]
 
-  # ── 4. Extract soft-clipped candidates with ALU match ─────────────────
   candidates <- .extract_alu_candidates(
     reads         = all_reads_for_wt,
     alu_seqs      = alu_seqs,
@@ -546,7 +460,6 @@ detect_alu <- function(
     message(sprintf("[ALU] %d ALU-positive clip(s) from %d unique reads.",
                     nrow(candidates), length(unique(candidates$read_name))))
 
-  # ── 5. Cluster insertion sites ─────────────────────────────────────────
   wt_info  <- .prepare_wildtype_info(
     all_reads_for_wt, gene_config$genomic_start, gene_config$genomic_end
   )
@@ -582,12 +495,10 @@ detect_alu <- function(
   final_df$Gene   <- gene_name
   final_df$Genome <- gene_config$build %||% "unknown"
 
-  # Reorder: Sample and Gene first
   col_order <- c("Sample", "Gene", "Genome",
                  setdiff(names(final_df), c("Sample", "Gene", "Genome")))
   final_df  <- final_df[, col_order, drop = FALSE]
 
-  # ── 6. Hotspot annotation ──────────────────────────────────────────────
   if (do_annotate_hotspots) {
     final_df <- annotate_hotspots(
       final_df,
@@ -599,13 +510,11 @@ detect_alu <- function(
     final_df$HotspotName <- NA_character_
   }
 
-  # ── 7. Exon annotation ────────────────────────────────────────────────
   if (!is.null(gene_config$target_exons))
     final_df <- .annotate_exonic_region(final_df,
                                          gene_config$target_exons,
                                          pos_col = "InsertionSite")
 
-  # ── 8. Write outputs ───────────────────────────────────────────────────
   if (!is.null(output_prefix) && nchar(output_prefix) > 0L) {
     timestamp     <- format(Sys.time(), "%Y%m%d_%H%M%S")
     sample_folder <- file.path(output_folder, sample_name)
@@ -636,10 +545,6 @@ detect_alu <- function(
   invisible(final_df)
 }
 
-
-# ---------------------------------------------------------------------------
-# Section 8: talos_alu() – simplified wrapper (mirrors talos())
-# ---------------------------------------------------------------------------
 
 #' Simplified entry point for ALU insertion detection
 #'
@@ -689,7 +594,6 @@ talos_alu <- function(
   config$build <- build
   yaml_vals    <- config$alu_settings %||% list()
 
-  # Hard defaults for ALU detection
   defaults <- list(
     min_support       = 3L,
     min_alu_score     = 0.60,

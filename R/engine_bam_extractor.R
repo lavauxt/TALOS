@@ -1,21 +1,3 @@
-# ==============================================================================
-# TALOS Module: BAM Evidence Extractor for Graph-Based PTD Detection
-# File: R/engine_bam_extractor.R
-# Purpose: Extract split-read (SA tag), discordant-mate, and shadow-read
-#          evidence for the exon-graph PTD reconstruction in
-#          engine_graph_ptd.R.
-#
-# This runs a SECOND, purpose-built BAM scan because the primary loader
-# (.load_bam_data_streaming(), engine_bam.R) explicitly excludes
-# supplementary alignments and does not fetch SA tags -- both of which this
-# module needs. It is only invoked when use_exon_graph=TRUE, so it does not
-# add cost to the default TALOS run path.
-#
-# Uses base data.frame (not data.table) to match the rest of the codebase,
-# and calls Rsamtools/GenomicRanges via `::` rather than attaching them with
-# library(), consistent with the other engine_*.R files.
-# ==============================================================================
-
 #' Build Optimized ScanBamParam for Evidence Extraction
 #' @param gene_config Resolved gene config list from get_gene_config()
 #' @param buffer_bp Flanking window size in base pairs
@@ -33,7 +15,7 @@
   bam_flags <- Rsamtools::scanBamFlag(
     isUnmappedQuery              = FALSE,
     isSecondaryAlignment         = FALSE,
-    isSupplementaryAlignment     = NA,   # keep supplementary alignments (carry SA:Z tags)
+    isSupplementaryAlignment     = NA,  
     isDuplicate                  = FALSE,
     isNotPassingQualityControls  = FALSE
   )
@@ -73,7 +55,7 @@
     stringsAsFactors = FALSE
   )
 
-  # Filter low-MAPQ reads early to reduce downstream work
+
   out[!is.na(out$mapq) & out$mapq >= 10, , drop = FALSE]
 }
 

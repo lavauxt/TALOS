@@ -1,30 +1,12 @@
-# ============================================================================
-# TALOS db_config.R – TxDb cache, transcript fetching, BSgenome loader
-# ============================================================================
-#
-# NOTE — why TxDb.Hsapiens.UCSC.hg19.knownGene fails for NM_ transcripts:
-#   That package stores UCSC "uc001aaa.3"-style IDs as TXNAME, *never* NM_
-#   accessions.  The correct source for RefSeq NM_ IDs is the UCSC "refGene"
-#   track, built on-demand with:
-#     GenomicFeatures::makeTxDbFromUCSC(genome, tablename = "refGene")
-#   The result is cached to disk (SQLite) so the download only runs once.
-#
-# Fetch priority for NM_ transcripts:
-#   1. UCSC refGene TxDb  (disk-cached after first build, ~30 s)
-#   2. biomaRt fallback   (requires network; used when TxDb step fails)
-#
-# Ensembl ENST_ transcripts are unchanged (EnsDb.Hsapiens.v75 / v86).
-# ============================================================================
 
-# ── Manual LRU cache (max 5 entries) – no external dependencies ──────────────
 .lru_cache <- function(max_size = 5L) {
   env <- new.env(parent = emptyenv())
-  order <- character()  # keys in order of use (most recent at end)
+  order <- character()  
 
   list(
     get = function(key) {
       if (exists(key, envir = env, inherits = FALSE)) {
-        # Move to most recent position
+      
         order <<- c(setdiff(order, key), key)
         return(get(key, envir = env))
       }
@@ -49,22 +31,16 @@
   )
 }
 
-# Create caches (max 5 entries each)
+
 .txdb_cache             <- .lru_cache(max_size = 5L)
 .fetch_transcript_cache <- .lru_cache(max_size = 5L)
 .bs_cache               <- .lru_cache(max_size = 5L)
-
-# Helper functions for compatibility (optional)
 .set_cache <- function(cache, key, value) cache$set(key, value)
 .get_cache <- function(cache, key) cache$get(key)
-
-# ── Tiny logging helpers ──────────────────────────────────────────────────────
 .dbg  <- function(...) message(sprintf("[DEBUG] %s", sprintf(...)))
 .wrn  <- function(...) message(sprintf("[WARN]  %s", sprintf(...)))
 .err  <- function(...) stop( sprintf("[ERROR] %s", sprintf(...)), call. = FALSE)
 
-# ── Persistent cache directory ───────────────────────────────────────────────
-# Cache is stored in tools::R_user_dir("TALOS", which = "cache")
 .talos_cache_dir <- function() {
   cache_dir <- tools::R_user_dir("TALOS", which = "cache")
   if (!dir.exists(cache_dir))
@@ -72,28 +48,18 @@
   cache_dir
 }
 
-# ============================================================================
-# 1.  RefSeq TxDb — UCSC refGene track  (NM_ TXNAME keys)
-# ============================================================================
-#
-#  Cache strategy
-#  ─────────────
-#  a) in-memory  (.txdb_cache)          — fastest, lost on restart (LRU)
-#  b) on-disk SQLite  (persistent)      — survives restarts, rebuilt if corrupt
-#  c) build from UCSC live (network)    — one-time, ~30 s per build
-#
+
 .get_refseq_txdb <- function(build) {
 
   cache_key  <- paste0("refGene_", build)
 
-  # a) in-memory hit (LRU)
+
   cached <- .get_cache(.txdb_cache, cache_key)
   if (!is.null(cached)) {
     .dbg("In-memory refGene TxDb hit  [build=%s]", build)
     return(cached)
   }
 
-  # b) on-disk SQLite (persistent cache)
   cache_file <- file.path(.talos_cache_dir(),
                            sprintf("talos_refGene_%s.sqlite", build))
   if (file.exists(cache_file)) {
@@ -111,9 +77,6 @@
     }
   }
 
-  # c) live UCSC download
-  #   In Bioconductor >= 3.16 makeTxDbFromUCSC was moved to the 'txdbmaker'
-  #   package.  Probe both namespaces so older and newer installations work.
   make_info <- local({
     fn <- tryCatch(
       utils::getFromNamespace("makeTxDbFromUCSC", "txdbmaker"),
@@ -153,9 +116,6 @@
   db
 }
 
-# ============================================================================
-# 2.  Ensembl EnsDb loader
-# ============================================================================
 .get_ensdb <- function(build) {
   pkg <- if (build == "hg19") "EnsDb.Hsapiens.v75" else "EnsDb.Hsapiens.v86"
   if (!requireNamespace(pkg, quietly = TRUE))
@@ -163,9 +123,6 @@
   get(pkg, asNamespace(pkg))
 }
 
-# ============================================================================
-# 3.  biomaRt fallback for NM_ transcripts
-# ============================================================================
 .fetch_via_biomart <- function(transcript_id, build,
                                chrom_prefix = getOption("TALOS.chrom_prefix", "chr")) {
 
@@ -177,7 +134,6 @@
 
   .dbg("biomaRt fallback — connecting [build=%s] …", build)
 
-  # Establish Mart connection (prefer useEnsembl, fallback to useMart)
   mart <- tryCatch({
     if (build == "hg19") {
       biomaRt::useEnsembl(
@@ -205,7 +161,6 @@
       .err("biomaRt connection failed: %s", conditionMessage(e2)))
   })
 
-  # ---- Step 1: Get Ensembl transcript ID from RefSeq mRNA ----
   tx_id_df <- biomaRt::getBM(
     attributes = c("refseq_mrna", "ensembl_transcript_id"),
     filters = "refseq_mrna",
@@ -219,7 +174,6 @@
   ensembl_tx_id <- tx_id_df$ensembl_transcript_id[1]
   .dbg("Mapped to Ensembl transcript: %s", ensembl_tx_id)
 
-  # ---- Step 2: Get transcript metadata (chromosome, strand) ----
   meta_df <- biomaRt::getBM(
     attributes = c("ensembl_transcript_id", "chromosome_name", "strand"),
     filters = "ensembl_transcript_id",
@@ -233,7 +187,6 @@
   chrom <- paste0(chrom_prefix, meta_df$chromosome_name[1])
   strand_val <- if (meta_df$strand[1] == 1) "+" else "-"
 
-  # ---- Step 3: Get exon coordinates (using Ensembl transcript ID) ----
   exon_df <- biomaRt::getBM(
     attributes = c("ensembl_transcript_id", "rank",
                    "exon_chrom_start", "exon_chrom_end"),
@@ -247,13 +200,11 @@
   if (nrow(exon_df) == 0)
     .err("No exons found for transcript '%s'.", transcript_id)
 
-  # Remove rows with missing coordinates
   exon_df <- exon_df[!is.na(exon_df$exon_chrom_start) &
                      !is.na(exon_df$exon_chrom_end), ]
   if (nrow(exon_df) == 0)
     .err("All exon coordinates are NA for '%s'.", transcript_id)
 
-  # Sort by rank (transcript order, 5' → 3')
   exon_df <- exon_df[order(exon_df$rank), ]
 
   exons_gr <- GenomicRanges::GRanges(
@@ -265,7 +216,6 @@
     strand = strand_val
   )
 
-  # ---- Step 4: Get CDS coordinates (optional) ----
   cds_gr <- NULL
   cds_df <- tryCatch(
     biomaRt::getBM(
@@ -301,9 +251,6 @@
        chrom = chrom, strand = strand_val, source = "biomaRt")
 }
 
-# ============================================================================
-# 4.  Core transcript fetcher
-# ============================================================================
 .fetch_transcript <- function(transcript_id, gene, build) {
 
   cache_key <- paste(transcript_id, build, sep = "_")
@@ -315,7 +262,6 @@
 
   is_refseq <- startsWith(transcript_id, "NM_")
 
-  # ── A. Ensembl path (ENST*) ────────────────────────────────────────────────
   if (!is_refseq) {
     .dbg("Ensembl path for '%s' [build=%s]", transcript_id, build)
     db <- .get_ensdb(build)
@@ -338,10 +284,8 @@
                                 source = "EnsDb"))
   }
 
-  # ── B. RefSeq path (NM_*) ──────────────────────────────────────────────────
   .dbg("RefSeq path for '%s' [build=%s]", transcript_id, build)
 
-  # B1 — try refGene TxDb
   result <- tryCatch({
 
     db <- .get_refseq_txdb(build)
@@ -352,7 +296,6 @@
     all_txnames <- AnnotationDbi::keys(db, keytype = "TXNAME")
     .dbg("TxDb contains %d TXNAME records", length(all_txnames))
 
-    # Exact match first; then versioned (NM_004119 → NM_004119.4)
     lookup_id <- if (transcript_id %in% all_txnames) {
       .dbg("Exact TXNAME match: '%s'", transcript_id)
       transcript_id
@@ -394,7 +337,6 @@
     NULL
   })
 
-  # B2 — biomaRt fallback
   if (is.null(result)) {
     result <- .fetch_via_biomart(transcript_id, build)
   }
@@ -407,14 +349,10 @@
                        source = result$source)
 }
 
-# ============================================================================
-# 5.  Shared finalize helper — transcript order, CDS offset, cache write
-# ============================================================================
 .finalize_transcript <- function(transcript_id, exons_gr, cds_gr,
                                  chrom, strand_val, cache_key,
                                  source = "unknown") {
 
-  # Sort exons in transcript order (5′ → 3′) and assign 1-based exon_idx
   exons_gr <- if (strand_val == "-") {
     exons_gr[order(BiocGenerics::start(exons_gr), decreasing = TRUE)]
   } else {
@@ -422,7 +360,6 @@
   }
   S4Vectors::mcols(exons_gr)$exon_idx <- seq_along(exons_gr)
 
-  # Calculate CDS offset (bases from transcript start to ATG)
   cds_offset <- 0L
   if (!is.null(cds_gr) && length(cds_gr) > 0) {
     start_codon <- if (strand_val == "+") min(BiocGenerics::start(cds_gr)) else
@@ -456,9 +393,6 @@
   result
 }
 
-# ============================================================================
-# 6.  BSgenome cached loader
-# ============================================================================
 .load_bsgenome_cached <- function(build, bsgenome = NULL) {
   bs_pkg <- if (build == "hg19") "BSgenome.Hsapiens.UCSC.hg19" else
                                  "BSgenome.Hsapiens.UCSC.hg38"
@@ -482,9 +416,6 @@
   bs_obj
 }
 
-# ============================================================================
-# 7.  Optional: dump config to log file  (safe — no sink())
-# ============================================================================
 .dump_config_to_log <- function(gene_config, output_folder,
                                 sample_name, gene_name) {
   log_dir  <- file.path(output_folder, sample_name)
@@ -501,9 +432,6 @@
   invisible(log_file)
 }
 
-# ============================================================================
-# 8.  get_gene_config() — main entry point
-# ============================================================================
 #' Retrieve a fully-resolved gene configuration for TALOS
 #'
 #' @param gene         Target gene name (must match a key in the YAML).
@@ -545,7 +473,6 @@ get_gene_config <- function(
   build_cfg           <- entry[[build]]          # hg19: / hg38: sub-block if present
   user_exons_provided <- !is.null(build_cfg) && !is.null(build_cfg$exons)
 
-  # ── Fetch exon / CDS data ──────────────────────────────────────────────────
   if (use_db && !user_exons_provided) {
 
     if (is.na(transcript_id))
@@ -558,7 +485,6 @@ get_gene_config <- function(
     auto_cds_offset <- res$cds_offset
 
   } else {
-    # Manual / offline mode (exons supplied directly in YAML)
     if (is.null(build_cfg) || is.null(build_cfg$exons))
       stop("Missing '", build, ": exons:' block in YAML and use_db = FALSE.")
 
@@ -566,7 +492,6 @@ get_gene_config <- function(
     strand <- entry$strand %||% "?"
     auto_cds_offset <- as.integer(entry$cds_offset %||% 0L)
 
-    # IMPORTANT: Do NOT reorder manual exons; they are assumed to be in transcript order
     all_exons_gr <- GenomicRanges::GRanges(
       seqnames = chrom,
       ranges   = IRanges::IRanges(
@@ -575,18 +500,15 @@ get_gene_config <- function(
       ),
       strand = strand
     )
-    # Assign exon_idx in the given order (no sorting)
     S4Vectors::mcols(all_exons_gr)$exon_idx <- seq_along(all_exons_gr)
   }
 
-  # ── Subset to targeted exons ───────────────────────────────────────────────
   cds_offset <- as.integer(entry$cds_offset %||% auto_cds_offset)
   targeted   <- as.integer(
     entry$targeted_exons %||% entry$exon_numbers %||% seq_along(all_exons_gr)
   )
   target_exons_gr <- all_exons_gr[S4Vectors::mcols(all_exons_gr)$exon_idx %in% targeted]
 
-  # ── Expand exons if exon_padding > 0 (for genomic window) ───────────────────
   expanded_exons_gr <- target_exons_gr
   if (exon_padding > 0 && length(all_exons_gr) > 0) {
     all_idx <- S4Vectors::mcols(all_exons_gr)$exon_idx
@@ -598,11 +520,9 @@ get_gene_config <- function(
     expanded_exons_gr <- all_exons_gr[keep_idx]
   }
 
-  # ── Genomic window ─────────────────────────────────────────────────────────
   genomic_start <- max(1L, min(GenomicRanges::start(expanded_exons_gr)) - padding)
   genomic_end   <- max(GenomicRanges::end(expanded_exons_gr)) + padding
 
-  # ── Sequence extraction ────────────────────────────────────────────────────
   bs_obj <- .load_bsgenome_cached(build, bsgenome)
 
   gene_region <- GenomicRanges::GRanges(
@@ -619,7 +539,6 @@ get_gene_config <- function(
     )
   rnaseq <- paste(target_seqs, collapse = "")
 
-  # Build full cDNA from all exons (needed for HGVS protein annotation)
   all_exon_seqs <- as.character(BSgenome::getSeq(bs_obj, all_exons_gr))
   if (strand == "-")
     all_exon_seqs <- as.character(
@@ -648,9 +567,6 @@ get_gene_config <- function(
   )
 }
 
-# ============================================================================
-# 9.  save_offline_config() — snapshot a resolved config to YAML
-# ============================================================================
 #' Save a fully-resolved configuration to YAML for offline / reproducible use
 #'
 #' @param gene        Target gene name.

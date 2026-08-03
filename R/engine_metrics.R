@@ -1,10 +1,4 @@
-# ============================================================================
-# TALOS – Variant metrics, VAF computation, and filter application
-# ============================================================================
 
-# ---------------------------------------------------------------------------
-# WT read count spanning the breakpoint (buffer bp on both sides)
-# ---------------------------------------------------------------------------
 .compute_left_right_coverage <- function(wildtype_info, len_specific_bp,
                                           support_qnames, buffer = 10L) {
   strict_idx <- which(
@@ -19,9 +13,6 @@
 }
 
 
-# ---------------------------------------------------------------------------
-# Size-bias corrected VAF and depth
-# ---------------------------------------------------------------------------
 .calculate_vaf_and_depth <- function(raw_support, wildtype_info, len_specific_bp,
                                       support_qnames, best_len,
                                       nominal_read_len, max_correction,
@@ -42,9 +33,6 @@
 }
 
 
-# ---------------------------------------------------------------------------
-# Compute all variant-level metrics for one breakpoint cluster / length group
-# ---------------------------------------------------------------------------
 .compute_variant_metrics <- function(cluster_bps, best_len, support_rows,
                                       genomic_start, ref_dna, gene_config,
                                       all_reads_cov, all_pairs, wildtype_info,
@@ -57,6 +45,7 @@
                                       do_repeat_entropy, do_discordant_ratio,
                                       do_detect_orientation, do_hgvs,
                                       max_pairwise_alignments,
+                                      span_flank = 300L,
                                       length_ext = NA_integer_,
                                       pre_assembled_seq = NA_character_,
                                       debug = FALSE, verbose = FALSE) {
@@ -66,7 +55,6 @@
     paste(range(cluster_bps), collapse = "-"), " length=", best_len
   )
 
-  # ---- Initialise all metric variables to NA ----
   consistency_score    <- NA_real_
   itd_coverage_percent <- NA_real_
   itd_coverage_rle     <- NA_character_
@@ -76,6 +64,9 @@
   total_support_bases  <- NA_integer_
   coverage_drop        <- NA_real_
   local_coverage        <- NA_real_
+  span_min_coverage    <- NA_real_
+  span_mean_coverage   <- NA_real_
+  span_depth_fold_change <- NA_real_
   median_microhomology <- NA_real_
   repeat_entropy       <- NA_real_
   discordant_ratio     <- NA_real_
@@ -98,7 +89,6 @@
   support_qnames  <- unique(support_rows$read_name)
   raw_support     <- length(support_qnames)
 
-  # ---- Soft-clip side counts ----
   left_sc_count  <- 0L; right_sc_count <- 0L; both_sc_count <- 0L
   if (nrow(support_rows) > 0L && !is.null(support_rows$cigar)) {
     for (cig in support_rows$cigar) {
@@ -114,7 +104,6 @@
     }
   }
 
-  # ---- ITD sequence extraction ----
   itd_seq <- NA_character_; imputed <- TRUE; sequence_partial <- FALSE
   observed_seq <- NA_character_; observed_len <- 0L
 
@@ -182,7 +171,6 @@
   }
 
 
-  # ---- Consistency / ITD coverage ----
   if ((do_consistency || do_itd_coverage) &&
       !is.na(itd_seq) && nchar(itd_seq) > 0L && nrow(support_rows) > 0L) {
     valid_mask <- !is.na(support_rows$read_seq) & nchar(support_rows$read_seq) > 0L
@@ -234,7 +222,6 @@
     }
   }
 
-  # ---- Alignment scores ----
   if (do_alignment_score && !is.na(itd_seq) && !is.na(best_len) && best_len > 0L) {
     local_start <- len_specific_bp - genomic_start + 1L
     local_end   <- local_start + best_len - 1L
@@ -261,7 +248,6 @@
     }
   }
 
-  # ---- Support bases (total soft-clip bases) ----
   if (do_support_bases && nrow(support_rows) > 0L) {
     cigars  <- support_rows$cigar; cigars[is.na(cigars)] <- ""
     lead_S  <- as.integer(regmatches(cigars, regexec("^(\\d+)S", cigars)) |>
@@ -271,10 +257,8 @@
     total_support_bases <- sum(lead_S, trail_S, na.rm = TRUE)
   }
 
-  # ---- Minimum support check ----
   if (raw_support < min_support) return(NULL)
 
-  # ---- VAF / depth ----
   vaf_metrics       <- .calculate_vaf_and_depth(
     raw_support, wildtype_info, len_specific_bp, support_qnames,
     best_len, nominal_read_len, max_correction, buffer = 10L
@@ -287,11 +271,9 @@
   if (wildtype_reads < min_wt_reads) return(NULL)
   if (raw_af < vaf_threshold)        return(NULL)
 
-  # ---- WT-relative soft-clip fractions ----
   left_sc_pct_wt  <- if (wildtype_reads > 0L) (left_sc_count  / wildtype_reads) * 100 else NA_real_
   right_sc_pct_wt <- if (wildtype_reads > 0L) (right_sc_count / wildtype_reads) * 100 else NA_real_
 
-  # ---- Read-level diagnostic metrics ----
   strand_bias       <- if (nrow(support_rows) > 0L)
     round(mean(support_rows$is_reverse, na.rm = TRUE), 4) else NA_real_
   mean_support_mapq <- if (nrow(support_rows) > 0L)
@@ -306,7 +288,6 @@
   right_sc_pct_support <- if (corrected_support > 0L)
     (right_sc_count / corrected_support) * 100 else NA_real_
 
-  # ---- Coverage drop ----
   if (do_coverage_drop && !is.na(best_len) && best_len > 0L) {
     cov_ok <- FALSE
     if (!is.null(all_reads_cov)) {
@@ -335,28 +316,35 @@
     if (debug && is.na(coverage_drop)) message("Coverage drop: still NA after fallback")
   }
 
-  # ---- Absolute local coverage (no fallback -- see compute_local_coverage) ----
   if (!is.null(all_reads_cov)) {
     local_coverage <- compute_local_coverage(all_reads_cov, gene_config$chrom,
                                              len_specific_bp, buffer = 10L,
                                              verbose = debug)
   }
 
-  # ---- Microhomology ----
+  if (!is.null(all_reads_cov) && !is.na(best_len) && best_len > 0L) {
+    span_cov <- compute_span_coverage(all_reads_cov, gene_config$chrom,
+                                      len_specific_bp, best_len,
+                                      verbose = debug)
+    span_min_coverage  <- span_cov$min_cov
+    span_mean_coverage <- span_cov$mean_cov
+    span_depth_fold_change <- compute_span_depth_fold_change(
+      all_reads_cov, gene_config$chrom, len_specific_bp, best_len,
+      flank = span_flank, verbose = debug
+    )
+  }
+
   if (do_microhomology)
     median_microhomology <- compute_microhomology(support_rows, ref_dna,
                                                   len_specific_bp, genomic_start,
                                                   debug = debug)
 
-  # ---- Repeat entropy ----
   if (do_repeat_entropy)
     repeat_entropy <- compute_repeat_entropy(ref_dna, len_specific_bp, genomic_start)
 
-  # ---- Discordant ratio ----
   if (do_discordant_ratio && !is.null(all_pairs))
     discordant_ratio <- compute_discordant_ratio(all_pairs, len_specific_bp)
 
-  # ---- Paired-end ITD length estimate (also for PTD mode) ----
   if (!is.null(all_pairs)) {
     pe_est <- compute_pe_itd_length(
       all_pairs, len_specific_bp,
@@ -385,7 +373,6 @@
     pe_orientation_dominant <- pe_sc$pe_orientation_dominant
   }
 
-  # ---- Orientation ----
   if (do_detect_orientation && !is.na(itd_seq) && !is.na(best_len) && best_len > 0L) {
     local_start <- len_specific_bp - genomic_start + 1L
     local_end   <- local_start + best_len - 1L
@@ -394,7 +381,6 @@
                                         substr(ref_dna, local_start, local_end))
   }
 
-  # ---- HGVS ----
   is_exonic <- FALSE
   if (!is.null(gene_config$exons)) {
     bp_gr <- GenomicRanges::GRanges(
@@ -418,10 +404,6 @@
     }
   }
 
-  # ---- Artifact flag: fully-imputed sequence that is self-fulfilling
-  # (imputed from reference then compared against the same reference).
-  # Restored from old code: only flag when fully imputed (not partial
-  # read+ref) and sequence identity is ~100%.
   artifact_suspect <- isTRUE(imputed) && !isTRUE(sequence_partial) &&
                       !is.na(ref_match_total) && ref_match_total >= 99.0
 
@@ -442,6 +424,8 @@
     BreakpointSpread = bp_spread, SoftclipFraction = softclip_frac,
     UniqueBreakpoints = unique_bps, CoverageDrop = coverage_drop,
     LocalCoverage = local_coverage,
+    SpanMinCoverage = span_min_coverage, SpanMeanCoverage = span_mean_coverage,
+    SpanDepthFoldChange = span_depth_fold_change,
     MedianMicrohomology = median_microhomology, DiscordantRatio = discordant_ratio,
     RepeatEntropy = repeat_entropy,
     SequenceImputed = imputed, SequencePartial = sequence_partial,
@@ -475,25 +459,12 @@
 }
 
 
-# ---------------------------------------------------------------------------
-# Apply all hard-threshold filters; returns TRUE if the call should be kept
-# Modified to support asymmetric PTD mode and PTD-specific microhomology check
-# ---------------------------------------------------------------------------
 .apply_filters <- function(metrics, thresholds,
                             min_length = NULL, max_length = NULL,
                             ptd_mode = FALSE, ptd_allow_asymmetric = TRUE) {
   with(thresholds, {
 
-    # ---- Restored from old code: reject self-fulfilling imputed artifacts ----
-    # ArtifactSuspect is TRUE only when sequence was fully imputed from the
-    # reference AND the resulting sequence matches the reference exactly —
-    # i.e. the call is circular evidence of itself.
     if (isTRUE(metrics$ArtifactSuspect)) return(FALSE)
-
-    # ---- Restored from old code: low alignment score (read-derived only) ----
-    # AlignmentScore is NA for imputed sequences; the !is.na() guard means
-    # this filter is bypassed for imputed calls, exactly as in the old code.
-    # Guard additionally for SequenceImputed to be safe under the new metric.
     if (!is.na(metrics$AlignmentScore) &&
         !isTRUE(metrics$SequenceImputed) &&
         metrics$AlignmentScore < min_alignment_score) return(FALSE)
@@ -506,31 +477,26 @@
       return(FALSE)
     if (!is.na(metrics$CoverageDrop)         && metrics$CoverageDrop         < min_coverage_drop)       return(FALSE)
     if (!is.na(metrics$LocalCoverage)        && metrics$LocalCoverage        < min_local_coverage)      return(FALSE)
+    if (!is.na(metrics$SpanMinCoverage)      && metrics$SpanMinCoverage      < min_span_coverage)       return(FALSE)
+    if (!is.na(metrics$SpanDepthFoldChange)  && metrics$SpanDepthFoldChange  < min_span_depth_fold_change) return(FALSE)
+    if (!is.na(metrics$SpanDepthFoldChange)  && metrics$SpanDepthFoldChange  > max_span_depth_fold_change) return(FALSE)
     if (!is.na(metrics$MedianMicrohomology)  && metrics$MedianMicrohomology  < min_microhomology)       return(FALSE)
     if (!is.na(metrics$DiscordantRatio)      && metrics$DiscordantRatio      < min_discordant_ratio)    return(FALSE)
     if (!is.na(metrics$RepeatEntropy)        && metrics$RepeatEntropy        < min_entropy)              return(FALSE)
-    if (!is.na(metrics$StrandBias)           && (metrics$StrandBias < min_strand_bias ||
-                                                  metrics$StrandBias > max_strand_bias))                return(FALSE)
+    if (!is.na(metrics$StrandBias)           && (metrics$StrandBias < min_strand_bias || metrics$StrandBias > max_strand_bias))                return(FALSE)
     if (!is.na(metrics$MeanSupportMAPQ)      && metrics$MeanSupportMAPQ      < min_mean_support_mapq)  return(FALSE)
     if (!is.na(metrics$BreakpointSpread)     && metrics$BreakpointSpread     > max_breakpoint_spread)   return(FALSE)
     if (!is.na(metrics$SoftclipFraction)     && metrics$SoftclipFraction     < min_softclip_fraction)  return(FALSE)
     if (!is.na(metrics$UniqueBreakpoints)    && metrics$UniqueBreakpoints    < min_unique_breakpoints)  return(FALSE)
     if (!is.na(metrics$ITDReadCoverage)      && metrics$ITDReadCoverage      < min_itd_read_coverage)  return(FALSE)
 
-    # NOTE: The broad imputed-length filter (SequenceImputed && Length 41-500)
-    # that was present in the first refactor has been removed. It was not in
-    # the reference (old) code and caused significant sensitivity loss.
-    # Self-fulfilling imputed calls are now caught exclusively by ArtifactSuspect.
 
-    # ---- Soft-clip side filters (ITD vs PTD) ----
     left  <- metrics$LeftSoftclipCount
     right <- metrics$RightSoftclipCount
     if (!is.na(left) && !is.na(right)) {
       if (ptd_mode && ptd_allow_asymmetric) {
-        # PTD asymmetric mode: require at least one side to have sufficient reads
         max_side <- max(left, right)
         if (max_side < min_side_softclip_reads) return(FALSE)
-        # Check dominant side's percentage of support and WT
         if (left >= right) {
           if (!is.na(metrics$LeftSoftclipPctSupport) && metrics$LeftSoftclipPctSupport < min_softclip_pct_side) return(FALSE)
           if (!is.na(metrics$LeftSoftclipPctWT) && metrics$LeftSoftclipPctWT < min_left_softclip_pct_wt) return(FALSE)
@@ -539,19 +505,15 @@
           if (!is.na(metrics$RightSoftclipPctWT) && metrics$RightSoftclipPctWT < min_right_softclip_pct_wt) return(FALSE)
         }
       } else {
-        # Original symmetric ITD/PTD filter
+
         if (left < min_side_softclip_reads || right < min_side_softclip_reads) return(FALSE)
         lw <- metrics$LeftSoftclipPctWT;  rw <- metrics$RightSoftclipPctWT
         if (!is.na(lw) && lw < min_left_softclip_pct_wt)  return(FALSE)
         if (!is.na(rw) && rw < min_right_softclip_pct_wt) return(FALSE)
         if (!is.na(metrics$Length) && metrics$Length > 0L) {
-          # ITD: additional checks already covered
+
         } else {
-          # PTD symmetric (original)
-          # BUGFIX: when both sides are 0, min(left,right)==0 -> 0/0 == NaN,
-          # and `if (NaN > x)` throws "missing value where TRUE/FALSE needed".
-          # Treat "both sides zero support" as a straightforward fail rather
-          # than crashing the whole detection run.
+
           if (max(left, right) == 0L) return(FALSE)
           if (min(left, right) == 0L) return(FALSE)
           if (max(left, right) / min(left, right) > max_side_ratio) return(FALSE)
@@ -566,25 +528,16 @@
   })
 }
 
-# ---------------------------------------------------------------------------
-# Helper: mode of numeric vector (returns most frequent value)
-# ---------------------------------------------------------------------------
 .mode <- function(x) {
   ux <- unique(x)
   ux[which.max(tabulate(match(x, ux)))]
 }
 
-# ---------------------------------------------------------------------------
-# Debug helper: render one candidate's full metrics as a single log line.
-# Called from detect_itd() (main.R) right after .compute_variant_metrics() /
-# .apply_filters(), when debug = TRUE, so that EVERY candidate cluster is
-# written to the log -- not just the ones that survive filtering. This is
-# what lets you see, post-hoc, exactly why a real variant got dropped.
-# ---------------------------------------------------------------------------
 .format_candidate_debug <- function(metrics, passed) {
   fields <- c(
     "GenomicPosition", "Length", "LengthExt", "SupportingReads", "WildtypeReads",
-    "DepthAtBreakpoint", "AlleleFrequency", "CoverageDrop", "LocalCoverage", "MedianMicrohomology",
+    "DepthAtBreakpoint", "AlleleFrequency", "CoverageDrop", "LocalCoverage",
+    "SpanMinCoverage", "SpanMeanCoverage", "SpanDepthFoldChange", "MedianMicrohomology",
     "DiscordantRatio", "RepeatEntropy", "StrandBias", "MeanSupportMAPQ",
     "BreakpointSpread", "SoftclipFraction", "UniqueBreakpoints", "ITDReadCoverage",
     "AlignmentScore", "SequenceImputed", "SequencePartial", "ArtifactSuspect",

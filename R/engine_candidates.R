@@ -1,10 +1,3 @@
-# ============================================================================
-# TALOS – Candidate extraction and breakpoint clustering
-# ============================================================================
-
-# ---------------------------------------------------------------------------
-# Safe query-name extraction
-# ---------------------------------------------------------------------------
 .safe_qnames <- function(reads) {
   qn <- as.character(S4Vectors::mcols(reads)$qname)
   if (length(qn) == 0L || all(is.na(qn))) qn <- names(reads)
@@ -13,10 +6,6 @@
   qn
 }
 
-
-# ---------------------------------------------------------------------------
-# PTD fast path – pure CIGAR soft-clip extraction (no k-mer analysis)
-# ---------------------------------------------------------------------------
 .extract_candidates_ptd <- function(reads, genomic_start, ref_len,
                                      verbose = FALSE) {
   n_reads <- length(reads)
@@ -72,11 +61,7 @@
 }
 
 
-# ---------------------------------------------------------------------------
-# Assemble PTD consensus from soft-clipped sequences (new for PTD improvement)
-# ---------------------------------------------------------------------------
 .assemble_ptd_consensus <- function(support_rows, min_reads = 3L, min_len = 15L) {
-  # Collect all soft-clip sequences (lead and trail)
   soft_seqs <- character()
   for (i in seq_len(nrow(support_rows))) {
     sc <- .get_softclips(support_rows$cigar[i], support_rows$read_seq[i])
@@ -85,13 +70,10 @@
   }
   if (length(soft_seqs) < min_reads) return(NA_character_)
 
-  # Keep only sequences with length >= min_len
   soft_seqs <- soft_seqs[nchar(soft_seqs) >= min_len]
   if (length(soft_seqs) < min_reads) return(NA_character_)
 
-  # Build consensus by taking the most frequent base at each position
   max_len <- max(nchar(soft_seqs))
-  # Pad all to max_len with NAs
   mat <- matrix(NA_character_, nrow = length(soft_seqs), ncol = max_len)
   for (i in seq_along(soft_seqs)) {
     s <- soft_seqs[i]
@@ -107,9 +89,6 @@
 }
 
 
-# ---------------------------------------------------------------------------
-# CIGAR-only candidate extraction (for use_kmers = FALSE)
-# ---------------------------------------------------------------------------
 .extract_candidates_cigar <- function(reads, genomic_start, ref_len,
                                        min_size = 10L, verbose = FALSE) {
   n_reads <- length(reads)
@@ -137,7 +116,6 @@
   has_soft <- if ("S" %in% colnames(op_table)) op_table[, "S"] > 0L else rep(FALSE, n_reads)
 
   for (i in seq_len(n_reads)) {
-    # Insertions (I) – breakpoint at the insertion start
     if (has_ins[i]) {
       local_bp <- read_starts[i] - genomic_start + 1L
       if (local_bp >= 1L && local_bp <= ref_len) {
@@ -150,7 +128,6 @@
         cand_idx <- cand_idx + 1L
       }
     }
-    # Soft‑clips – same as PTD mode
     if (has_soft[i]) {
       lead_clip <- grepl("^\\d+S", read_cigars[i], perl = TRUE)
       trail_clip <- grepl("\\d+S$", read_cigars[i], perl = TRUE)
@@ -185,11 +162,6 @@
 }
 
 
-# ---------------------------------------------------------------------------
-# Anchor‑based ITD size estimation (primary geometry source)
-# Uses sliding seed walking on reference, not k‑mer gaps.
-# Returns a single size estimate (or NA).
-# ---------------------------------------------------------------------------
 .estimate_itd_from_anchors <- function(lead_clip, trail_clip, ref_dna,
                                       orig_bp_local, search_window = 5000L,
                                       min_anchor_len = 20L,
@@ -213,7 +185,6 @@
     paste0(names(top), "x", as.integer(top), collapse = ", ")
   }
 
-  # Left anchor: extend lead soft-clip downstream
   if (!is.na(lead_clip) && nchar(lead_clip) >= min_anchor_len) {
     start_pos <- orig_bp_local + 1L
     end_pos <- min(ref_len, start_pos + search_window - 1L)
@@ -224,7 +195,7 @@
       for (plen in seq(min_anchor_len, max_prefix, by = 2L)) {
         q <- substr(lead_clip, 1L, plen)
         hits <- gregexpr(q, win, fixed = TRUE)[[1L]]
-        if (length(hits) == 0L || hits[1L] == -1L) next
+        if (length(hits) != 1L || hits[1L] == -1L) next
         offsets <- start_pos + hits - 1L - orig_bp_local
         offsets <- offsets[offsets > 0L]
         if (!is.na(kmer_len))
@@ -236,7 +207,6 @@
     }
   }
 
-  # Right anchor: extend trail soft-clip upstream
   if (!is.na(trail_clip) && nchar(trail_clip) >= min_anchor_len) {
     end_pos <- orig_bp_local - 1L
     start_pos <- max(1L, end_pos - search_window + 1L)
@@ -247,7 +217,7 @@
       for (plen in seq(min_anchor_len, max_prefix, by = 2L)) {
         q <- substr(trail_clip, 1L, plen)
         hits <- gregexpr(q, win, fixed = TRUE)[[1L]]
-        if (length(hits) == 0L || hits[1L] == -1L) next
+        if (length(hits) != 1L || hits[1L] == -1L) next
         offsets <- orig_bp_local - (start_pos + hits - 1L)
         offsets <- offsets[offsets > 0L]
         if (!is.na(kmer_len))
@@ -266,10 +236,6 @@
   .collect_mode(candidate_sizes)
 }
 
-# ---------------------------------------------------------------------------
-# k‑mer trace validation (consistency check, not geometry)
-# Returns TRUE if the read's k‑mer pattern is compatible with a duplication.
-# ---------------------------------------------------------------------------
 .validate_kmer_trace <- function(trace, max_missing_kmers = 0.5,
                                  require_backward_jump = FALSE,
                                  k = 11L) {   # k added as parameter
@@ -292,15 +258,12 @@
 }
 
 
-# ---------------------------------------------------------------------------
-# Standard k-mer tracing (backward-jump and missing-block strategies)
-# Uses anchor‑based size when soft‑clips are available, falls back to k‑mer.
-# ---------------------------------------------------------------------------
 .extract_candidates_standard <- function(reads, ref_kmers, ptd_mode, min_size,
                                           max_missing_kmers, refine_bp,
                                           use_cigar_bp, genomic_start, ref_dna,
                                           max_itd_length = 1000L,
                                           convert_long_to_ptd = TRUE,
+                                          search_window = 5000L,
                                           verbose = FALSE) {
   n_reads <- length(reads)
   k       <- nchar(ref_kmers[1L])
@@ -348,10 +311,8 @@
     read_qname <- all_qnames[i]; read_mapq  <- all_mapqs[i]
     read_cigar <- all_cigars[i]; read_start <- all_starts[i]; read_end <- all_ends[i]
 
-    # --- Extract soft‑clips for anchor‑based estimation ---
     sc <- .get_softclips(read_cigar, read_seq)
 
-    # --- Strategy 1: backward jump (direct adjacency) ---
     if (length(trace) >= 2L) {
       for (j in seq(2L, length(trace))) {
         if (trace[j] == -1L || trace[j - 1L] == -1L) next
@@ -374,11 +335,10 @@
               }
               next
             }
-            # Use anchor‑based size if available (primary), else k‑mer size
             anchor_size <- .estimate_itd_from_anchors(
               sc$lead, sc$trail, ref_dna,
               orig_bp_local = pos_after,
-              search_window = 5000L,
+              search_window = search_window,
               kmer_len = dup_len,
               debug_label = paste0(read_qname, " @", pos_after),
               verbose = verbose
@@ -406,7 +366,6 @@
       }
     }
 
-    # --- Strategy 2: missing k-mer block ---
     in_break    <- FALSE
     break_start <- NULL
     for (j in seq_along(trace)) {
@@ -437,11 +396,10 @@
                 in_break <- FALSE
                 next
               }
-              # Anchor‑based size (primary) or fallback
               anchor_size <- .estimate_itd_from_anchors(
                 sc$lead, sc$trail, ref_dna,
                 orig_bp_local = pos_after,
-                search_window = 5000L,
+                search_window = search_window,
                 kmer_len = dup_len,
                 debug_label = paste0(read_qname, " @", pos_after),
                 verbose = verbose
@@ -506,7 +464,6 @@
       }
     }
 
-    # Trailing missing block (PTD trailing soft-clip)
     if (in_break && ptd_mode && break_start > 1L) {
       pos_before <- trace[break_start - 1L]
       if (pos_before != -1L) {
@@ -536,9 +493,6 @@
 }
 
 
-# ---------------------------------------------------------------------------
-# Candidate list → data.frame
-# ---------------------------------------------------------------------------
 .candidates_to_df <- function(candidates, genomic_start) {
   n <- length(candidates)
   if (n == 0L) return(data.frame())
@@ -568,10 +522,6 @@
   )
 }
 
-
-# ---------------------------------------------------------------------------
-# Cluster nearby breakpoints (within cluster_tolerance bp)
-# ---------------------------------------------------------------------------
 .cluster_breakpoints <- function(bp_values, cluster_tolerance) {
   if (length(bp_values) == 0L) return(list())
   bp_sorted <- sort(bp_values)
@@ -590,9 +540,6 @@
 }
 
 
-# ---------------------------------------------------------------------------
-# Prepare wildtype-read info struct (used downstream for VAF / depth)
-# ---------------------------------------------------------------------------
 .prepare_wildtype_info <- function(all_reads, genomic_start, genomic_end) {
   raw_qnames <- .safe_qnames(all_reads)
   all_flags  <- S4Vectors::mcols(all_reads)$flag
@@ -607,9 +554,6 @@
 }
 
 
-# ---------------------------------------------------------------------------
-# In-silico read extension (uses anchor‑based size and fallback)
-# ---------------------------------------------------------------------------
 .extend_candidates <- function(candidates_df, ref_dna, genomic_start,
                                min_size = 15L, search_window = 5000L,
                                verbose = FALSE) {
@@ -630,7 +574,6 @@
     refined_bp <- orig_bp
     orig_bp_local <- orig_bp - genomic_start + 1L
 
-    # Anchor‑based size (primary)
     anchor_size <- .estimate_itd_from_anchors(
       lead_clip = sc$lead,
       trail_clip = sc$trail,
@@ -642,11 +585,12 @@
       verbose = verbose
     )
 
-    # Use anchor size if valid, otherwise fall back to k‑mer length from candidates_df
     if (!is.na(anchor_size) && anchor_size >= min_size) {
       itdsize <- anchor_size
+      itdsize_source <- "anchor"
     } else if (!is.na(row$length) && row$length >= min_size) {
       itdsize <- as.integer(row$length)
+      itdsize_source <- "kmer_fallback"
     } else {
       next
     }
@@ -659,6 +603,7 @@
       breakpoint_original = orig_bp,
       breakpoint_refined  = refined_bp,
       itdsize             = itdsize,
+      itdsize_source      = itdsize_source,
       read_name           = as.character(row$read_name),
       extended            = NA_character_
     )
@@ -679,6 +624,10 @@
       v <- x[["itdsize"]]
       if (is.null(v) || (length(v) == 1L && is.na(v))) NA_integer_ else as.integer(v[1L])
     }, integer(1L)),
+    itdsize_source = vapply(results, function(x) {
+      v <- x[["itdsize_source"]]
+      if (is.null(v) || length(v) == 0L || is.na(v[1L])) NA_character_ else as.character(v[1L])
+    }, character(1L)),
     read_name = vapply(results, function(x) {
       v <- x[["read_name"]]
       if (is.null(v) || length(v) == 0L || is.na(v[1L])) NA_character_ else as.character(v[1L])

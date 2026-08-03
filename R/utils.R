@@ -1,7 +1,3 @@
-# ============================================================================
-# TALOS Utilities
-# ============================================================================
-
 # ── Null-coalescing operator (used throughout the package) ───────────────────
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
@@ -37,9 +33,6 @@
         collapse = "")
 }
 
-# ----------------------------------------------------------------------------
-# Hotspot annotation (Use GenomicRanges for speed)
-# ----------------------------------------------------------------------------
 #' Annotate ITDs with known hotspot information
 #' @param itd_df Data frame with columns \code{Gene}, \code{GenomicPosition}, \code{Length}.
 #' @param db_path Optional path to CSV file (forces CSV mode).
@@ -145,9 +138,6 @@ annotate_hotspots <- function(itd_df, db_path = NULL, genome_build = NULL,
   return(itd_df)
 }
 
-# ----------------------------------------------------------------------------
-# Helper: Annotate exonic/intronic regions
-# ----------------------------------------------------------------------------
 .annotate_exonic_region <- function(final_df, exons_gr) {
   if (is.null(exons_gr) || nrow(final_df) == 0) {
     final_df$Region     <- NA_character_
@@ -184,10 +174,6 @@ annotate_hotspots <- function(itd_df, db_path = NULL, genome_build = NULL,
 }
 
 
-# ----------------------------------------------------------------------------
-# HGVS annotation using full transcript exons and CDS offset
-# Returns list(c_notation = character, p_notation = character)
-# ----------------------------------------------------------------------------
 compute_hgvs_annotations <- function(gene_config, genomic_pos,
                                       dup_seq  = NA_character_,
                                       dup_len  = NA_integer_,
@@ -203,7 +189,6 @@ compute_hgvs_annotations <- function(gene_config, genomic_pos,
     return(list(c_notation = NA_character_, p_notation = NA_character_))
   }
 
-  # ---- Ensure full_cdna is present ----
   full_cdna <- gene_config$full_cdna
   if (is.null(full_cdna) || is.na(full_cdna) || nchar(full_cdna) == 0) {
     if (!is.null(gene_config$all_exons) && !is.null(gene_config$bsgenome_obj)) {
@@ -228,7 +213,6 @@ compute_hgvs_annotations <- function(gene_config, genomic_pos,
     }
   }
 
-  # ---- Resolve duplication length ----
   seq_len <- if (!is.na(dup_seq) && nchar(dup_seq) > 0) nchar(dup_seq) else NA_integer_
   dup_len <- if (!is.na(dup_len) && dup_len > 0) as.integer(dup_len)
              else if (!is.na(seq_len)) seq_len
@@ -236,7 +220,6 @@ compute_hgvs_annotations <- function(gene_config, genomic_pos,
   if (is.na(dup_len) || dup_len == 0L)
     return(list(c_notation = NA_character_, p_notation = NA_character_))
 
-  # ---- Exon structure (full transcript) ----
   exons_gr <- gene_config$all_exons
   if (is.null(exons_gr) || length(exons_gr) == 0)
     return(list(c_notation = NA_character_, p_notation = NA_character_))
@@ -267,7 +250,6 @@ compute_hgvs_annotations <- function(gene_config, genomic_pos,
   genomic_end <- if (strand == "+") genomic_pos + dup_len - 1L
                  else               genomic_pos - dup_len + 1L
 
-  # ---- Helper to map a single genomic position to HGVS c. string ----
   .genomic_to_cdna_hgvs <- function(pos, exons_df, strand, cds_offset) {
 
     exon_hit <- which(exons_df$start <= pos & exons_df$end >= pos)
@@ -318,16 +300,14 @@ compute_hgvs_annotations <- function(gene_config, genomic_pos,
   end_notation   <- .genomic_to_cdna_hgvs(genomic_end,  exons_df, strand, cds_offset)
 
   if (is.na(start_notation) || is.na(end_notation)) {
-    # If the breakpoint is intronic, return a more informative placeholder
+
     return(list(c_notation = "c.?+?", p_notation = "intronic"))
   }
 
   c_notation <- paste0("c.", start_notation, "_", end_notation, "dup")
 
-  # ---- Protein notation ----
   p_notation <- NA_character_
-  # Only attempt if the duplication lies within the coding sequence
-  if (!is.na(c_notation) &&
+   if (!is.na(c_notation) &&
       !is.na(dup_len) && !is.na(full_cdna) && nchar(full_cdna) > cds_offset + 3L) {
 
     coding_seq <- substr(full_cdna, cds_offset + 1L, nchar(full_cdna))
@@ -342,14 +322,11 @@ compute_hgvs_annotations <- function(gene_config, genomic_pos,
         dup_cds <- substr(coding_seq, c_start, c_end)
 
         if (nchar(dup_cds) >= 3L) {
-          # Truncate to codon boundary for translation
           trim_len <- nchar(dup_cds) - (nchar(dup_cds) %% 3L)
 
-          # Amino acid positions (1-based)
           aa_start_pos <- ceiling(c_start / 3L)
           aa_end_pos   <- ceiling(c_end   / 3L)
 
-          # Translate the full coding sequence to get AA identities
           cds_trim <- substr(coding_seq, 1L,
                              nchar(coding_seq) - nchar(coding_seq) %% 3L)
           if (nchar(cds_trim) >= 3L) {
@@ -377,10 +354,8 @@ compute_hgvs_annotations <- function(gene_config, genomic_pos,
     }
   }
 
-  # If still NA and the variant is intronic, set to "intronic"
+
   if (is.na(p_notation)) {
-    # Check if breakpoint is exonic (we would need exons_gr, but we can guess from start_notation)
-    # If start_notation contains '+' or '-', it's intronic
     if (grepl("[+-]", start_notation)) {
       p_notation <- "intronic"
     }
@@ -390,9 +365,6 @@ compute_hgvs_annotations <- function(gene_config, genomic_pos,
 }
 
 
-# ----------------------------------------------------------------------------
-# Metrics helpers (unchanged)
-# ----------------------------------------------------------------------------
 compute_coverage_drop <- function(cov_all, chrom, breakpoint,
                                    flank = 200, min_depth = 5, 
                                    min_flank_bp = 5,
@@ -443,21 +415,6 @@ compute_coverage_drop <- function(cov_all, chrom, breakpoint,
   ratio
 }
 
-# ---------------------------------------------------------------------------
-# Absolute local coverage at a breakpoint, from the real BAM coverage Rle.
-#
-# Deliberately separate from compute_coverage_drop(): that function measures
-# left/right *imbalance* and returns NA (silently bypassing min_coverage_drop
-# in .apply_filters) whenever depth is too low to compute a ratio -- exactly
-# the "no real coverage here" case we most want to catch. This function
-# reports the raw depth instead, and -- unlike compute_coverage_drop()'s
-# caller in .compute_variant_metrics() -- has no fallback to a coverage Rle
-# built from wildtype_info reads. That fallback pools primary reads across
-# the whole gene body (genomic_start:genomic_end) and can look adequately
-# covered even when the true, position-specific BAM coverage is essentially
-# nothing, which is exactly what let 2604112/2510211/2509250-style intronic
-# artifacts read as well-supported. cov_all here should always be the
-# genuine all_reads_cov Rle.
 compute_local_coverage <- function(cov_all, chrom, breakpoint,
                                     buffer = 10L, verbose = FALSE) {
   if (is.null(cov_all)) {
@@ -487,8 +444,81 @@ compute_local_coverage <- function(cov_all, chrom, breakpoint,
   min_cov
 }
 
+compute_span_coverage <- function(cov_all, chrom, start, span_len,
+                                   verbose = FALSE) {
+  empty_result <- list(min_cov = NA_real_, mean_cov = NA_real_)
+  if (is.null(cov_all) || is.na(start) || is.na(span_len) || span_len < 1L) {
+    if (verbose) message("Span coverage: missing inputs")
+    return(empty_result)
+  }
+
+  if (inherits(cov_all, "Rle") || is.numeric(cov_all)) {
+    cov_rle <- cov_all
+  } else if (chrom %in% names(cov_all)) {
+    cov_rle <- cov_all[[chrom]]
+  } else {
+    if (verbose) message("Span coverage: chrom missing in cov_all list")
+    return(empty_result)
+  }
+
+  cov_len   <- length(cov_rle)
+  start_pos <- start
+  end_pos   <- start + span_len - 1L
+  if (start_pos < 1L || end_pos > cov_len || start_pos > end_pos) {
+    if (verbose) message("Span coverage: span out of range")
+    return(empty_result)
+  }
+
+  cov_vec <- as.numeric(cov_rle[start_pos:end_pos])
+  result  <- list(min_cov = min(cov_vec), mean_cov = mean(cov_vec))
+  if (verbose) message("Span coverage over ", span_len, "bp: min=", result$min_cov,
+                        " mean=", round(result$mean_cov, 1))
+  result
+}
+
+compute_span_depth_fold_change <- function(cov_all, chrom, start, span_len,
+                                            flank = 300L, verbose = FALSE) {
+  if (is.null(cov_all) || is.na(start) || is.na(span_len) || span_len < 1L) {
+    return(NA_real_)
+  }
+
+  if (inherits(cov_all, "Rle") || is.numeric(cov_all)) {
+    cov_rle <- cov_all
+  } else if (chrom %in% names(cov_all)) {
+    cov_rle <- cov_all[[chrom]]
+  } else {
+    return(NA_real_)
+  }
+
+  cov_len    <- length(cov_rle)
+  span_start <- start
+  span_end   <- start + span_len - 1L
+  if (span_start < 1L || span_end > cov_len || span_start > span_end) {
+    return(NA_real_)
+  }
+
+  left_start  <- max(1L, span_start - flank)
+  left_end    <- span_start - 1L
+  right_start <- span_end + 1L
+  right_end   <- min(cov_len, span_end + flank)
+
+  flank_vals <- c(
+    if (left_end >= left_start) as.numeric(cov_rle[left_start:left_end]) else numeric(0),
+    if (right_end >= right_start) as.numeric(cov_rle[right_start:right_end]) else numeric(0)
+  )
+  if (length(flank_vals) == 0) return(NA_real_)
+
+  background_cov <- mean(flank_vals)
+  if (is.na(background_cov) || background_cov <= 0) return(NA_real_)
+
+  span_cov <- mean(as.numeric(cov_rle[span_start:span_end]))
+  span_cov / background_cov
+}
+
+
 compute_discordant_ratio <- function(all_pairs, breakpoint, flank = 5000,
-                                     min_mapq = 20, insert_size_factor = 2.0) {
+                                     min_mapq = 20, insert_size_factor = 2.0,
+                                     min_everted_separation = 100L) {
   if (is.null(all_pairs) || length(all_pairs) == 0) return(NA_real_)
   
   start_region <- max(1L, breakpoint - flank)
@@ -532,7 +562,18 @@ compute_discordant_ratio <- function(all_pairs, breakpoint, flank = 5000,
   spanning <- (start1 <= breakpoint & start2 > breakpoint) |
               (start2 <= breakpoint & start1 > breakpoint)
   
-  discordant_spanning <- sum(spanning & large_insert)
+  rev1_full <- bitwAnd(flag1, 0x10) != 0
+  rev2_full <- bitwAnd(flag2, 0x10) != 0
+  rev1 <- rev1_full[valid_mask]
+  rev2 <- rev2_full[valid_mask]
+  
+  left_is_r1 <- start1 <= start2
+  left_rev   <- ifelse(left_is_r1, rev1, rev2)
+  right_rev  <- ifelse(left_is_r1, rev2, rev1)
+  mate_sep   <- abs(start1 - start2)
+  everted    <- left_rev & !right_rev & mate_sep >= min_everted_separation
+  
+  discordant_spanning <- sum(spanning & (large_insert | everted))
   total_valid_pairs   <- sum(valid_mask)
   
   discordant_spanning / total_valid_pairs
@@ -592,22 +633,19 @@ compute_pe_itd_length <- function(all_pairs, breakpoint,
   valid        <- primary_mask & mapq_mask
 
   s1 <- GenomicRanges::start(r1); e2 <- GenomicRanges::end(r2)
-  # Outer insert size: leftmost start to rightmost end of the pair
+  
   pair_start <- pmin(s1, GenomicRanges::start(r2))
   pair_end   <- pmax(GenomicRanges::end(r1), e2)
   isize      <- pair_end - pair_start + 1L
 
   size_mask <- isize > 0L & isize <= max_insert
 
-  # Background: concordant pairs in the flanking window that do NOT span the breakpoint
+ 
   bg_mask <- valid & size_mask &
              pair_start >= (breakpoint - flank) &
              pair_end   <= (breakpoint + flank) &
              !(pair_start < breakpoint & pair_end > breakpoint)
 
-  # Spanning: pairs whose outer boundaries clearly straddle the breakpoint
-  # Require at least one read-length of clearance on each side so both mates
-  # are fully outside the duplication.
   span_mask <- valid & size_mask &
                pair_start <= (breakpoint - nominal_read_len) &
                pair_end   >= (breakpoint + nominal_read_len)
@@ -693,9 +731,6 @@ compute_repeat_entropy <- function(ref_dna, breakpoint, genomic_start,
   -sum(freq * log2(freq + 1e-12))
 }
 
-# ----------------------------------------------------------------------------
-# Orientation detection (Use alignment when pwalign available)
-# ----------------------------------------------------------------------------
 #' Detect orientation of a duplication (tandem vs inverted) using alignment
 #' @param itd_seq Duplicated sequence (character)
 #' @param ref_seq Reference segment (character)
@@ -738,9 +773,7 @@ detect_orientation <- function(itd_seq, ref_seq, min_pid = 0.90) {
   NA_character_
 }
 
-# ----------------------------------------------------------------------------
-# VCF helpers (unchanged)
-# ----------------------------------------------------------------------------
+
 .resolve_ref_base <- function(pos, ref_dna, genomic_start) {
   local_pos <- pos - genomic_start + 1L
   ref_len   <- nchar(ref_dna)
@@ -891,9 +924,6 @@ write_itd_vcf <- function(itd_df, ref_dna, genomic_start, chrom,
   invisible(vcf_path)
 }
 
-# ============================================================================
-# Batch helpers (unchanged)
-# ============================================================================
 
 .infer_sample_names <- function(bam_paths, part = 1L, sep = NULL) {
   basenames <- sub("\\.bam$", "", basename(bam_paths), ignore.case = TRUE)

@@ -1,16 +1,4 @@
-# ==============================================================================
-# TALOS Module: Directed Exon Evidence Graph Solver
-# File: R/engine_graph_ptd.R
-# Purpose: Map split-read / discordant-pair / shadow-read evidence onto an
-#          exon-level graph, detect PTD "back-edges" (downstream exon ->
-#          upstream exon), and solve the max-likelihood duplication path.
-#
-# Implemented in base R + GenomicRanges/S4Vectors (both already TALOS
-# dependencies). No igraph, no data.table: exon graphs for even the largest
-# TALOS targets (KMT2A, ~30 targeted exons) have only a few dozen nodes, so a
-# small hand-rolled adjacency list + Dijkstra is simpler and cheaper than
-# adding a graph-library dependency for this.
-# ==============================================================================
+=========================================================================
 
 #' Map Raw Genomic Evidence Coordinates to Annotated Exon Graph Edges
 #'
@@ -36,9 +24,6 @@
   from_hits <- GenomicRanges::distanceToNearest(from_gr, exon_granges)
   to_hits   <- GenomicRanges::distanceToNearest(to_gr, exon_granges)
 
-  # distanceToNearest() doesn't guarantee a hit for every query row, so align
-  # results back onto the full evidence_dt index rather than assuming a 1:1
-  # row correspondence.
   from_dist <- rep(Inf, length(from_gr));           from_dist[S4Vectors::queryHits(from_hits)] <- S4Vectors::mcols(from_hits)$distance
   to_dist   <- rep(Inf, length(to_gr));             to_dist[S4Vectors::queryHits(to_hits)]     <- S4Vectors::mcols(to_hits)$distance
   from_exon <- rep(NA_integer_, length(from_gr));   from_exon[S4Vectors::queryHits(from_hits)]  <- exon_granges$exon_idx[S4Vectors::subjectHits(from_hits)]
@@ -59,13 +44,6 @@
   mapped <- mapped[mapped$from_exon != mapped$to_exon, , drop = FALSE]
   if (nrow(mapped) == 0L) return(data.frame())
 
-  # Joint Bayesian aggregation per (from,to) pair: P_joint = 1 - prod(1 - P_i).
-  # This is only valid for independent evidence supporting the SAME edge --
-  # aggregating at exon resolution (rather than exact breakpoint) means
-  # several distinct low-support artifacts that happen to round to the same
-  # exon pair will inflate each other's apparent confidence. Downstream
-  # min_support / VAF filters in engine_metrics.R are the real backstop here,
-  # since they operate on genuine per-read identity, not this NLL score.
   edge_key <- paste(mapped$from_exon, mapped$to_exon, sep = "->")
   agg <- lapply(split(seq_len(nrow(mapped)), edge_key), function(rows) {
     sub <- mapped[rows, , drop = FALSE]
@@ -146,8 +124,8 @@
 
   results <- list()
   for (i in seq_len(nrow(back_edges))) {
-    start_node <- back_edges$to[i]    # upstream node, e.g. Exon_2
-    end_node   <- back_edges$from[i]  # downstream node, e.g. Exon_8
+    start_node <- back_edges$to[i]   
+    end_node   <- back_edges$from[i]  
 
     node_sequence <- .shortest_path_dijkstra(edges, nodes, start_node, end_node)
     if (length(node_sequence) == 0L) next

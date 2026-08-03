@@ -1,4 +1,3 @@
-# Helper: build padded exon display set and plot range
 .build_plot_exon_context <- function(gene_config, flank_exons = 1L, flank_bp = 50L) {
   all_exons <- gene_config$all_exons
   target_exons <- gene_config$target_exons
@@ -249,7 +248,6 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   dup_lens     <- itd_df$Length
   dup_ends     <- breakpoints + dup_lens - 1L
   
-  # Filter out zero-length (PTD) events unless include_ptd = TRUE
   keep <- if (include_ptd) rep(TRUE, nrow(itd_df)) else dup_lens > 0
   if (!any(keep)) {
     warning("No ITDs with positive length to plot (PTDs excluded). Set include_ptd=TRUE to include them.")
@@ -331,19 +329,12 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
     )
   }
 
-  # Clean ITD labels: omit orientation segment when absent to avoid trailing " | "
   itd_labels <- ifelse(
     nchar(trimws(orient_display)) > 0,
     sprintf("%d bp | VAF %s%% | %s", dup_lens, vafs, trimws(orient_display)),
     sprintf("%d bp | VAF %s%%",      dup_lens, vafs)
   )
 
-  # NB: without an explicit `group`, Gviz has no reliable way to tell the ITD
-  # features apart, so with >1 ITD it was drawing every feature on the SAME
-  # stacking row -- `stacking = "full"` alone did not separate them, and the
-  # feature-id labels (drawn beside each box) rendered on top of one another
-  # whenever two calls were close together. Giving every feature its own
-  # group forces one row per ITD regardless of how close they are.
   itd_group <- factor(seq_along(breakpoints), levels = seq_along(breakpoints))
 
   itd_track  <- Gviz::AnnotationTrack(
@@ -363,11 +354,7 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   axis_track <- Gviz::GenomeAxisTrack(cex = 0.7, labelPos = "below", add35 = FALSE, add53 = FALSE, col = "black",
                                      at = axis_ctx$exon_centers, labels = axis_ctx$exon_labels)
 
-  # Track sizes: each ITD now reliably renders on its own row (see itd_group
-  # fix above) and stackHeight = 0.45 keeps each row's box thin, so the panel
-  # no longer needs the old, oversized per-row allowance to avoid overlap.
-  # ITD-coverage ("ITD cov reads") track size (0.75) is intentionally left
-  # unchanged -- only the ITDs annotation track below it is being resized.
+
   itd_h <- max(1.0, 0.4 * length(breakpoints))
   if (!is.null(grtrack) && !is.null(itd_cov_track)) {
     track_list <- list(axis_track, grtrack, cov_track, itd_cov_track, itd_track)
@@ -397,12 +384,12 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   )
   grid::grid.text(label = subtitle, x = grid::unit(0.5, "npc"), y = grid::unit(0.885, "npc"), just = c("center", "center"), gp = grid::gpar(fontsize = 9, col = "#2c3e50", fontface = "plain"))
 
-  # Build summary table including new softclip metrics
   summary_df <- data.frame(
     Metric = c("Sample", "Gene", "Genome Build", "Genomic Position", "Length (bp)", "Length PE (bp)", "Length Ext (bp)", "VAF (%)", 
-               "Supporting Reads", "Wildtype Reads", "Depth at Breakpoint", "Local Coverage", "HGVS cDNA", "HGVS Protein", 
+               "Supporting Reads", "Wildtype Reads", "Depth at Breakpoint", "Local Coverage",
+               "Span Min Coverage (bp)", "Span Depth Fold Change", "HGVS cDNA", "HGVS Protein", 
                "Region", "Exon Number", "Orientation", "Hotspot", "Strand Bias", "Mean MAPQ", 
-               "Support Consistency", "RefMatch (%)", "ITD Read Coverage (%)", "Sequence Source",
+               "RefMatch (%)", "ITD Read Coverage (%)", "Sequence Source",
                "Merged From N Fragment(s)",
                "Left Softclip Count", "Right Softclip Count", "Left Softclip % (Support)", "Right Softclip % (Support)",
                "Left Softclip % (WT)", "Right Softclip % (WT)",
@@ -422,6 +409,8 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
       sprintf("%.1f", row$AlleleFrequency * 100), 
       as.character(row$SupportingReads), as.character(round(row$WildtypeReads)), as.character(row$DepthAtBreakpoint), 
       ifelse(is.null(row$LocalCoverage) || is.na(row$LocalCoverage), "N/A", as.character(row$LocalCoverage)),
+      ifelse(is.null(row$SpanMinCoverage) || is.na(row$SpanMinCoverage), "N/A", as.character(row$SpanMinCoverage)),
+      ifelse(is.null(row$SpanDepthFoldChange) || is.na(row$SpanDepthFoldChange), "N/A", sprintf("%.2fx", row$SpanDepthFoldChange)),
       ifelse(is.na(row$HGVS_cDNA), "N/A", row$HGVS_cDNA), 
       ifelse(is.na(row$HGVS_Protein), "N/A", row$HGVS_Protein), 
       ifelse(is.na(row$Region), "N/A", row$Region), 
@@ -430,7 +419,6 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
       ifelse(isTRUE(row$Hotspot), as.character(row$HotspotName), "No"), 
       ifelse(is.na(row$StrandBias), "N/A", sprintf("%.3f", row$StrandBias)), 
       ifelse(is.na(row$MeanSupportMAPQ), "N/A", sprintf("%.1f", row$MeanSupportMAPQ)), 
-      ifelse(is.na(row$SupportConsistency), "N/A", paste0(round(row$SupportConsistency), "%")), 
       ifelse(is.na(row$RefMatch_Observed), "N/A", paste0(round(row$RefMatch_Observed, 1), "%")), 
       ifelse(is.na(row$ITDReadCoverage), "N/A", paste0(round(row$ITDReadCoverage, 1), "%")), 
       ifelse(is.na(row$SequenceSource), "N/A", row$SequenceSource),
@@ -440,14 +428,6 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
         if (n_merged <= 1L) "1 (not merged)"
         else sprintf("%d%s", n_merged, if (flagged) " (!! unusually high !!)" else "")
       },
-      # NOTE: these were previously displayed as "0" whenever NA, which
-      # misrepresented "not computed for this row" (e.g. a genuinely
-      # ambiguous multi-fragment merge, prior to the merge-aggregation fix)
-      # as "confirmed zero soft-clip reads". Softclip counts are always a
-      # real (possibly zero) integer for any non-merged call, and are now
-      # summed rather than nulled for merged calls too, so NA should no
-      # longer occur in practice -- but if it ever does, "N/A" is the
-      # honest label, matching every sibling field in this table.
       ifelse(is.na(row$LeftSoftclipCount), "N/A", as.character(row$LeftSoftclipCount)),
       ifelse(is.na(row$RightSoftclipCount), "N/A", as.character(row$RightSoftclipCount)),
       ifelse(is.na(row$LeftSoftclipPctSupport), "N/A", sprintf("%.1f", row$LeftSoftclipPctSupport)),
@@ -529,7 +509,6 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
   dup_lens     <- itd_df$Length
   dup_ends     <- breakpoints + dup_lens - 1L
 
-  # Filter out zero-length (PTD) events unless include_ptd = TRUE
   valid <- if (include_ptd) rep(TRUE, nrow(itd_df)) else dup_lens > 0
   if (!any(valid)) {
     warning("No ITDs with positive length to plot interactively (PTDs excluded). Set include_ptd=TRUE to include them.")
@@ -580,7 +559,6 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
   }
 
   pal <- c("#e67e22", "#e74c3c", "#9b59b6", "#1abc9c", "#3498db", "#f39c12", "#c0392b", "#8e44ad", "#16a085", "#2980b9")
-  # Adaptive vertical step: tighten spacing when many ITDs so they all fit in the panel
   y_step  <- max(0.10, min(0.18, 0.85 / max(1L, nrow(itd_df))))
   y_range_max <- max(1.1, nrow(itd_df) * y_step + 0.30)
   itd_cov_df <- .build_itd_cov_display(itd_df, dup_ends, axis_ctx)
@@ -627,8 +605,6 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
 
   title_text <- if (!is.null(sample_name)) paste0("TALOS • ", sample_name, "  |  ", gene_config$gene, "  |  ", nrow(itd_df), " ITD(s)  |  ", genome_build) else paste0("TALOS • ", gene_config$gene, "  |  ", nrow(itd_df), " ITD(s)  |  ", genome_build)
 
-  # Heights: coverage reduced (was 0.42), ITD-cov reduced (was 0.14),
-  # ITD panel expanded (was 0.30) so all calls and their labels have room.
   fig <- plotly::subplot(p_cov, p_exon, p_itd_cov, p_itd, nrows = 4, shareX = TRUE, heights = c(0.26, 0.10, 0.09, 0.55))
   fig <- plotly::layout(fig, title = list(text = title_text, x = 0.5, font = list(size = 14)), hovermode = "x unified", showlegend = TRUE, margin = list(t = 60, l = 60, r = 40, b = 75))
   
@@ -640,17 +616,6 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
   fig
 }
 
-
-# ============================================================================
-# Patch for report.R – talos_html_report() rewrite
-# ============================================================================
-# Code-review changes applied:
-#   [CR-2] Remove `...` forwarded to rmarkdown::render(); use explicit params.
-#   [CR-8] Replace fragile inline Rmd generation with external template file
-#          installed at inst/rmd/TALOS_report.Rmd.
-#   [CR-9] Add `mode` parameter to support ALU reports via the same template.
-#   [CR-10] Validate output path before attempting to write.
-# ============================================================================
 
 #' Generate an HTML report for TALOS ITD/PTD or ALU results
 #'
@@ -678,16 +643,13 @@ talos_html_report <- function(result_df,
 
   mode <- match.arg(mode)
 
-  # ── Dependency check ──────────────────────────────────────────────────
   needs <- c("rmarkdown", "DT")
   missing_pkg <- needs[!vapply(needs, requireNamespace, logical(1L), quietly = TRUE)]
   if (length(missing_pkg) > 0L)
     stop("Please install: ", paste(missing_pkg, collapse = ", "))
 
-  # ── Resolve template path ─────────────────────────────────────────────
   template_path <- system.file("rmd", "TALOS_report.Rmd", package = "TALOS")
   if (!nzchar(template_path) || !file.exists(template_path)) {
-    # Development fallback: look relative to the package root
     template_path <- file.path("inst", "rmd", "TALOS_report.Rmd")
   }
   if (!file.exists(template_path))
@@ -697,14 +659,12 @@ talos_html_report <- function(result_df,
       "\nRe-install the package or ensure inst/rmd/TALOS_report.Rmd exists."
     )
 
-  # ── Resolve output path ───────────────────────────────────────────────
   if (!grepl("^[A-Za-z]:|^/", output_file))
     output_file <- file.path(getwd(), output_file)
   output_dir <- dirname(output_file)
   if (!dir.exists(output_dir))
     dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
 
-  # ── Build plotly widgets ──────────────────────────────────────────────
   plot_widgets <- list()
   has_plotly   <- requireNamespace("plotly", quietly = TRUE)
 
@@ -733,7 +693,7 @@ talos_html_report <- function(result_df,
     }
   }
 
-  # ── Render ────────────────────────────────────────────────────────────
+
   rmarkdown::render(
     input       = template_path,
     output_file = output_file,
@@ -753,15 +713,6 @@ talos_html_report <- function(result_df,
   invisible(output_file)
 }
 
-# ============================================================================
-# .write_talos_output – fixed with vapply and length sanity check
-# ============================================================================
-# NOTE (code review): this function used to be defined TWICE in this file.
-# The earlier definition (TSV + VCF + PDF + HTML only, no plotly widget file)
-# was silently shadowed by this later one, since R keeps the last definition
-# in a source()'d file. That made the earlier copy dead code — any future
-# edit made to it would have had zero effect, which is a maintenance trap.
-# The duplicate has been removed; this is now the single source of truth.
 .write_talos_output <- function(final_df, base_name, output_folder, sample_name,
                                 gene_config, ref_dna, bam_path, write_vcf, plot,
                                 html_report, verbose, add_config_to_report = FALSE) {
@@ -771,20 +722,20 @@ talos_html_report <- function(result_df,
 
   tsv_file <- file.path(sample_folder, paste0(base_name, ".tsv"))
   
-  # ---- SAFE conversion of list columns to character using vapply ----
+
   for (col in names(final_df)) {
     if (is.list(final_df[[col]])) {
-      # vapply ensures each element becomes a single string; if any result is not length 1, it errors
+   
       converted <- vapply(final_df[[col]], function(x) {
         if (length(x) == 0 || all(is.na(x))) {
           NA_character_
         } else {
-          # Collapse multi‑element vectors, handling numeric/logical/character
+       
           paste(x, collapse = ";")
         }
       }, FUN.VALUE = character(1), USE.NAMES = FALSE)
       
-      # Sanity check: length must equal number of rows
+
       if (length(converted) != nrow(final_df)) {
         stop(sprintf("Column '%s' conversion produced %d rows, expected %d. Check list elements.", 
                      col, length(converted), nrow(final_df)))
@@ -792,8 +743,7 @@ talos_html_report <- function(result_df,
       final_df[[col]] <- converted
     }
   }
-  
-  # Write TSV without row names, using NA placeholder
+
   write.table(final_df, file = tsv_file, sep = "\t", quote = FALSE,
               row.names = FALSE, na = ".")
   if (verbose) message(sprintf("Results written to: %s", tsv_file))
@@ -810,10 +760,6 @@ talos_html_report <- function(result_df,
     pdf_path <- pdf_file
   }
 
-  # Single unified HTML report: talos_html_report() embeds the
-  # plot_talos_interactive() plotly widget directly alongside the full
-  # metrics table, so there is exactly one HTML deliverable per sample
-  # (no separate standalone widget-only file).
   report_path <- NULL
   if (html_report && nrow(final_df) > 0) {
     if (!requireNamespace("rmarkdown", quietly = TRUE)) { warning("rmarkdown not installed. Cannot generate HTML report.") } 

@@ -41,6 +41,8 @@ detect_itd(
   min_coverage_drop = 1,
   min_local_coverage = 0,
   coverage_window = 200,
+  min_span_coverage = 0,
+  min_span_depth_fold_change = 0,
   min_microhomology = 0,
   min_discordant_ratio = 0,
   min_entropy = 0,
@@ -50,7 +52,7 @@ detect_itd(
   hotspot_db_path = NULL,
   compute_alignment_score = TRUE,
   compute_support_bases = TRUE,
-  compute_consistency = TRUE,
+  compute_consistency = FALSE,
   compute_itd_coverage = TRUE,
   compute_coverage_drop = TRUE,
   compute_microhomology = TRUE,
@@ -120,6 +122,8 @@ talos(
   min_local_coverage = NULL,
   coverage_window = NULL,
   min_microhomology = NULL,
+  min_span_coverage = NULL,
+  min_span_depth_fold_change = NULL,
   min_discordant_ratio = NULL,
   min_entropy = NULL,
   min_alignment_score = NULL,
@@ -128,7 +132,7 @@ talos(
   hotspot_db_path = NULL,
   compute_alignment_score = TRUE,
   compute_support_bases = TRUE,
-  compute_consistency = TRUE,
+  compute_consistency = FALSE,
   compute_itd_coverage = TRUE,
   compute_coverage_drop = TRUE,
   compute_microhomology = TRUE,
@@ -240,7 +244,18 @@ talos(
 
 \item{min_coverage_drop}{Strict metric cutoff (default 1.5, adjust based on expected coverage).}
 
-\item{coverage_window}{Internal calc usage.}
+\item{coverage_window}{Flank (bp) used as the background window for SpanDepthFoldChange.}
+
+\item{min_span_coverage}{Minimum depth required across the *entire* candidate span
+(breakpoint to breakpoint+Length), not just at the breakpoint -- see
+compute_span_coverage(). Default 0 (off). This is the filter meant to be
+tuned per-gene for large PTDs (KMT2A); short ITDs (FLT3) have spans small
+enough that LocalCoverage already covers this case.}
+
+\item{min_span_depth_fold_change}{Minimum ratio of mean span depth to mean
+flanking depth -- see compute_span_depth_fold_change(). Default 0 (off);
+soft/informational signal, only enable after checking real numbers since
+a low-VAF true event can also fail this.}
 
 \item{min_microhomology}{Required MH length.}
 
@@ -258,7 +273,12 @@ talos(
 
 \item{compute_support_bases}{Metric toggle.}
 
-\item{compute_consistency}{Metric toggle.}
+\item{compute_consistency}{Metric toggle. Default FALSE: SupportConsistency
+never gates .apply_filters() (purely informational) and is circular for
+imputed/ref-derived PTD sequence (checking reads against a sequence
+assembled from a subset of those same reads, or filled from reference).
+AlignmentScore/RefMatch_Observed/ITDReadCoverage already cover this
+ground without the circularity. Set TRUE to restore it for debugging.}
 
 \item{compute_itd_coverage}{Metric toggle.}
 

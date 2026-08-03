@@ -1,21 +1,3 @@
-# ==============================================================================
-# TALOS Module: Assembly Helpers for Graph PTD
-# File: R/engine_assembly.R
-#
-# Pure base-R implementation (no igraph dependency). Builds a local de Bruijn
-# graph from soft-clip sequences using a hash-indexed (k-1)-mer prefix map
-# (O(N) construction, N = distinct k-mers) and assembles a contig with a
-# bounded greedy highest-coverage walk instead of exhaustive path
-# enumeration. Duplicated genomic sequence -- which is exactly what a PTD is
-# -- is by construction full of repeated k-mers, so an all_simple_paths()
-# style search over this graph can enumerate exponentially many paths; the
-# walk here is capped at max_steps and never revisits a k-mer, so runtime is
-# bounded regardless of how repetitive the input is.
-#
-# NOTE: this file is the single source of truth for these helpers. They must
-# not be redefined elsewhere (main.R previously carried a duplicate copy).
-# ==============================================================================
-
 #' Kernel Density Estimation for Breakpoint Refinement
 #' @param positions Numeric vector of breakpoint positions
 #' @return Refined breakpoint (mode of density)
@@ -60,10 +42,6 @@
   if (length(kmer_names) == 0L) return(.simple_overlap_assembly(seqs, min_overlap = min(k, 10L)))
   coverage <- coverage[kmer_names]
 
-  # ---- Prefix index: (k-1)-mer PREFIX -> k-mers that start with it ---------
-  # k-mer A can be followed by k-mer B iff suffix(A, k-1) == prefix(B, k-1).
-  # Indexing by prefix turns "find all successors of A" into one hash lookup
-  # (this replaces the old O(N^2) all-pairs substr() comparison).
   prefix_idx <- new.env(hash = TRUE, parent = emptyenv())
   for (kn in kmer_names) {
     px <- substr(kn, 1L, k - 1L)
@@ -72,9 +50,6 @@
   }
   successors_of <- function(kmer) prefix_idx[[substr(kmer, 2L, k)]]
 
-  # ---- In-degree, to pick a sensible start (falls back to max-coverage
-  #      k-mer when the k-mer graph is fully cyclic, which a real tandem
-  #      duplication will tend to produce) -----------------------------------
   indeg_env <- new.env(hash = TRUE, parent = emptyenv())
   for (kn in kmer_names) {
     for (nx in successors_of(kn)) {
@@ -89,8 +64,6 @@
   seed <- if (length(zero_indeg) > 0L) zero_indeg[which.max(coverage[zero_indeg])]
           else kmer_names[which.max(coverage)]
 
-  # ---- Bounded greedy walk: always follow the highest-coverage unvisited
-  #      successor; stop at a dead end, a full revisit, or max_steps -------
   path    <- seed
   visited <- seed
   current <- seed
@@ -104,8 +77,7 @@
   }
 
   if (length(path) < 2L) return(path[1])
-  # Consecutive k-mers on a de Bruijn path overlap by k-1 bases: extend the
-  # contig by one new character per subsequent node, not by the whole k-mer.
+
   paste0(path[1], paste(substr(path[-1], k, k), collapse = ""))
 }
 

@@ -67,74 +67,13 @@ KMT2A:
     max_missing_kmers: 0.8
     min_length: 1000
     merge_ptd_intervals: TRUE
-    # Was 10bp -- far smaller than the real gaps between fragments of the
-    # same large PTD (observed ~500-1100bp between breakpoint clusters
-    # spanning multiple exons/introns), so genuinely-single events were
-    # being reported as 2-3 separate rows. 1500bp covered that.
-    #
-    # 2605311 (confirmed true-positive) needed more: with min_wt_reads
-    # added below, its two real breakpoints now resolve cleanly to
-    # 118342475 (1845bp, exon 3, c.601_2445dup) and 118352568 (1019bp,
-    # exon 7, c.3773_4086+376dup) -- both partial_read+ref, both
-    # HGVS-annotated, i.e. two solid anchors of one PTD, not artifacts.
-    # Gap between them is 8248bp (118352568 - 118344319 - 1), so raised
-    # merge_gap to 9000bp to bridge it. Combined span 118342475-118353586
-    # = 11112bp. If that's still off from orthogonal truth, a debug=TRUE
-    # rerun will show whether either breakpoint's own best_len estimate
-    # is the thing to adjust, rather than merge_gap again.
     merge_gap: 9000
     min_ptd_length: 200
-    # HORIZON (confirmed true-negative) called a spurious PTD at
-    # 118340687: only 24 total reads at the breakpoint, all 24 counted as
-    # "supporting" the duplication and zero wildtype/reference-spanning
-    # reads (100% VAF off a locus with essentially no real coverage).
-    # min_wt_reads exists exactly to catch this (engine_metrics.R:286 --
-    # wildtype_reads < min_wt_reads drops the candidate before it ever
-    # reaches merging) but defaulted to 0 and KMT2A never set it.
-    #
-    # Confirmed working as intended, not just in theory: with this set to
-    # 20, 2605311's two clusters went from 3-fragments-merged each (old
-    # totals: 2252 and 4225 wildtype reads) to 1-fragment-each (new
-    # totals: still exactly 2252 and 4225) -- meaning the 4 dropped
-    # fragments (2 per cluster) each carried 0 wildtype reads of their
-    # own. They were the same zero-coverage artifact pattern as HORIZON,
-    # just sitting close enough to the real breakpoints to get swept into
-    # the old, tighter merge. Nothing genuine was lost.
     min_wt_reads: 20
-    # 2604112, 2510211, 2509250 (confirmed false positives, "no
-    # coverage"): all three are merged_intervals-only calls, all
-    # intronic, all lacking any exonic/HGVS anchor -- unlike 2605311's
-    # real breakpoints, which are individually exonic and partial_read+ref
-    # even before merging. That pattern is consistent with the coverage
-    # plots showing the called position sitting in a trough between the
-    # baited exons, not on a real on-target signal.
-    #
-    # The pipeline already computes real BAM coverage (all_reads_cov) for
-    # exactly this kind of check via compute_coverage_drop(), but that
-    # function returns NA (silently bypassing min_coverage_drop, which is
-    # 0/off for KMT2A anyway) whenever local depth is too low to compute a
-    # ratio -- i.e. it stays silent in exactly the case we need it to
-    # speak up. Added a new, independent metric (LocalCoverage, from
-    # compute_local_coverage() in utils.R) that reads the same
-    # all_reads_cov Rle directly with no fallback, plus a min_local_coverage
-    # filter in .apply_filters, so a genuinely uncovered breakpoint gets
-    # rejected instead of silently passed. 30 is a starting point sized
-    # off HORIZON's 24-read depth, not a value I've verified against these
-    # three specific samples -- 2604112 and 2510211 in particular already
-    # show high pooled WildtypeReads (7752, 6441), so it's not certain
-    # their *local* coverage is actually low the way HORIZON's was. Worth
-    # a debug=TRUE rerun to see the real LocalCoverage numbers before
-    # trusting this value. Separately: 2604112 and 2509250 call the exact
-    # same position (118342129) -- that's independent of any threshold
-    # and points more at a recurrent mappability/repeat artifact at that
-    # locus (KMT2A introns are Alu-rich; engine_alu.R exists for exactly
-    # this kind of element) than at three unrelated coverage dropouts.
     min_local_coverage: 30
-  # Settings for the exon-graph PTD engine (engine_graph_ptd.R). KMT2A
-  # introns run into the multiple-kb range, so the nearest-exon mapping
-  # needs a much wider cutoff than the 250bp that made sense for a
-  # short-intron gene; buffer_bp controls how far past the gene body the
-  # supplementary-BAM evidence scan looks.
+    min_span_coverage: 3
+    max_span_depth_fold_change: 5
+    search_window: 15000
   graph_settings:
     max_exon_distance: 5000
     buffer_bp: 15000
