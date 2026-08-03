@@ -803,13 +803,13 @@ detect_itd <- function(
     }
     
     if (do_annotate_hotspots) final_df <- annotate_hotspots(final_df, db_path = hotspot_db_path, genome_build = gene_config$build)
-    else { final_df$Hotspot <- FALSE; final_df$HotspotName <- NA_character_ }
+    else { final_df$Hotspot <- rep(FALSE, nrow(final_df)); final_df$HotspotName <- rep(NA_character_, nrow(final_df)) }
     
     final_df <- .annotate_exonic_region(final_df, gene_config$target_exons)
     if (filter_intronic && nrow(final_df) > 0) final_df <- final_df[is.na(final_df$Region) | final_df$Region == "exonic", ]
     
-    final_df$TranscriptRef <- gene_config$transcript
-    if (is.na(gene_config$transcript)) final_df$TranscriptRef <- "none"
+    final_df$TranscriptRef <- rep(gene_config$transcript, nrow(final_df))
+    if (is.na(gene_config$transcript)) final_df$TranscriptRef <- rep("none", nrow(final_df))
     
     .write_talos_output(
       final_df, base_name = base_name, output_folder = output_folder,

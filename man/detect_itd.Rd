@@ -16,6 +16,7 @@ detect_itd(
   cluster_tolerance = 10,
   prefilter = TRUE,
   search_window = 5000L,
+  require_unique_anchor = FALSE,
   min_ins_filter = 3,
   output_prefix = "TALOS",
   output_folder = "./results",
@@ -114,6 +115,7 @@ talos(
   min_wt_reads = NULL,
   cluster_tolerance = NULL,
   search_window = NULL,
+  require_unique_anchor = NULL,
   vaf_threshold = NULL,
   min_strand_bias = NULL,
   max_strand_bias = NULL,
@@ -208,6 +210,18 @@ walk fallback. Default 5000 (unchanged for FLT3-scale ITDs). KMT2A
 widens this since its PTDs can genuinely exceed 5kb; safe to widen
 because the anchor search now requires an unambiguous (single-hit)
 match per prefix length rather than pooling every repeat-driven hit.}
+
+\item{require_unique_anchor}{If TRUE, the anchor search
+(.estimate_itd_from_anchors()) only trusts a prefix-length match when
+it's unambiguous (exactly one hit in the window); ambiguous matches
+contribute nothing rather than every hit. Default FALSE (original
+behaviour: pool every hit, ambiguous or not). Motivated by KMT2A's
+Alu-rich introns producing wildly inconsistent length estimates from
+short-prefix repeat coincidences, but NOT proven safe for every gene --
+combined with an anchor-preferring best_len (since reverted) it
+regressed HORIZON FLT3's certified 300bp ITD to 260bp. Left FALSE
+everywhere by default; enable per-gene only after checking real
+results, the way every other threshold in this pipeline was tuned.}
 
 \item{min_ins_filter}{Minimum net insertion length filter.}
 

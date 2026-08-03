@@ -43,8 +43,10 @@
 #' @export
 annotate_hotspots <- function(itd_df, db_path = NULL, genome_build = NULL,
                                db_conn = NULL, fallback_csv_path = NULL) {
-  itd_df$Hotspot     <- FALSE
-  itd_df$HotspotName <- NA_character_
+  itd_df$Hotspot     <- rep(FALSE, nrow(itd_df))
+  itd_df$HotspotName <- rep(NA_character_, nrow(itd_df))
+
+  if (nrow(itd_df) == 0L) return(itd_df)
 
   if (!is.null(db_conn)) {
     if (!requireNamespace("DBI", quietly = TRUE))
@@ -140,8 +142,8 @@ annotate_hotspots <- function(itd_df, db_path = NULL, genome_build = NULL,
 
 .annotate_exonic_region <- function(final_df, exons_gr) {
   if (is.null(exons_gr) || nrow(final_df) == 0) {
-    final_df$Region     <- NA_character_
-    final_df$ExonNumber <- NA_integer_
+    final_df$Region     <- rep(NA_character_, nrow(final_df))
+    final_df$ExonNumber <- rep(NA_integer_, nrow(final_df))
     return(final_df)
   }
 
