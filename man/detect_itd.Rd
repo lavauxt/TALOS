@@ -15,6 +15,7 @@ detect_itd(
   max_missing_kmers = 0.5,
   cluster_tolerance = 10,
   prefilter = TRUE,
+  search_window = 5000L,
   min_ins_filter = 3,
   output_prefix = "TALOS",
   output_folder = "./results",
@@ -43,6 +44,7 @@ detect_itd(
   coverage_window = 200,
   min_span_coverage = 0,
   min_span_depth_fold_change = 0,
+  max_span_depth_fold_change = Inf,
   min_microhomology = 0,
   min_discordant_ratio = 0,
   min_entropy = 0,
@@ -111,6 +113,7 @@ talos(
   min_mapq = NULL,
   min_wt_reads = NULL,
   cluster_tolerance = NULL,
+  search_window = NULL,
   vaf_threshold = NULL,
   min_strand_bias = NULL,
   max_strand_bias = NULL,
@@ -124,6 +127,7 @@ talos(
   min_microhomology = NULL,
   min_span_coverage = NULL,
   min_span_depth_fold_change = NULL,
+  max_span_depth_fold_change = NULL,
   min_discordant_ratio = NULL,
   min_entropy = NULL,
   min_alignment_score = NULL,
@@ -196,6 +200,15 @@ talos(
 
 \item{prefilter}{Enable fast prefiltering of alignments.}
 
+\item{search_window}{Max distance (bp) the split-read anchor search
+(.estimate_itd_from_anchors()) looks for a re-anchor match. This is a
+hard ceiling on any anchor-confirmed length estimate -- a true
+duplication longer than this can only be sized via the noisier k-mer
+walk fallback. Default 5000 (unchanged for FLT3-scale ITDs). KMT2A
+widens this since its PTDs can genuinely exceed 5kb; safe to widen
+because the anchor search now requires an unambiguous (single-hit)
+match per prefix length rather than pooling every repeat-driven hit.}
+
 \item{min_ins_filter}{Minimum net insertion length filter.}
 
 \item{output_prefix}{Base name prefix (default "TALOS").}
@@ -256,6 +269,12 @@ enough that LocalCoverage already covers this case.}
 flanking depth -- see compute_span_depth_fold_change(). Default 0 (off);
 soft/informational signal, only enable after checking real numbers since
 a low-VAF true event can also fail this.}
+
+\item{max_span_depth_fold_change}{Maximum ratio of mean span depth to mean
+flanking depth. Default Inf (off). A real heterozygous-ish duplication
+should show roughly (1+VAF)-fold elevation, not many-fold -- a huge
+ratio is Manta's "collapsed reference region" signature (multi-mapping
+reads from elsewhere pooling into one locus), not a duplication.}
 
 \item{min_microhomology}{Required MH length.}
 

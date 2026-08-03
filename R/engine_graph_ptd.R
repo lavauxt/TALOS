@@ -1,5 +1,3 @@
-=========================================================================
-
 #' Map Raw Genomic Evidence Coordinates to Annotated Exon Graph Edges
 #'
 #' @param evidence_dt data.frame of split reads, discordant mates, shadows

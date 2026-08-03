@@ -801,8 +801,6 @@ detect_itd <- function(
   })
 }
 
-==========================================================================
-
 #' @rdname detect_itd
 #' @export
 talos <- function(
