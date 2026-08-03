@@ -73,6 +73,7 @@ KMT2A:
     min_local_coverage: 30
     min_span_coverage: 3
     max_span_depth_fold_change: 5
+    require_unique_anchor: true
     search_window: 15000
   graph_settings:
     max_exon_distance: 5000

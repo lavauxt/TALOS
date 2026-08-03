@@ -29,6 +29,7 @@
   Biostrings::readDNAStringSet(consensus_fa)
 }
 
+
 #' Match a single soft-clip sequence against all ALU consensus entries
 #'
 #' Uses local pairwise alignment (Smith-Waterman).  Returns a list with:
@@ -60,11 +61,12 @@
     ref <- alu_seqs[[nm]]
     ref_len <- Biostrings::nchar(ref)
 
+
     aln_fwd <- tryCatch(
       Biostrings::pairwiseAlignment(
         clip_dna, ref,
         type            = "local",
-        substitutionMatrix = "BLOSUM62", 
+        substitutionMatrix = "BLOSUM62",  
         gapOpening      = -10,
         gapExtension    = -0.5,
         scoreOnly       = FALSE
@@ -113,7 +115,6 @@
   if (best$score < min_score) return(NULL)
   best
 }
-
 
 
 #' Detect poly-A tail in a soft-clip sequence
@@ -175,7 +176,6 @@
 
   up_start <- max(1L, ins_pos - max_tsd)
   up_seq   <- substr(ref_dna, up_start, ins_pos)
-
 
   dn_end  <- min(ref_len, ins_pos + max_tsd)
   dn_seq  <- substr(ref_dna, ins_pos + 1L, dn_end)
@@ -343,6 +343,7 @@
   )
 }
 
+
 #' Apply ALU-specific output filters to a result row
 #'
 #' @param row           Single-row data.frame from .summarise_alu_cluster.
@@ -359,6 +360,7 @@
     isTRUE(!is.na(row$AlleleFrequency) && row$AlleleFrequency >= vaf_threshold) &&
     (min_tsd == 0L || isTRUE(!is.na(row$TSD_Length) && row$TSD_Length >= min_tsd))
 }
+
 
 
 #' Detect ALU/SINE mobile-element insertions from a BAM file

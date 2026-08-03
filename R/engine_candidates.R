@@ -1,3 +1,4 @@
+
 .safe_qnames <- function(reads) {
   qn <- as.character(S4Vectors::mcols(reads)$qname)
   if (length(qn) == 0L || all(is.na(qn))) qn <- names(reads)
@@ -5,6 +6,7 @@
   if (length(na_idx) > 0L) qn[na_idx] <- paste0("read_", na_idx)
   qn
 }
+
 
 .extract_candidates_ptd <- function(reads, genomic_start, ref_len,
                                      verbose = FALSE) {
@@ -167,6 +169,7 @@
                                       min_anchor_len = 20L,
                                       kmer_len = NA_integer_,
                                       kmer_band = 40L,
+                                      require_unique_anchor = FALSE,
                                       debug_label = NULL,
                                       verbose = FALSE) {
   ref_len <- nchar(ref_dna)
@@ -195,7 +198,11 @@
       for (plen in seq(min_anchor_len, max_prefix, by = 2L)) {
         q <- substr(lead_clip, 1L, plen)
         hits <- gregexpr(q, win, fixed = TRUE)[[1L]]
-        if (length(hits) != 1L || hits[1L] == -1L) next
+        if (require_unique_anchor) {
+          if (length(hits) != 1L || hits[1L] == -1L) next
+        } else {
+          if (length(hits) == 0L || hits[1L] == -1L) next
+        }
         offsets <- start_pos + hits - 1L - orig_bp_local
         offsets <- offsets[offsets > 0L]
         if (!is.na(kmer_len))
@@ -217,7 +224,12 @@
       for (plen in seq(min_anchor_len, max_prefix, by = 2L)) {
         q <- substr(trail_clip, 1L, plen)
         hits <- gregexpr(q, win, fixed = TRUE)[[1L]]
-        if (length(hits) != 1L || hits[1L] == -1L) next
+        # Same reasoning and gating as the lead-anchor search above.
+        if (require_unique_anchor) {
+          if (length(hits) != 1L || hits[1L] == -1L) next
+        } else {
+          if (length(hits) == 0L || hits[1L] == -1L) next
+        }
         offsets <- orig_bp_local - (start_pos + hits - 1L)
         offsets <- offsets[offsets > 0L]
         if (!is.na(kmer_len))
@@ -258,12 +270,16 @@
 }
 
 
+# ---------------------------------------------------------------------------
+# Standard k-mer tracing (backward-jump and missing-block strategies)
+# Uses anchor‑based size when soft‑clips are available, falls back to k‑mer.
 .extract_candidates_standard <- function(reads, ref_kmers, ptd_mode, min_size,
                                           max_missing_kmers, refine_bp,
                                           use_cigar_bp, genomic_start, ref_dna,
                                           max_itd_length = 1000L,
                                           convert_long_to_ptd = TRUE,
                                           search_window = 5000L,
+                                          require_unique_anchor = FALSE,
                                           verbose = FALSE) {
   n_reads <- length(reads)
   k       <- nchar(ref_kmers[1L])
@@ -339,6 +355,7 @@
               sc$lead, sc$trail, ref_dna,
               orig_bp_local = pos_after,
               search_window = search_window,
+              require_unique_anchor = require_unique_anchor,
               kmer_len = dup_len,
               debug_label = paste0(read_qname, " @", pos_after),
               verbose = verbose
@@ -400,6 +417,7 @@
                 sc$lead, sc$trail, ref_dna,
                 orig_bp_local = pos_after,
                 search_window = search_window,
+                require_unique_anchor = require_unique_anchor,
                 kmer_len = dup_len,
                 debug_label = paste0(read_qname, " @", pos_after),
                 verbose = verbose
@@ -522,6 +540,7 @@
   )
 }
 
+
 .cluster_breakpoints <- function(bp_values, cluster_tolerance) {
   if (length(bp_values) == 0L) return(list())
   bp_sorted <- sort(bp_values)
@@ -556,6 +575,7 @@
 
 .extend_candidates <- function(candidates_df, ref_dna, genomic_start,
                                min_size = 15L, search_window = 5000L,
+                               require_unique_anchor = FALSE,
                                verbose = FALSE) {
   if (is.null(candidates_df) || nrow(candidates_df) == 0L) return(data.frame())
   results <- vector("list", nrow(candidates_df))
@@ -580,6 +600,7 @@
       ref_dna = ref_dna,
       orig_bp_local = orig_bp_local,
       search_window = search_window,
+      require_unique_anchor = require_unique_anchor,
       kmer_len = row$length,
       debug_label = as.character(row$read_name),
       verbose = verbose

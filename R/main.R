@@ -16,6 +16,17 @@
 #'   widens this since its PTDs can genuinely exceed 5kb; safe to widen
 #'   because the anchor search now requires an unambiguous (single-hit)
 #'   match per prefix length rather than pooling every repeat-driven hit.
+#' @param require_unique_anchor If TRUE, the anchor search
+#'   (.estimate_itd_from_anchors()) only trusts a prefix-length match when
+#'   it's unambiguous (exactly one hit in the window); ambiguous matches
+#'   contribute nothing rather than every hit. Default FALSE (original
+#'   behaviour: pool every hit, ambiguous or not). Motivated by KMT2A's
+#'   Alu-rich introns producing wildly inconsistent length estimates from
+#'   short-prefix repeat coincidences, but NOT proven safe for every gene --
+#'   combined with an anchor-preferring best_len (since reverted) it
+#'   regressed HORIZON FLT3's certified 300bp ITD to 260bp. Left FALSE
+#'   everywhere by default; enable per-gene only after checking real
+#'   results, the way every other threshold in this pipeline was tuned.
 #' @param prefilter Enable fast prefiltering of alignments.
 #' @param min_ins_filter Minimum net insertion length filter.
 #' @param output_prefix Base name prefix (default "TALOS").
@@ -128,7 +139,7 @@
 detect_itd <- function(
     bam_path, gene_config, genomic_ref_seq = NULL, k = 11, min_support = 10,
     min_size = 15, max_missing_kmers = 0.5, cluster_tolerance = 10, prefilter = TRUE,
-    search_window = 5000L,
+    search_window = 5000L, require_unique_anchor = FALSE,
     min_ins_filter = 3, output_prefix = "TALOS", output_folder = "./results",
     write_vcf = TRUE, verbose = TRUE, debug = FALSE, nominal_read_len = 150,
     max_correction = 2.0, plot = FALSE, sample_name = NULL, filter_intronic = FALSE,
@@ -167,7 +178,7 @@ detect_itd <- function(
     merge_gap = 500L,                 
     min_ptd_length = 200L,
     max_plausible_fragments = 4L,
-    use_exon_graph = FALSE,   
+    use_exon_graph = FALSE,  
     ...
 ) {
   
@@ -181,6 +192,7 @@ detect_itd <- function(
   
   timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
   
+
   base_parts <- c()
   if (!is.null(output_prefix) && output_prefix != "") base_parts <- c(base_parts, output_prefix)
   if (include_sample && !is.null(sample_name) && sample_name != "") base_parts <- c(base_parts, sample_name)
@@ -260,6 +272,7 @@ detect_itd <- function(
     candidates <- list()
     bp_df <- data.frame()
     
+
     if (use_exon_graph && !is.null(gene_config$all_exons)) {
       if (verbose) message("[TALOS] Running Exon-Graph PTD reconstruction...")
       
@@ -280,7 +293,7 @@ detect_itd <- function(
           junction_bps <- c(BiocGenerics::start(junction_reads), BiocGenerics::end(junction_reads))
           refined_bp <- .kde_breakpoint(junction_bps)
           local_bp   <- refined_bp - gene_config$genomic_start + 1L
-          
+
           sc_seqs <- sapply(seq_len(length(junction_reads)), function(i) {
             sc <- .get_softclips(GenomicAlignments::cigar(junction_reads)[i], 
                                  as.character(S4Vectors::mcols(junction_reads)$seq[i]))
@@ -332,7 +345,7 @@ detect_itd <- function(
           max_missing_kmers = max_missing_kmers, refine_bp = refine_bp, use_cigar_bp = use_cigar_bp,
           genomic_start = gene_config$genomic_start, ref_dna = ref_dna,
           max_itd_length = max_itd_length, convert_long_to_ptd = convert_long_to_ptd,
-          search_window = search_window, verbose = verbose
+          search_window = search_window, require_unique_anchor = require_unique_anchor, verbose = verbose
         )
         legacy_candidates <- c(legacy_candidates, jump_candidates)
       }
@@ -345,7 +358,7 @@ detect_itd <- function(
         max_missing_kmers = max_missing_kmers, refine_bp = refine_bp, use_cigar_bp = use_cigar_bp,
         genomic_start = gene_config$genomic_start, ref_dna = ref_dna,
         max_itd_length = max_itd_length, convert_long_to_ptd = convert_long_to_ptd,
-        search_window = search_window, verbose = verbose
+        search_window = search_window, require_unique_anchor = require_unique_anchor, verbose = verbose
       )
     }
     candidates <- c(candidates, legacy_candidates)
@@ -385,7 +398,7 @@ detect_itd <- function(
       ref_dna       = ref_dna,
       genomic_start = gene_config$genomic_start,
       min_size      = min_size,
-      search_window = search_window,
+      search_window = search_window, require_unique_anchor = require_unique_anchor,
       verbose       = verbose
     )
     
@@ -427,13 +440,15 @@ detect_itd <- function(
             next
           }
           
+
           anchor_vals  <- rcl_reads$itdsize[rcl_reads$itdsize_source == "anchor"]
-          best_len     <- if (length(anchor_vals) > 0L) .mode(anchor_vals) else .mode(rcl_reads$itdsize)
+          best_len     <- .mode(rcl_reads$itdsize)
           median_bp <- as.integer(median(rcl_reads$breakpoint_refined, na.rm = TRUE))
+          
           support_read_names <- rcl_reads$read_name
+
           support_rows <- bp_df[bp_df$read_name %in% support_read_names &
                                 abs(bp_df$breakpoint - median_bp) <= cluster_tolerance, ]
-
           additional <- bp_df[abs(bp_df$breakpoint - median_bp) <= cluster_tolerance & 
                               !(bp_df$read_name %in% support_read_names), ]
           support_rows <- rbind(support_rows, additional)
@@ -561,7 +576,6 @@ detect_itd <- function(
           next
         }
         
-        # Fallback to k‑mer based length grouping
         cluster_lengths <- cand_lengths[cluster_candidates]
         cluster_lengths[is.na(cluster_lengths)] <- -1L
         len_groups <- split(cluster_candidates, cluster_lengths)
@@ -612,12 +626,13 @@ detect_itd <- function(
     }
     
     final_df <- do.call(rbind, lapply(results, function(x) as.data.frame(x, stringsAsFactors = FALSE)))
-    final_df$MergedFromN <- 1L   
-    final_df$MergeFragmentWarning <- FALSE  
+    final_df$MergedFromN <- 1L  
+    final_df$MergeFragmentWarning <- FALSE   
     final_df$Hotspot     <- FALSE
     final_df$HotspotName <- NA_character_
     final_df$Region      <- NA_character_
     final_df$ExonNumber  <- NA_integer_
+    
     if (merge_ptd_intervals && nrow(final_df) > 0) {
       keep <- which(!is.na(final_df$Length) & final_df$Length >= min_ptd_length)
       skip <- setdiff(seq_len(nrow(final_df)), keep)  
@@ -638,12 +653,15 @@ detect_itd <- function(
           group_of[S4Vectors::queryHits(hits)] <- S4Vectors::subjectHits(hits)
           
           merged_rows <- lapply(seq_along(merged_gr), function(i) {
-            grp_keep <- keep[group_of == i]  
+            grp_keep <- keep[group_of == i]   # rows belonging to THIS merged interval only
             n_members <- length(grp_keep)
+            
             mg_start <- GenomicRanges::start(merged_gr[i])
             mg_len   <- GenomicRanges::width(merged_gr[i])
+            
             tmpl_idx <- grp_keep[which.min(final_df$GenomicPosition[grp_keep])]
             template <- final_df[tmpl_idx, ]
+            
             support_w <- final_df$SupportingReads[grp_keep]
             support_w[is.na(support_w) | support_w < 0] <- 0
             wmean <- function(vals, digits = NA_integer_) {
@@ -656,6 +674,7 @@ detect_itd <- function(
             
             template$GenomicPosition  <- mg_start
             template$Length           <- mg_len
+            
             if (!is.null(bam_data$cov)) {
               mg_span_cov <- compute_span_coverage(bam_data$cov, gene_config$chrom,
                                                    mg_start, mg_len, verbose = debug)
@@ -671,12 +690,10 @@ detect_itd <- function(
             template$DepthAtBreakpoint <- template$SupportingReads + template$WildtypeReads
             template$AlleleFrequency  <- if (template$DepthAtBreakpoint > 0L)
               template$SupportingReads / template$DepthAtBreakpoint else NA_real_
-
             template$TotalSupportBases  <- as.integer(sum(final_df$TotalSupportBases[grp_keep],  na.rm = TRUE))
             template$LeftSoftclipCount  <- as.integer(sum(final_df$LeftSoftclipCount[grp_keep],   na.rm = TRUE))
             template$RightSoftclipCount <- as.integer(sum(final_df$RightSoftclipCount[grp_keep],  na.rm = TRUE))
             template$BothSoftclipCount  <- as.integer(sum(final_df$BothSoftclipCount[grp_keep],   na.rm = TRUE))
-
             template$LeftSoftclipPctSupport  <- if (template$SupportingReads > 0L)
               template$LeftSoftclipCount  / template$SupportingReads * 100 else NA_real_
             template$RightSoftclipPctSupport <- if (template$SupportingReads > 0L)
@@ -685,7 +702,6 @@ detect_itd <- function(
               template$LeftSoftclipCount  / template$WildtypeReads * 100 else NA_real_
             template$RightSoftclipPctWT <- if (template$WildtypeReads > 0L)
               template$RightSoftclipCount / template$WildtypeReads * 100 else NA_real_
-            
 
             template$RefMatch_Observed  <- wmean(final_df$RefMatch_Observed[grp_keep], 1L)
             template$RefMatch_Total     <- wmean(final_df$RefMatch_Total[grp_keep],    1L)
@@ -748,6 +764,19 @@ detect_itd <- function(
                 mg_start, mg_len, n_members, template$SpanMinCoverage, thresholds$min_span_coverage))
               return(NULL)
             }
+
+            if (!is.na(template$SpanDepthFoldChange) &&
+                (template$SpanDepthFoldChange < thresholds$min_span_depth_fold_change ||
+                 template$SpanDepthFoldChange > thresholds$max_span_depth_fold_change)) {
+              log_msg(sprintf(
+                paste("REJECTED merged interval at %d (length %d bp, %d fragment(s)):",
+                      "SpanDepthFoldChange=%.2fx outside [%.2f, %.2f] -- doesn't match the",
+                      "depth pattern of a real duplication (too high suggests a",
+                      "collapsed/repetitive region pulling in multi-mapped reads)."),
+                mg_start, mg_len, n_members, template$SpanDepthFoldChange,
+                thresholds$min_span_depth_fold_change, thresholds$max_span_depth_fold_change))
+              return(NULL)
+            }
             
             template
           })
@@ -772,7 +801,6 @@ detect_itd <- function(
         log_msg(sprintf("No duplications >= %d bp found; skipping merge.", min_ptd_length))
       }
     }
-
     
     if (do_annotate_hotspots) final_df <- annotate_hotspots(final_df, db_path = hotspot_db_path, genome_build = gene_config$build)
     else { final_df$Hotspot <- FALSE; final_df$HotspotName <- NA_character_ }
@@ -810,7 +838,7 @@ talos <- function(
     plot = TRUE, sample_name = NULL, filter_intronic = NULL,
     ptd_mode = NULL, use_cigar_bp = NULL, refine_bp = NULL,
     min_mapq = NULL, min_wt_reads = NULL, cluster_tolerance = NULL,
-    search_window = NULL,
+    search_window = NULL, require_unique_anchor = NULL,
     vaf_threshold = NULL, min_strand_bias = NULL, max_strand_bias = NULL,
     min_mean_support_mapq = NULL, max_breakpoint_spread = NULL,
     min_softclip_fraction = NULL, min_unique_breakpoints = NULL,
@@ -848,7 +876,7 @@ talos <- function(
     merge_gap = NULL,                
     min_ptd_length = NULL,           
     max_plausible_fragments = NULL,
-    use_exon_graph = NULL,   
+    use_exon_graph = NULL,   # NEW
     verbose = TRUE,
     debug = FALSE,
     ...
@@ -859,12 +887,11 @@ talos <- function(
                             exon_padding = exon_padding)
   config$build <- build
   
-
   defaults <- list(
     min_support = 10, min_size = 15, max_correction = 2.0, filter_intronic = FALSE,
     max_missing_kmers = 0.5, ptd_mode = FALSE, use_cigar_bp = TRUE, refine_bp = FALSE, min_mapq = 20,
     min_wt_reads = 0, cluster_tolerance = 10, vaf_threshold = 0.01,
-    search_window = 5000L,
+    search_window = 5000L, require_unique_anchor = FALSE,
     min_strand_bias = 0, max_strand_bias = 1, min_mean_support_mapq = 0,
     max_breakpoint_spread = Inf, min_softclip_fraction = 0, min_unique_breakpoints = 0,
     min_coverage_drop = 1.0, min_local_coverage = 0, coverage_window = 200, min_microhomology = 0,
@@ -899,7 +926,6 @@ talos <- function(
   
   yaml_vals <- config$gene_settings
   
-
   resolve <- function(user_val, yaml_val, default_val) {
     if (!is.null(user_val)) return(user_val)
     if (!is.null(yaml_val)) return(yaml_val)
@@ -907,7 +933,7 @@ talos <- function(
   }
   
   p <- lapply(names(defaults), function(nm) {
-    user_val <- get(nm)  
+    user_val <- get(nm)   
     yaml_val <- yaml_vals[[nm]]
     resolve(user_val, yaml_val, defaults[[nm]])
   })
@@ -935,7 +961,7 @@ talos <- function(
     use_cigar_bp = p$use_cigar_bp, refine_bp = p$refine_bp,
     min_mapq = p$min_mapq, min_wt_reads = p$min_wt_reads,
     cluster_tolerance = p$cluster_tolerance, vaf_threshold = p$vaf_threshold,
-    search_window = p$search_window,
+    search_window = p$search_window, require_unique_anchor = p$require_unique_anchor,
     min_strand_bias = p$min_strand_bias, max_strand_bias = p$max_strand_bias,
     min_mean_support_mapq = p$min_mean_support_mapq, max_breakpoint_spread = p$max_breakpoint_spread,
     min_softclip_fraction = p$min_softclip_fraction, min_unique_breakpoints = p$min_unique_breakpoints,
