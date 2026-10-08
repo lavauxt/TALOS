@@ -50,63 +50,38 @@
   if (is.na(clip_seq) || nchar(clip_seq) < min_clip_len)
     return(NULL)
   if (!requireNamespace("Biostrings", quietly = TRUE)) return(NULL)
+  if (!requireNamespace("pwalign", quietly = TRUE)) return(NULL)
 
   clip_dna <- Biostrings::DNAString(clip_seq)
   clip_rc  <- Biostrings::reverseComplement(clip_dna)
 
   best <- list(subtype = NA_character_, score = 0, strand = NA_character_,
                aln_start = NA_integer_, aln_end = NA_integer_)
+  orientations <- list(`+` = clip_dna, `-` = clip_rc)
 
   for (nm in names(alu_seqs)) {
     ref <- alu_seqs[[nm]]
-    ref_len <- Biostrings::nchar(ref)
+    for (i in seq_along(orientations)) {
+      strand <- names(orientations)[i]
+      aln <- tryCatch(
+        pwalign::pairwiseAlignment(
+          orientations[[i]], ref,
+          type         = "local",
+          gapOpening   = -10,
+          gapExtension = -0.5
+        ),
+        error = function(e) NULL
+      )
+      if (is.null(aln)) next
 
-
-    aln_fwd <- tryCatch(
-      Biostrings::pairwiseAlignment(
-        clip_dna, ref,
-        type            = "local",
-        substitutionMatrix = "BLOSUM62",  
-        gapOpening      = -10,
-        gapExtension    = -0.5,
-        scoreOnly       = FALSE
-      ),
-      error = function(e) NULL
-    )
-    if (!is.null(aln_fwd)) {
-      raw_score <- Biostrings::score(aln_fwd)
-      norm_score <- raw_score / (nchar(clip_seq) * 1.0)  
+      norm_score <- pwalign::score(aln) / nchar(clip_seq)
       if (norm_score > best$score) {
         best <- list(
           subtype   = nm,
           score     = norm_score,
-          strand    = "+",
-          aln_start = Biostrings::start(Biostrings::subject(aln_fwd)),
-          aln_end   = Biostrings::end(Biostrings::subject(aln_fwd))
-        )
-      }
-    }
-
-    aln_rev <- tryCatch(
-      Biostrings::pairwiseAlignment(
-        clip_rc, ref,
-        type         = "local",
-        gapOpening   = -10,
-        gapExtension = -0.5,
-        scoreOnly    = FALSE
-      ),
-      error = function(e) NULL
-    )
-    if (!is.null(aln_rev)) {
-      raw_score <- Biostrings::score(aln_rev)
-      norm_score <- raw_score / (nchar(clip_seq) * 1.0)
-      if (norm_score > best$score) {
-        best <- list(
-          subtype   = nm,
-          score     = norm_score,
-          strand    = "-",
-          aln_start = Biostrings::start(Biostrings::subject(aln_rev)),
-          aln_end   = Biostrings::end(Biostrings::subject(aln_rev))
+          strand    = strand,
+          aln_start = pwalign::start(pwalign::subject(aln)),
+          aln_end   = pwalign::end(pwalign::subject(aln))
         )
       }
     }
@@ -290,6 +265,9 @@
 #' @keywords internal
 .summarise_alu_cluster <- function(cluster_df, ref_dna, gene_config,
                                     wt_info, alu_seqs, min_support = 3L) {
+  cluster_df <- cluster_df[order(cluster_df$alu_score, decreasing = TRUE), ,
+                           drop = FALSE]
+  cluster_df <- cluster_df[!duplicated(cluster_df$read_name), , drop = FALSE]
   if (nrow(cluster_df) < min_support) return(NULL)
 
   best_idx  <- which.max(cluster_df$alu_score)
@@ -311,13 +289,14 @@
   )
   trunc_5p <- .alu_5p_truncation(best_hit$aln_start, consensus_len)
 
-  wt_at_site <- if (!is.null(wt_info$cov) && local_pos >= 1L &&
-                      local_pos <= length(wt_info$cov))
-    as.integer(wt_info$cov[local_pos])
-  else NA_integer_
+  wt_at_site <- .count_wildtype_at_position(
+    wt_info,
+    median_pos,
+    support_qnames = cluster_df$read_name
+  )
 
   n_support  <- nrow(cluster_df)
-  depth      <- n_support + (wt_at_site %||% 0L)
+  depth      <- n_support + wt_at_site
   vaf        <- if (depth > 0L) n_support / depth else NA_real_
 
   clip_lengths <- nchar(cluster_df$clip_seq)
@@ -334,7 +313,7 @@
     ALU_Sequence     = best_clip,
     ALU_RawScore     = best_hit$alu_score,
     SupportingReads  = as.integer(n_support),
-    WildtypeReads    = wt_at_site %||% NA_integer_,
+    WildtypeReads    = wt_at_site,
     DepthAtBreakpoint = as.integer(depth),
     AlleleFrequency  = round(vaf, 4L),
     MeanSupportMAPQ  = round(mean(cluster_df$mapq, na.rm = TRUE), 1L),

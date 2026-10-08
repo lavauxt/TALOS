@@ -140,12 +140,16 @@ annotate_hotspots <- function(itd_df, db_path = NULL, genome_build = NULL,
   return(itd_df)
 }
 
-.annotate_exonic_region <- function(final_df, exons_gr) {
-  if (is.null(exons_gr) || nrow(final_df) == 0) {
+.annotate_exonic_region <- function(final_df, exons_gr,
+                                   pos_col = "GenomicPosition") {
+  if (is.null(exons_gr) || length(exons_gr) == 0L || nrow(final_df) == 0L) {
     final_df$Region     <- rep(NA_character_, nrow(final_df))
     final_df$ExonNumber <- rep(NA_integer_, nrow(final_df))
     return(final_df)
   }
+
+  if (!pos_col %in% names(final_df))
+    stop("Position column not found in result data: ", pos_col)
 
   exon_num_vec <- NULL
   if (!is.null(exons_gr$exon_number) && length(exons_gr$exon_number) > 0)
@@ -157,8 +161,8 @@ annotate_hotspots <- function(itd_df, db_path = NULL, genome_build = NULL,
 
   bp_gr <- GenomicRanges::GRanges(
     seqnames = GenomeInfoDb::seqnames(exons_gr)[1L],
-    ranges   = IRanges::IRanges(start = final_df$GenomicPosition,
-                                end   = final_df$GenomicPosition)
+    ranges   = IRanges::IRanges(start = final_df[[pos_col]],
+                                end   = final_df[[pos_col]])
   )
   hits <- GenomicRanges::findOverlaps(bp_gr, exons_gr, type = "within")
   final_df$Region     <- "intronic"

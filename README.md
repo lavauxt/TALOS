@@ -320,7 +320,7 @@ added by extending the YAML with a `transcript:` and `targeted_exons:` list.
    CIGAR string.
 4. **ALU alignment** – each clip ≥ `min_clip_len` bp is aligned against all
    loaded ALU consensus sequences via local Smith‑Waterman
-   (`Biostrings::pairwiseAlignment`), in both forward and reverse‑complement
+   (`pwalign::pairwiseAlignment`), in both forward and reverse‑complement
    orientation. The best‑scoring hit (normalised score ≥ `min_alu_score`) is
    retained.
 5. **Poly‑A detection** – clips are scanned for poly‑A (sense) or poly‑T

@@ -75,19 +75,7 @@
   soft_seqs <- soft_seqs[nchar(soft_seqs) >= min_len]
   if (length(soft_seqs) < min_reads) return(NA_character_)
 
-  max_len <- max(nchar(soft_seqs))
-  mat <- matrix(NA_character_, nrow = length(soft_seqs), ncol = max_len)
-  for (i in seq_along(soft_seqs)) {
-    s <- soft_seqs[i]
-    mat[i, seq_len(nchar(s))] <- strsplit(s, "")[[1]]
-  }
-  consensus <- vapply(seq_len(max_len), function(pos) {
-    col <- mat[, pos]
-    col <- col[!is.na(col)]
-    if (length(col) == 0) return("N")
-    names(sort(table(col), decreasing = TRUE))[1L]
-  }, character(1L))
-  paste(consensus, collapse = "")
+  .assemble_weighted_consensus(soft_seqs)
 }
 
 
@@ -570,6 +558,22 @@
     region_start = genomic_start,
     region_end   = genomic_end
   )
+}
+
+
+.count_wildtype_at_position <- function(wildtype_info, position,
+                                        support_qnames = character()) {
+  if (is.null(wildtype_info$gr) || length(wildtype_info$gr) == 0L ||
+      is.na(position))
+    return(0L)
+
+  keep <- wildtype_info$is_primary &
+    GenomicRanges::start(wildtype_info$gr) <= position &
+    GenomicRanges::end(wildtype_info$gr) >= position
+  keep[is.na(keep)] <- FALSE
+  qnames <- wildtype_info$qnames[keep]
+  qnames <- unique(qnames[!is.na(qnames) & !qnames %in% support_qnames])
+  as.integer(length(qnames))
 }
 
 
