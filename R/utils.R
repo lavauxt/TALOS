@@ -677,7 +677,7 @@ compute_microhomology <- function(support_rows, ref_dna, breakpoint,
   local_bp      <- breakpoint - genomic_start + 1L
   ref_len_total <- nchar(ref_dna)
   
-  has_biostrings <- requireNamespace("Biostrings", quietly = TRUE)
+  has_biostrings <- .has_biostrings
   
   for (i in seq_len(nrow(support_rows))) {
     cig      <- support_rows$cigar[i]

@@ -3,8 +3,8 @@
                                           support_qnames, buffer = 10L) {
   strict_idx <- which(
     wildtype_info$is_primary &
-    start(wildtype_info$gr) <= (len_specific_bp - buffer) &
-    end(wildtype_info$gr)   >= (len_specific_bp + buffer)
+    GenomicRanges::start(wildtype_info$gr) <= (len_specific_bp - buffer) &
+    GenomicRanges::end(wildtype_info$gr)   >= (len_specific_bp + buffer)
   )
   strict_qnames <- unique(wildtype_info$qnames[strict_idx])
   pure_wt       <- setdiff(strict_qnames, support_qnames)
@@ -491,8 +491,8 @@
     if (!is.na(metrics$ITDReadCoverage)      && metrics$ITDReadCoverage      < min_itd_read_coverage)  return(FALSE)
 
 
-    left  <- metrics$LeftSoftclipCount
-    right <- metrics$RightSoftclipCount
+    left  <- metrics$LeftSoftclipCount %||% NA_integer_
+    right <- metrics$RightSoftclipCount %||% NA_integer_
     if (!is.na(left) && !is.na(right)) {
       if (ptd_mode && ptd_allow_asymmetric) {
         max_side <- max(left, right)

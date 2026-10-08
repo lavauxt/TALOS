@@ -41,6 +41,10 @@ test_that("ALU clip matching scores both orientations consistently", {
   expect_equal(hit$subtype, "AluTest")
   expect_equal(hit$strand, "-")
   expect_gte(hit$score, 0.6)
+
+  forward_hit <- .match_clip_to_alu(strrep("A", 30L), consensus,
+                                    min_score = 0.6)
+  expect_equal(forward_hit$strand, "+")
 })
 
 test_that("wild-type depth counts unique non-supporting reads at a breakpoint", {
@@ -97,4 +101,71 @@ test_that("ALU clusters deduplicate reads and compute a finite VAF", {
   expect_equal(result$SupportingReads, 3L)
   expect_equal(result$WildtypeReads, 1L)
   expect_equal(result$AlleleFrequency, 0.75)
+})
+
+test_that("bundled UBTF hotspots match NM_014233.4 exon 13 by build", {
+  hotspots <- utils::read.csv(
+    testthat::test_path("../../inst/extdata/hotspots.csv"),
+    stringsAsFactors = FALSE
+  )
+  ubtf <- hotspots[hotspots$Gene == "UBTF", ]
+  expect_equal(ubtf$Build, c("hg19", "hg38"))
+  expect_equal(ubtf$Start, c(42288160L, 44210792L))
+  expect_equal(ubtf$End, c(42288315L, 44210947L))
+})
+
+test_that("bundled BCOR hg38 hotspot matches NM_001123385.2 exon 15", {
+  hotspots <- utils::read.csv(
+    testthat::test_path("../../inst/extdata/hotspots.csv"),
+    stringsAsFactors = FALSE
+  )
+  bcor_hg38 <- hotspots[hotspots$Gene == "BCOR" & hotspots$Build == "hg38", ]
+
+  expect_equal(bcor_hg38$Start, 40051246L)
+  expect_equal(bcor_hg38$End, 40052400L)
+})
+
+test_that("ALU YAML aliases retain the canonical hotspot gene symbols", {
+  config <- yaml::read_yaml(
+    testthat::test_path("../../inst/extdata/gene_config.yaml")
+  )
+  expect_equal(config$FLT3_ALU$gene_symbol, "FLT3")
+  expect_equal(config$KMT2A_ALU$gene_symbol, "KMT2A")
+})
+
+test_that("UBTF hotspot annotations use build-specific exon coordinates", {
+  hotspots_path <- testthat::test_path("../../inst/extdata/hotspots.csv")
+  cases <- data.frame(
+    Gene = c("UBTF", "UBTF"),
+    GenomicPosition = c(42288160L, 44210792L),
+    Length = c(1L, 1L)
+  )
+
+  hg19 <- annotate_hotspots(cases[1L, ], db_path = hotspots_path,
+                            genome_build = "hg19")
+  hg38 <- annotate_hotspots(cases[2L, ], db_path = hotspots_path,
+                            genome_build = "hg38")
+
+  expect_true(hg19$Hotspot)
+  expect_true(hg38$Hotspot)
+  expect_equal(hg19$HotspotName, "UBTF_exon13")
+  expect_equal(hg38$HotspotName, "UBTF_exon13")
+})
+
+test_that("poly-A run detection follows the configured minimum", {
+  expect_equal(.detect_poly_a("CCAAAAAGG", min_run = 5L), 5L)
+  expect_equal(.detect_poly_a("CCAAAAAGG", min_run = 6L), 0L)
+})
+
+test_that("LRU cache promotes hits and evicts the least-recently-used key", {
+  cache <- .lru_cache(max_size = 2L)
+  cache$set("a", 1L)
+  cache$set("b", 2L)
+  expect_equal(cache$get("a"), 1L)
+  cache$set("c", 3L)
+
+  expect_equal(cache$get("a"), 1L)
+  expect_null(cache$get("b"))
+  expect_equal(cache$get("c"), 3L)
+  expect_equal(cache$size(), 2L)
 })

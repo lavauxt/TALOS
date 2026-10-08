@@ -547,7 +547,7 @@ get_gene_config <- function(
   full_cdna <- paste(all_exon_seqs, collapse = "")
 
   list(
-    gene            = gene,
+    gene            = entry$gene_symbol %||% gene,
     chrom           = chrom,
     strand          = strand,
     transcript      = transcript_id,

@@ -97,6 +97,7 @@ UBTF:
 # anywhere in the gene body, not just in the previously targeted exons.
 
 FLT3_ALU:
+  gene_symbol: FLT3
   transcript: NM_004119
   targeted_exons: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]
   build: hg19
@@ -109,6 +110,7 @@ FLT3_ALU:
     min_tsd:           3
 
 KMT2A_ALU:
+  gene_symbol: KMT2A
   transcript: NM_005933
   targeted_exons: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30]
   build: hg19

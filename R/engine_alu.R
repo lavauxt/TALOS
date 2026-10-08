@@ -109,8 +109,8 @@
     max(attr(m, "match.length"))
   }
 
-  run_a <- count_run("A{4,}", clip_seq)    
-  run_t <- count_run("T{4,}", clip_seq)    
+  run_a <- count_run(paste0("A{", min_run, ",}"), clip_seq)
+  run_t <- count_run(paste0("T{", min_run, ",}"), clip_seq)
   best  <- max(run_a, run_t)
   if (best < min_run) 0L else as.integer(best)
 }

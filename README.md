@@ -225,6 +225,12 @@ results (based on genomic overlap).
 | End    | integer   | Hotspot region end coordinate (inclusive). |
 | Name   | character | Identifier, e.g. `"FLT3_TKD_hotspot_1"`. |
 
+The `UBTF_exon13` intervals in the bundled CSV were checked against UCSC's
+NCBI RefSeq annotation for transcript `NM_014233.4` (hg19 and hg38; exon
+numbered from the transcript's 5′ end). Other hotspot intervals remain as
+configured and should not be interpreted as transcript exon boundaries unless
+their names and provenance establish that.
+
 Example:
 
     Gene,Build,Start,End,Name

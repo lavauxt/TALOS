@@ -932,8 +932,9 @@ talos <- function(
     return(default_val)
   }
   
+  caller_env <- environment()
   p <- lapply(names(defaults), function(nm) {
-    user_val <- get(nm)   
+    user_val <- base::get(nm, envir = caller_env, inherits = FALSE)
     yaml_val <- yaml_vals[[nm]]
     resolve(user_val, yaml_val, defaults[[nm]])
   })
