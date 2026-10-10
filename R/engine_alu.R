@@ -15,17 +15,22 @@
 .load_alu_consensus <- function(consensus_fa = NULL) {
   if (is.null(consensus_fa)) {
     consensus_fa <- system.file(
-      "extdata", "alu_consensus.fa",
+      "extdata",
+      "alu_consensus.fa",
       package = "TALOS"
     )
   }
-  if (!file.exists(consensus_fa))
+  if (!file.exists(consensus_fa)) {
     stop(
-      "ALU consensus FASTA not found at: ", consensus_fa, "\n",
+      "ALU consensus FASTA not found at: ",
+      consensus_fa,
+      "\n",
       "  Supply a custom path via consensus_fa= or install the full TALOS package."
     )
-  if (!requireNamespace("Biostrings", quietly = TRUE))
+  }
+  if (!requireNamespace("Biostrings", quietly = TRUE)) {
     stop("Biostrings required for ALU sequence matching.")
+  }
   Biostrings::readDNAStringSet(consensus_fa)
 }
 
@@ -44,19 +49,32 @@
 #' @param min_clip_len Minimum clip length to attempt alignment (default 25).
 #' @param min_score    Minimum normalised score to accept a match (default 0.6).
 #' @keywords internal
-.match_clip_to_alu <- function(clip_seq, alu_seqs,
-                                min_clip_len = 25L,
-                                min_score    = 0.60) {
-  if (is.na(clip_seq) || nchar(clip_seq) < min_clip_len)
+.match_clip_to_alu <- function(
+  clip_seq,
+  alu_seqs,
+  min_clip_len = 25L,
+  min_score = 0.60
+) {
+  if (is.na(clip_seq) || nchar(clip_seq) < min_clip_len) {
     return(NULL)
-  if (!requireNamespace("Biostrings", quietly = TRUE)) return(NULL)
-  if (!requireNamespace("pwalign", quietly = TRUE)) return(NULL)
+  }
+  if (!requireNamespace("Biostrings", quietly = TRUE)) {
+    return(NULL)
+  }
+  if (!requireNamespace("pwalign", quietly = TRUE)) {
+    return(NULL)
+  }
 
   clip_dna <- Biostrings::DNAString(clip_seq)
-  clip_rc  <- Biostrings::reverseComplement(clip_dna)
+  clip_rc <- Biostrings::reverseComplement(clip_dna)
 
-  best <- list(subtype = NA_character_, score = 0, strand = NA_character_,
-               aln_start = NA_integer_, aln_end = NA_integer_)
+  best <- list(
+    subtype = NA_character_,
+    score = 0,
+    strand = NA_character_,
+    aln_start = NA_integer_,
+    aln_end = NA_integer_
+  )
   orientations <- list(`+` = clip_dna, `-` = clip_rc)
 
   for (nm in names(alu_seqs)) {
@@ -65,29 +83,34 @@
       strand <- names(orientations)[i]
       aln <- tryCatch(
         pwalign::pairwiseAlignment(
-          orientations[[i]], ref,
-          type         = "local",
-          gapOpening   = -10,
+          orientations[[i]],
+          ref,
+          type = "local",
+          gapOpening = -10,
           gapExtension = -0.5
         ),
         error = function(e) NULL
       )
-      if (is.null(aln)) next
+      if (is.null(aln)) {
+        next
+      }
 
       norm_score <- pwalign::score(aln) / nchar(clip_seq)
       if (norm_score > best$score) {
         best <- list(
-          subtype   = nm,
-          score     = norm_score,
-          strand    = strand,
+          subtype = nm,
+          score = norm_score,
+          strand = strand,
           aln_start = pwalign::start(pwalign::subject(aln)),
-          aln_end   = pwalign::end(pwalign::subject(aln))
+          aln_end = pwalign::end(pwalign::subject(aln))
         )
       }
     }
   }
 
-  if (best$score < min_score) return(NULL)
+  if (best$score < min_score) {
+    return(NULL)
+  }
   best
 }
 
@@ -101,17 +124,21 @@
 #' @param min_run  Minimum consecutive A/T to report (default 6).
 #' @keywords internal
 .detect_poly_a <- function(clip_seq, min_run = 6L) {
-  if (is.na(clip_seq) || !nzchar(clip_seq)) return(0L)
+  if (is.na(clip_seq) || !nzchar(clip_seq)) {
+    return(0L)
+  }
 
   count_run <- function(pattern, seq) {
     m <- gregexpr(pattern, seq, perl = TRUE)[[1L]]
-    if (m[1L] == -1L) return(0L)
+    if (m[1L] == -1L) {
+      return(0L)
+    }
     max(attr(m, "match.length"))
   }
 
   run_a <- count_run(paste0("A{", min_run, ",}"), clip_seq)
   run_t <- count_run(paste0("T{", min_run, ",}"), clip_seq)
-  best  <- max(run_a, run_t)
+  best <- max(run_a, run_t)
   if (best < min_run) 0L else as.integer(best)
 }
 
@@ -125,7 +152,9 @@
 #' @param consensus_len Integer – total consensus length.
 #' @keywords internal
 .alu_5p_truncation <- function(aln_start, consensus_len) {
-  if (is.na(aln_start) || is.na(consensus_len)) return(NA_integer_)
+  if (is.na(aln_start) || is.na(consensus_len)) {
+    return(NA_integer_)
+  }
   as.integer(max(0L, aln_start - 1L))
 }
 
@@ -143,17 +172,22 @@
 #' @param genomic_start Integer – genomic offset for the region.
 #' @return Named list: tsd_len (integer), tsd_seq (character).
 #' @keywords internal
-.detect_alu_tsd <- function(ref_dna, ins_pos, max_tsd = 20L,
-                              genomic_start = 1L) {
+.detect_alu_tsd <- function(
+  ref_dna,
+  ins_pos,
+  max_tsd = 20L,
+  genomic_start = 1L
+) {
   ref_len <- nchar(ref_dna)
-  if (is.na(ins_pos) || ins_pos < 1L || ins_pos > ref_len)
+  if (is.na(ins_pos) || ins_pos < 1L || ins_pos > ref_len) {
     return(list(tsd_len = NA_integer_, tsd_seq = NA_character_))
+  }
 
   up_start <- max(1L, ins_pos - max_tsd)
-  up_seq   <- substr(ref_dna, up_start, ins_pos)
+  up_seq <- substr(ref_dna, up_start, ins_pos)
 
-  dn_end  <- min(ref_len, ins_pos + max_tsd)
-  dn_seq  <- substr(ref_dna, ins_pos + 1L, dn_end)
+  dn_end <- min(ref_len, ins_pos + max_tsd)
+  dn_seq <- substr(ref_dna, ins_pos + 1L, dn_end)
 
   best_len <- 0L
   for (tlen in seq_len(min(nchar(up_seq), nchar(dn_seq), max_tsd))) {
@@ -162,8 +196,9 @@
     if (toupper(up_suffix) == toupper(dn_prefix)) best_len <- tlen
   }
 
-  if (best_len == 0L)
+  if (best_len == 0L) {
     return(list(tsd_len = 0L, tsd_seq = NA_character_))
+  }
 
   tsd_seq <- substr(dn_seq, 1L, best_len)
   list(tsd_len = as.integer(best_len), tsd_seq = tsd_seq)
@@ -187,69 +222,92 @@
 #'   alu_subtype, alu_score, alu_strand, aln_start, aln_end,
 #'   poly_a_len, mapq, is_reverse
 #' @keywords internal
-.extract_alu_candidates <- function(reads, alu_seqs, genomic_start,
-                                     min_clip_len  = 25L,
-                                     min_alu_score = 0.60,
-                                     verbose       = FALSE) {
+.extract_alu_candidates <- function(
+  reads,
+  alu_seqs,
+  genomic_start,
+  min_clip_len = 25L,
+  min_alu_score = 0.60,
+  verbose = FALSE
+) {
   n_reads <- length(reads)
-  if (n_reads == 0L) return(data.frame())
-  if (verbose) message("[ALU] Checking ", n_reads, " reads for ALU soft-clips")
+  if (n_reads == 0L) {
+    return(data.frame())
+  }
+  if (verbose) {
+    message("[ALU] Checking ", n_reads, " reads for ALU soft-clips")
+  }
 
-  all_qnames  <- .safe_qnames(reads)
-  all_mapqs   <- S4Vectors::mcols(reads)$mapq
+  all_qnames <- .safe_qnames(reads)
+  all_mapqs <- S4Vectors::mcols(reads)$mapq
   all_mapqs[is.na(all_mapqs)] <- 0L
-  all_flags   <- S4Vectors::mcols(reads)$flag
-  is_reverse  <- bitwAnd(all_flags, 0x10L) != 0L
+  all_flags <- S4Vectors::mcols(reads)$flag
+  is_reverse <- bitwAnd(all_flags, 0x10L) != 0L
   read_starts <- BiocGenerics::start(reads)
   read_cigars <- GenomicAlignments::cigar(reads)
-  read_seqs   <- as.character(S4Vectors::mcols(reads)$seq)
+  read_seqs <- as.character(S4Vectors::mcols(reads)$seq)
 
-  has_clip <- grepl("S", read_cigars, fixed = TRUE) & !is.na(read_cigars)
-  idxs     <- which(has_clip)
+  has_clip <- .has_softclip(read_cigars)
+  idxs <- which(has_clip)
 
-  if (verbose) message("[ALU] ", length(idxs), " soft-clipped reads to scan")
+  if (verbose) {
+    message("[ALU] ", length(idxs), " soft-clipped reads to scan")
+  }
 
   rows <- vector("list", 2L * length(idxs))
-  k    <- 0L
+  k <- 0L
 
   for (i in idxs) {
     clips <- .get_softclips(read_cigars[i], read_seqs[i])
 
     for (side in c("lead", "trail")) {
       clip_seq <- clips[[if (side == "lead") "lead" else "trail"]]
-      if (is.na(clip_seq) || nchar(clip_seq) < min_clip_len) next
+      if (is.na(clip_seq) || nchar(clip_seq) < min_clip_len) {
+        next
+      }
 
-      hit <- .match_clip_to_alu(clip_seq, alu_seqs,
-                                  min_clip_len  = min_clip_len,
-                                  min_score     = min_alu_score)
-      if (is.null(hit)) next
+      hit <- .match_clip_to_alu(
+        clip_seq,
+        alu_seqs,
+        min_clip_len = min_clip_len,
+        min_score = min_alu_score
+      )
+      if (is.null(hit)) {
+        next
+      }
 
       poly_a <- .detect_poly_a(clip_seq)
 
-      g_pos <- if (side == "lead") read_starts[i] else BiocGenerics::end(reads[i])
+      g_pos <- if (side == "lead") {
+        read_starts[i]
+      } else {
+        BiocGenerics::end(reads[i])
+      }
       l_pos <- g_pos - genomic_start + 1L
 
       k <- k + 1L
       rows[[k]] <- data.frame(
-        read_name   = all_qnames[i],
+        read_name = all_qnames[i],
         genomic_pos = g_pos,
-        local_pos   = l_pos,
-        clip_side   = side,
-        clip_seq    = clip_seq,
+        local_pos = l_pos,
+        clip_side = side,
+        clip_seq = clip_seq,
         alu_subtype = hit$subtype,
-        alu_score   = hit$score,
-        alu_strand  = hit$strand,
-        aln_start   = hit$aln_start,
-        aln_end     = hit$aln_end,
-        poly_a_len  = poly_a,
-        mapq        = all_mapqs[i],
-        is_reverse  = is_reverse[i],
+        alu_score = hit$score,
+        alu_strand = hit$strand,
+        aln_start = hit$aln_start,
+        aln_end = hit$aln_end,
+        poly_a_len = poly_a,
+        mapq = all_mapqs[i],
+        is_reverse = is_reverse[i],
         stringsAsFactors = FALSE
       )
     }
   }
 
-  if (k == 0L) return(data.frame())
+  if (k == 0L) {
+    return(data.frame())
+  }
   do.call(rbind, rows[seq_len(k)])
 }
 
@@ -263,21 +321,32 @@
 #' @param alu_seqs    Named DNAStringSet (for ALU consensus length lookup).
 #' @param min_support Minimum supporting reads to report.
 #' @keywords internal
-.summarise_alu_cluster <- function(cluster_df, ref_dna, gene_config,
-                                    wt_info, alu_seqs, min_support = 3L) {
-  cluster_df <- cluster_df[order(cluster_df$alu_score, decreasing = TRUE), ,
-                           drop = FALSE]
+.summarise_alu_cluster <- function(
+  cluster_df,
+  ref_dna,
+  gene_config,
+  wt_info,
+  alu_seqs,
+  min_support = 3L
+) {
+  cluster_df <- cluster_df[
+    order(cluster_df$alu_score, decreasing = TRUE),
+    ,
+    drop = FALSE
+  ]
   cluster_df <- cluster_df[!duplicated(cluster_df$read_name), , drop = FALSE]
-  if (nrow(cluster_df) < min_support) return(NULL)
+  if (nrow(cluster_df) < min_support) {
+    return(NULL)
+  }
 
-  best_idx  <- which.max(cluster_df$alu_score)
-  best_hit  <- cluster_df[best_idx, ]
+  best_idx <- which.max(cluster_df$alu_score)
+  best_hit <- cluster_df[best_idx, ]
 
   median_pos <- as.integer(stats::median(cluster_df$genomic_pos))
-  local_pos  <- median_pos - gene_config$genomic_start + 1L
+  local_pos <- median_pos - gene_config$genomic_start + 1L
 
   n_fwd <- sum(!cluster_df$is_reverse)
-  n_rev <- sum( cluster_df$is_reverse)
+  n_rev <- sum(cluster_df$is_reverse)
 
   tsd <- .detect_alu_tsd(ref_dna, local_pos)
 
@@ -295,29 +364,29 @@
     support_qnames = cluster_df$read_name
   )
 
-  n_support  <- nrow(cluster_df)
-  depth      <- n_support + wt_at_site
-  vaf        <- if (depth > 0L) n_support / depth else NA_real_
+  n_support <- nrow(cluster_df)
+  depth <- n_support + wt_at_site
+  vaf <- if (depth > 0L) n_support / depth else NA_real_
 
   clip_lengths <- nchar(cluster_df$clip_seq)
-  best_clip    <- cluster_df$clip_seq[which.max(clip_lengths)]
+  best_clip <- cluster_df$clip_seq[which.max(clip_lengths)]
 
   data.frame(
-    InsertionSite    = median_pos,
-    ALUSubtype       = best_hit$alu_subtype,
-    ALUOrientation   = ifelse(best_hit$alu_strand == "+", "sense", "antisense"),
-    TSD_Length       = tsd$tsd_len,
-    TSD_Sequence     = tsd$tsd_seq,
-    PolyALength      = as.integer(poly_a_len),
-    ALU5pTruncation  = trunc_5p,
-    ALU_Sequence     = best_clip,
-    ALU_RawScore     = best_hit$alu_score,
-    SupportingReads  = as.integer(n_support),
-    WildtypeReads    = wt_at_site,
+    InsertionSite = median_pos,
+    ALUSubtype = best_hit$alu_subtype,
+    ALUOrientation = ifelse(best_hit$alu_strand == "+", "sense", "antisense"),
+    TSD_Length = tsd$tsd_len,
+    TSD_Sequence = tsd$tsd_seq,
+    PolyALength = as.integer(poly_a_len),
+    ALU5pTruncation = trunc_5p,
+    ALU_Sequence = best_clip,
+    ALU_RawScore = best_hit$alu_score,
+    SupportingReads = as.integer(n_support),
+    WildtypeReads = wt_at_site,
     DepthAtBreakpoint = as.integer(depth),
-    AlleleFrequency  = round(vaf, 4L),
-    MeanSupportMAPQ  = round(mean(cluster_df$mapq, na.rm = TRUE), 1L),
-    StrandBias       = round(n_rev / max(1L, n_support), 3L),
+    AlleleFrequency = round(vaf, 4L),
+    MeanSupportMAPQ = round(mean(cluster_df$mapq, na.rm = TRUE), 1L),
+    StrandBias = round(n_rev / max(1L, n_support), 3L),
     stringsAsFactors = FALSE
   )
 }
@@ -331,15 +400,24 @@
 #' @param vaf_threshold Minimum allele frequency (default 0.01).
 #' @param min_tsd       Minimum TSD length; 0 disables (default 0).
 #' @keywords internal
-.filter_alu_call <- function(row, min_support = 3L, min_alu_score = 0.60,
-                               vaf_threshold = 0.01, min_tsd = 0L) {
-  if (is.null(row)) return(FALSE)
+.filter_alu_call <- function(
+  row,
+  min_support = 3L,
+  min_alu_score = 0.60,
+  vaf_threshold = 0.01,
+  min_tsd = 0L
+) {
+  if (is.null(row)) {
+    return(FALSE)
+  }
   isTRUE(row$SupportingReads >= min_support) &&
-    isTRUE(row$ALU_RawScore  >= min_alu_score) &&
-    isTRUE(!is.na(row$AlleleFrequency) && row$AlleleFrequency >= vaf_threshold) &&
-    (min_tsd == 0L || isTRUE(!is.na(row$TSD_Length) && row$TSD_Length >= min_tsd))
+    isTRUE(row$ALU_RawScore >= min_alu_score) &&
+    isTRUE(
+      !is.na(row$AlleleFrequency) && row$AlleleFrequency >= vaf_threshold
+    ) &&
+    (min_tsd == 0L ||
+      isTRUE(!is.na(row$TSD_Length) && row$TSD_Length >= min_tsd))
 }
-
 
 
 #' Detect ALU/SINE mobile-element insertions from a BAM file
@@ -369,33 +447,38 @@
 #' @return data.frame with one row per ALU insertion detected.
 #' @export
 detect_alu <- function(
-    bam_path,
-    gene_config,
-    consensus_fa        = NULL,
-    min_support         = 3L,
-    min_alu_score       = 0.60,
-    min_clip_len        = 25L,
-    min_mapq            = 20L,
-    cluster_tolerance   = 15L,
-    vaf_threshold       = 0.01,
-    min_tsd             = 0L,
-    max_reads_in_region = 200000L,
-    do_annotate_hotspots = TRUE,
-    hotspot_db_path     = NULL,
-    output_prefix       = "TALOS_ALU",
-    output_folder       = "./results",
-    sample_name         = NULL,
-    html_report         = TRUE,
-    verbose             = TRUE
+  bam_path,
+  gene_config,
+  consensus_fa = NULL,
+  min_support = 3L,
+  min_alu_score = 0.60,
+  min_clip_len = 25L,
+  min_mapq = 20L,
+  cluster_tolerance = 15L,
+  vaf_threshold = 0.01,
+  min_tsd = 0L,
+  max_reads_in_region = 200000L,
+  do_annotate_hotspots = TRUE,
+  hotspot_db_path = NULL,
+  output_prefix = "TALOS_ALU",
+  output_folder = "./results",
+  sample_name = NULL,
+  html_report = TRUE,
+  verbose = TRUE
 ) {
-  start_time  <- Sys.time()
-  gene_name   <- gene_config$gene %||% "UNKNOWN"
-  if (is.null(sample_name))
+  start_time <- Sys.time()
+  gene_name <- gene_config$gene %||% "UNKNOWN"
+  if (is.null(sample_name)) {
     sample_name <- sub("\\..*", "", basename(bam_path))
+  }
 
-  if (verbose)
-    message(sprintf("[ALU] Starting detection | Gene: %s | Sample: %s",
-                    gene_name, sample_name))
+  if (verbose) {
+    message(sprintf(
+      "[ALU] Starting detection | Gene: %s | Sample: %s",
+      gene_name,
+      sample_name
+    ))
+  }
 
   alu_seqs <- tryCatch(
     .load_alu_consensus(consensus_fa),
@@ -403,20 +486,27 @@ detect_alu <- function(
       stop("[ALU] Could not load ALU consensus: ", conditionMessage(e))
     }
   )
-  if (verbose)
-    message(sprintf("[ALU] Loaded %d ALU consensus sequences: %s",
-                    length(alu_seqs), paste(names(alu_seqs), collapse = ", ")))
+  if (verbose) {
+    message(sprintf(
+      "[ALU] Loaded %d ALU consensus sequences: %s",
+      length(alu_seqs),
+      paste(names(alu_seqs), collapse = ", ")
+    ))
+  }
 
-  bam_data  <- .load_bam_data_streaming(
-    bam_path, gene_config,
+  bam_data <- .load_bam_data_streaming(
+    bam_path,
+    gene_config,
     compute_pairs = FALSE,
-    max_reads     = max_reads_in_region,
-    verbose       = verbose
+    max_reads = max_reads_in_region,
+    verbose = verbose
   )
   all_reads <- bam_data$reads
 
   if (length(all_reads) == 0L) {
-    if (verbose) message("[ALU] No reads in target region.")
+    if (verbose) {
+      message("[ALU] No reads in target region.")
+    }
     return(data.frame())
   }
 
@@ -425,104 +515,143 @@ detect_alu <- function(
   all_reads_for_wt <- all_reads[mapqs >= min_mapq]
 
   candidates <- .extract_alu_candidates(
-    reads         = all_reads_for_wt,
-    alu_seqs      = alu_seqs,
+    reads = all_reads_for_wt,
+    alu_seqs = alu_seqs,
     genomic_start = gene_config$genomic_start,
-    min_clip_len  = min_clip_len,
+    min_clip_len = min_clip_len,
     min_alu_score = min_alu_score,
-    verbose       = verbose
+    verbose = verbose
   )
 
   if (nrow(candidates) == 0L) {
-    if (verbose) message("[ALU] No ALU-positive soft-clips found.")
+    if (verbose) {
+      message("[ALU] No ALU-positive soft-clips found.")
+    }
     return(data.frame())
   }
-  if (verbose)
-    message(sprintf("[ALU] %d ALU-positive clip(s) from %d unique reads.",
-                    nrow(candidates), length(unique(candidates$read_name))))
+  if (verbose) {
+    message(sprintf(
+      "[ALU] %d ALU-positive clip(s) from %d unique reads.",
+      nrow(candidates),
+      length(unique(candidates$read_name))
+    ))
+  }
 
-  wt_info  <- .prepare_wildtype_info(
-    all_reads_for_wt, gene_config$genomic_start, gene_config$genomic_end
+  wt_info <- .prepare_wildtype_info(
+    all_reads_for_wt,
+    gene_config$genomic_start,
+    gene_config$genomic_end
   )
   wt_info$sample_name <- sample_name
 
   clusters <- .cluster_breakpoints(candidates$genomic_pos, cluster_tolerance)
-  ref_dna  <- gene_config$genomic_ref_seq
-  if (is.null(ref_dna) || is.na(ref_dna))
+  ref_dna <- gene_config$genomic_ref_seq
+  if (is.null(ref_dna) || is.na(ref_dna)) {
     stop("[ALU] No genomic reference sequence in gene_config.")
+  }
 
   results <- list()
   for (cl in clusters) {
     cl_df <- candidates[candidates$genomic_pos %in% cl, , drop = FALSE]
-    row   <- .summarise_alu_cluster(
-      cluster_df  = cl_df,
-      ref_dna     = ref_dna,
+    row <- .summarise_alu_cluster(
+      cluster_df = cl_df,
+      ref_dna = ref_dna,
       gene_config = gene_config,
-      wt_info     = wt_info,
-      alu_seqs    = alu_seqs,
+      wt_info = wt_info,
+      alu_seqs = alu_seqs,
       min_support = min_support
     )
-    if (.filter_alu_call(row, min_support, min_alu_score, vaf_threshold, min_tsd))
+    if (
+      .filter_alu_call(row, min_support, min_alu_score, vaf_threshold, min_tsd)
+    ) {
       results[[length(results) + 1L]] <- row
+    }
   }
 
   if (length(results) == 0L) {
-    if (verbose) message("[ALU] No insertions passed all filters.")
+    if (verbose) {
+      message("[ALU] No insertions passed all filters.")
+    }
     return(data.frame())
   }
 
   final_df <- do.call(rbind, lapply(results, as.data.frame))
   final_df$Sample <- sample_name
-  final_df$Gene   <- gene_name
+  final_df$Gene <- gene_name
   final_df$Genome <- gene_config$build %||% "unknown"
 
-  col_order <- c("Sample", "Gene", "Genome",
-                 setdiff(names(final_df), c("Sample", "Gene", "Genome")))
-  final_df  <- final_df[, col_order, drop = FALSE]
+  col_order <- c(
+    "Sample",
+    "Gene",
+    "Genome",
+    setdiff(names(final_df), c("Sample", "Gene", "Genome"))
+  )
+  final_df <- final_df[, col_order, drop = FALSE]
 
   if (do_annotate_hotspots) {
     final_df <- annotate_hotspots(
       final_df,
-      db_path      = hotspot_db_path,
+      db_path = hotspot_db_path,
       genome_build = gene_config$build
     )
   } else {
-    final_df$Hotspot     <- FALSE
+    final_df$Hotspot <- FALSE
     final_df$HotspotName <- NA_character_
   }
 
-  if (!is.null(gene_config$target_exons))
-    final_df <- .annotate_exonic_region(final_df,
-                                         gene_config$target_exons,
-                                         pos_col = "InsertionSite")
+  if (!is.null(gene_config$target_exons)) {
+    final_df <- .annotate_exonic_region(
+      final_df,
+      gene_config$target_exons,
+      pos_col = "InsertionSite"
+    )
+  }
 
   if (!is.null(output_prefix) && nchar(output_prefix) > 0L) {
-    timestamp     <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
     sample_folder <- file.path(output_folder, sample_name)
     dir.create(sample_folder, recursive = TRUE, showWarnings = FALSE)
-    base_name <- paste("TALOS_ALU", sample_name, gene_name, timestamp, sep = "_")
-    tsv_path  <- file.path(sample_folder, paste0(base_name, ".tsv"))
-    write.table(final_df, tsv_path, sep = "\t", quote = FALSE,
-                row.names = FALSE, na = ".")
-    if (verbose) message("[ALU] Results written to: ", tsv_path)
+    base_name <- paste(
+      "TALOS_ALU",
+      sample_name,
+      gene_name,
+      timestamp,
+      sep = "_"
+    )
+    tsv_path <- file.path(sample_folder, paste0(base_name, ".tsv"))
+    write.table(
+      final_df,
+      tsv_path,
+      sep = "\t",
+      quote = FALSE,
+      row.names = FALSE,
+      na = "."
+    )
+    if (verbose) {
+      message("[ALU] Results written to: ", tsv_path)
+    }
 
     if (html_report && requireNamespace("rmarkdown", quietly = TRUE)) {
       report_path <- file.path(sample_folder, paste0(base_name, "_report.html"))
       talos_html_report(
-        result_df   = final_df,
+        result_df = final_df,
         gene_configs = setNames(list(gene_config), gene_name),
-        output_file  = report_path,
-        title        = sprintf("TALOS ALU Report – %s | %s", gene_name, sample_name),
-        mode         = "alu"
+        output_file = report_path,
+        title = sprintf("TALOS ALU Report – %s | %s", gene_name, sample_name),
+        mode = "alu"
       )
       if (verbose) message("[ALU] HTML report written to: ", report_path)
     }
   }
 
   elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
-  if (verbose)
-    message(sprintf("[ALU] Done | %d insertion(s) | %.1f s",
-                    nrow(final_df), elapsed))
+  if (verbose) {
+    message(sprintf(
+      "[ALU] Done | %d insertion(s) | %.1f s",
+      nrow(final_df),
+      elapsed
+    ))
+  }
   invisible(final_df)
 }
 
@@ -546,79 +675,101 @@ detect_alu <- function(
 #' @return data.frame of ALU insertions (invisibly).
 #' @export
 talos_alu <- function(
-    bam_path,
-    gene,
-    build         = "hg19",
-    padding       = 500L,
-    consensus_fa  = NULL,
-    min_support   = NULL,
-    min_alu_score = NULL,
-    min_clip_len  = NULL,
-    min_mapq      = NULL,
-    cluster_tolerance = NULL,
-    vaf_threshold = NULL,
-    min_tsd       = NULL,
-    sample_name   = NULL,
-    output_prefix = "TALOS_ALU",
-    output_folder = "./results",
-    html_report   = TRUE,
-    do_annotate_hotspots = TRUE,
-    hotspot_db_path = NULL,
-    yaml_path     = system.file("extdata", "gene_config.yaml", package = "TALOS"),
-    bsgenome      = NULL,
-    exon_padding  = 0L,
-    verbose       = TRUE,
-    ...
+  bam_path,
+  gene,
+  build = "hg19",
+  padding = 500L,
+  consensus_fa = NULL,
+  min_support = NULL,
+  min_alu_score = NULL,
+  min_clip_len = NULL,
+  min_mapq = NULL,
+  cluster_tolerance = NULL,
+  vaf_threshold = NULL,
+  min_tsd = NULL,
+  sample_name = NULL,
+  output_prefix = "TALOS_ALU",
+  output_folder = "./results",
+  html_report = TRUE,
+  do_annotate_hotspots = TRUE,
+  hotspot_db_path = NULL,
+  yaml_path = system.file("extdata", "gene_config.yaml", package = "TALOS"),
+  bsgenome = NULL,
+  exon_padding = 0L,
+  verbose = TRUE,
+  ...
 ) {
-  config       <- get_gene_config(gene, build, padding, yaml_path,
-                                  bsgenome, exon_padding)
+  config <- get_gene_config(
+    gene,
+    build,
+    padding,
+    yaml_path,
+    bsgenome,
+    exon_padding
+  )
   config$build <- build
-  yaml_vals    <- config$alu_settings %||% list()
+  yaml_vals <- config$alu_settings %||% list()
 
   defaults <- list(
-    min_support       = 3L,
-    min_alu_score     = 0.60,
-    min_clip_len      = 25L,
-    min_mapq          = 20L,
+    min_support = 3L,
+    min_alu_score = 0.60,
+    min_clip_len = 25L,
+    min_mapq = 20L,
     cluster_tolerance = 15L,
-    vaf_threshold     = 0.01,
-    min_tsd           = 0L
+    vaf_threshold = 0.01,
+    min_tsd = 0L
   )
 
   resolve <- function(user_val, yaml_key, default_val) {
-    if (!is.null(user_val)) return(user_val)
-    if (!is.null(yaml_vals[[yaml_key]])) return(yaml_vals[[yaml_key]])
+    if (!is.null(user_val)) {
+      return(user_val)
+    }
+    if (!is.null(yaml_vals[[yaml_key]])) {
+      return(yaml_vals[[yaml_key]])
+    }
     default_val
   }
 
   p <- list(
-    min_support       = resolve(min_support,       "min_support",       defaults$min_support),
-    min_alu_score     = resolve(min_alu_score,     "min_alu_score",     defaults$min_alu_score),
-    min_clip_len      = resolve(min_clip_len,      "min_clip_len",      defaults$min_clip_len),
-    min_mapq          = resolve(min_mapq,          "min_mapq",          defaults$min_mapq),
-    cluster_tolerance = resolve(cluster_tolerance, "cluster_tolerance", defaults$cluster_tolerance),
-    vaf_threshold     = resolve(vaf_threshold,     "vaf_threshold",     defaults$vaf_threshold),
-    min_tsd           = resolve(min_tsd,           "min_tsd",           defaults$min_tsd)
+    min_support = resolve(min_support, "min_support", defaults$min_support),
+    min_alu_score = resolve(
+      min_alu_score,
+      "min_alu_score",
+      defaults$min_alu_score
+    ),
+    min_clip_len = resolve(min_clip_len, "min_clip_len", defaults$min_clip_len),
+    min_mapq = resolve(min_mapq, "min_mapq", defaults$min_mapq),
+    cluster_tolerance = resolve(
+      cluster_tolerance,
+      "cluster_tolerance",
+      defaults$cluster_tolerance
+    ),
+    vaf_threshold = resolve(
+      vaf_threshold,
+      "vaf_threshold",
+      defaults$vaf_threshold
+    ),
+    min_tsd = resolve(min_tsd, "min_tsd", defaults$min_tsd)
   )
 
   detect_alu(
-    bam_path             = bam_path,
-    gene_config          = config,
-    consensus_fa         = consensus_fa,
-    min_support          = p$min_support,
-    min_alu_score        = p$min_alu_score,
-    min_clip_len         = p$min_clip_len,
-    min_mapq             = p$min_mapq,
-    cluster_tolerance    = p$cluster_tolerance,
-    vaf_threshold        = p$vaf_threshold,
-    min_tsd              = p$min_tsd,
+    bam_path = bam_path,
+    gene_config = config,
+    consensus_fa = consensus_fa,
+    min_support = p$min_support,
+    min_alu_score = p$min_alu_score,
+    min_clip_len = p$min_clip_len,
+    min_mapq = p$min_mapq,
+    cluster_tolerance = p$cluster_tolerance,
+    vaf_threshold = p$vaf_threshold,
+    min_tsd = p$min_tsd,
     do_annotate_hotspots = do_annotate_hotspots,
-    hotspot_db_path      = hotspot_db_path,
-    output_prefix        = output_prefix,
-    output_folder        = output_folder,
-    sample_name          = sample_name,
-    html_report          = html_report,
-    verbose              = verbose,
+    hotspot_db_path = hotspot_db_path,
+    output_prefix = output_prefix,
+    output_folder = output_folder,
+    sample_name = sample_name,
+    html_report = html_report,
+    verbose = verbose,
     ...
   )
 }
