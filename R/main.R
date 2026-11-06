@@ -235,12 +235,11 @@ detect_itd <- function(
   start_time <- Sys.time()
   gene_name <- gene_config$gene %||% "UNKNOWN"
   if (is.null(sample_name)) {
-    sample_name <- sub("\\..*", "", basename(bam_path))
+    sample_name <- .sample_from_bam(bam_path)
   }
-  sample_folder <- file.path(output_folder, sample_name)
-  dir.create(sample_folder, recursive = TRUE, showWarnings = FALSE)
+  sample_folder <- .ensure_dir(file.path(output_folder, sample_name))
 
-  timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+  timestamp <- .ts_stamp()
   base_parts <- c(
     output_prefix,
     if (include_sample) sample_name,
@@ -279,6 +278,21 @@ detect_itd <- function(
     if (!is.null(global_log_file)) log_msg(sprintf("Global log saved to: %s", global_log_file))
   }, add = TRUE)
 
+  # Negative runs still write their TSV / HTML artefacts (the report shows an
+  # explicit "No variants detected" state), so a run can never silently
+  # produce nothing.
+  finish_empty <- function(msg, cov = NULL, ref = NULL) {
+    log_msg(msg)
+    .write_talos_output(
+      final_df = data.frame(), base_name = base_name, output_folder = output_folder,
+      sample_name = sample_name, gene_config = gene_config, ref_dna = ref,
+      bam_path = bam_path, write_vcf = write_vcf, plot = plot,
+      html_report = html_report, verbose = verbose,
+      add_config_to_report = add_config_to_report, precomputed_cov = cov
+    )
+    invisible(data.frame())
+  }
+
   tryCatch(
     {
       ref_dna <- gene_config$genomic_ref_seq
@@ -287,8 +301,7 @@ detect_itd <- function(
       }
       ref_len <- nchar(ref_dna)
       if (ref_len < k) {
-        log_msg("Reference shorter than k-mer length. Skipping.")
-        return(data.frame())
+        return(finish_empty("Reference shorter than k-mer length. Skipping.", ref = ref_dna))
       }
       gstart <- gene_config$genomic_start
 
@@ -301,8 +314,7 @@ detect_itd <- function(
       )
       all_reads <- bam_data$reads
       if (length(all_reads) == 0) {
-        log_msg("No reads found in target region.")
-        return(data.frame())
+        return(finish_empty("No reads found in target region.", cov = bam_data$cov, ref = ref_dna))
       }
 
       wt_mapqs <- S4Vectors::mcols(all_reads)$mapq
@@ -312,8 +324,7 @@ detect_itd <- function(
       if (prefilter) {
         all_reads <- .filter_reads_by_cigar(all_reads, min_mapq, min_ins_filter, verbose = verbose)
         if (length(all_reads) == 0) {
-          log_msg("No reads passed CIGAR prefilter.")
-          return(data.frame())
+          return(finish_empty("No reads passed CIGAR prefilter.", cov = bam_data$cov, ref = ref_dna))
         }
       }
 
@@ -363,8 +374,7 @@ detect_itd <- function(
       candidates <- c(candidates, legacy_candidates)
 
       if (length(candidates) == 0) {
-        log_msg("No candidate reads (clips or k-mer jumps) found.")
-        return(data.frame())
+        return(finish_empty("No candidate reads (clips or k-mer jumps) found.", cov = bam_data$cov, ref = ref_dna))
       }
       bp_df <- .candidates_to_df(candidates, gstart)
       clusters <- .cluster_breakpoints(bp_df$breakpoint, cluster_tolerance)
@@ -398,15 +408,15 @@ detect_itd <- function(
       wt_info <- .prepare_wildtype_info(all_reads_for_wt, gstart, gene_config$genomic_end)
       wt_info$sample_name <- sample_name
 
-      threshold_names <- c(
-        "min_coverage_drop", "min_local_coverage", "min_span_coverage",
-        "min_span_depth_fold_change", "max_span_depth_fold_change", "min_microhomology",
-        "min_discordant_ratio", "min_entropy", "min_strand_bias", "max_strand_bias",
-        "min_mean_support_mapq", "max_breakpoint_spread", "min_softclip_fraction",
-        "min_unique_breakpoints", "min_itd_read_coverage", "min_alignment_score",
-        "min_side_softclip_reads", "max_side_ratio", "min_softclip_pct_side",
-        "min_left_softclip_pct_wt", "min_right_softclip_pct_wt", "min_abs_side_softclip"
-      )
+      # Threshold list is derived from .FILTER_RULES so a new rule can never
+      # reference a threshold missing here (it would silently default to
+      # "disabled" inside .apply_filters()).
+      threshold_names <- unique(c(
+        vapply(.FILTER_RULES, function(r) r[[2L]], character(1L)),
+        "min_alignment_score", "min_side_softclip_reads", "max_side_ratio",
+        "min_softclip_pct_side", "min_left_softclip_pct_wt", "min_right_softclip_pct_wt",
+        "min_abs_side_softclip"
+      ))
       thresholds <- mget(threshold_names, envir = environment())
 
       metric_args <- list(
@@ -545,8 +555,7 @@ detect_itd <- function(
       }
 
       if (length(results) == 0) {
-        log_msg("No variants passed all filters.")
-        return(data.frame())
+        return(finish_empty("No variants passed all filters.", cov = bam_data$cov, ref = ref_dna))
       }
 
       final_df <- do.call(rbind, lapply(results, function(x) as.data.frame(x, stringsAsFactors = FALSE)))
@@ -721,7 +730,11 @@ detect_itd <- function(
     pe_counts <- c(FR = template$PEOrientationFR, RF = template$PEOrientationRF,
                    FF = template$PEOrientationFF, RR = template$PEOrientationRR,
                    other = template$PEOrientationOther)
-    template$PEOrientationDominant <- if (all(pe_counts == 0)) NA_character_ else names(pe_counts)[which.max(pe_counts)]
+    # NA-safe: all(pe_counts == 0) is NA (and if (NA) errors) when the
+    # orientation counts are missing (e.g. no paired-end evidence at all).
+    pe_ok <- !is.na(pe_counts)
+    template$PEOrientationDominant <- if (!any(pe_ok)) NA_character_ else
+      names(pe_counts[pe_ok])[which.max(pe_counts[pe_ok])]
     template$MergedFromN <- n_members
     template$MergeFragmentWarning <- n_members > max_plausible_fragments
     if (isTRUE(template$MergeFragmentWarning)) {

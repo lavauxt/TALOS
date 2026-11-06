@@ -1,6 +1,53 @@
 # ── Null-coalescing operator (used throughout the package) ───────────────────
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+# ── Shared run plumbing (used by detect_itd, detect_alu and the writers) ─────
+
+#' Sample name derived from a BAM path (extension and everything after the
+#' first dot removed), shared by detect_itd(), detect_alu() and the wrappers
+#' so the three cannot disagree.
+.sample_from_bam <- function(bam_path) sub("\\..*", "", basename(bam_path))
+
+#' Timestamp used in output file names (one format everywhere).
+.ts_stamp <- function() format(Sys.time(), "%Y%m%d_%H%M%S")
+
+#' Create a directory (recursively) and return it invisibly.
+.ensure_dir <- function(path) {
+  if (!dir.exists(path)) dir.create(path, recursive = TRUE, showWarnings = FALSE)
+  invisible(path)
+}
+
+#' Flatten list columns to semicolon-joined strings so a data.frame can be
+#' written as TSV (shared by .write_talos_output and .write_alu_output).
+.flatten_list_cols <- function(df) {
+  for (col in names(df)) {
+    if (is.list(df[[col]])) {
+      df[[col]] <- vapply(df[[col]], function(x) {
+        if (length(x) == 0 || all(is.na(x))) NA_character_ else paste(x, collapse = ";")
+      }, FUN.VALUE = character(1), USE.NAMES = FALSE)
+    }
+  }
+  df
+}
+
+#' Write a results data.frame as TSV (list columns flattened, NA as ".").
+.write_results_tsv <- function(df, path) {
+  df <- .flatten_list_cols(df)
+  utils::write.table(df, file = path, sep = "\t", quote = FALSE,
+                     row.names = FALSE, na = ".")
+  invisible(path)
+}
+
+#' mcols column with a default, NA-filled (shared by .pair_info() and the
+#' BAM evidence reader so both read record metadata the same way).
+.mcol_or <- function(x, name, default) {
+  v <- S4Vectors::mcols(x)[[name]]
+  n <- if (is.null(x)) 0L else NROW(x)
+  if (is.null(v)) v <- rep(default, n)
+  v[is.na(v)] <- default
+  v
+}
+
 # ── Shared helper for softclip extraction ───────────────────────────────────
 .get_softclips <- function(cig, r_seq) {
   clips <- .get_softclip_lengths(cig)
@@ -861,14 +908,8 @@ compute_span_depth_fold_change <- function(
   r1 <- GenomicAlignments::first(all_pairs)
   r2 <- GenomicAlignments::last(all_pairs)
   n <- length(r1)
-  col_or <- function(x, name, default) {
-    v <- S4Vectors::mcols(x)[[name]]
-    if (is.null(v)) v <- rep(default, n)
-    v[is.na(v)] <- default
-    v
-  }
-  mq1 <- col_or(r1, "mapq", 0L); mq2 <- col_or(r2, "mapq", 0L)
-  f1 <- col_or(r1, "flag", 0L);  f2 <- col_or(r2, "flag", 0L)
+  mq1 <- .mcol_or(r1, "mapq", 0L); mq2 <- .mcol_or(r2, "mapq", 0L)
+  f1 <- .mcol_or(r1, "flag", 0L);  f2 <- .mcol_or(r2, "flag", 0L)
   primary <- bitwAnd(f1, 0x100L) == 0L & bitwAnd(f1, 0x800L) == 0L &
     bitwAnd(f2, 0x100L) == 0L & bitwAnd(f2, 0x800L) == 0L
   s1 <- GenomicRanges::start(r1); e1 <- GenomicRanges::end(r1)
@@ -1292,7 +1333,10 @@ build_vcf_records <- function(itd_df, ref_dna, genomic_start, chrom) {
   records <- character(nrow(itd_df))
   for (i in seq_len(nrow(itd_df))) {
     row <- itd_df[i, ]
+    # A missing position or depth would emit "NA" fields and produce an
+    # invalid VCF row; such rows are skipped instead.
     if (!isTRUE(row$DepthAtBreakpoint > 0)) next
+    if (is.na(row$GenomicPosition)) next
     pos <- row$GenomicPosition
     id_field <- if (!is.na(row$HGVS_cDNA)) .vcf_safe(row$HGVS_cDNA) else "."
     records[i] <- paste(
@@ -1530,7 +1574,7 @@ talos_batch <- function(
     if (!dir.exists(output_folder)) {
       dir.create(output_folder, recursive = TRUE, showWarnings = FALSE)
     }
-    ts <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    ts <- .ts_stamp()
     cfile <- file.path(output_folder, paste0("TALOS_batch_", ts, ".tsv"))
     write.table(
       combined,

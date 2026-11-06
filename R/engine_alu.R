@@ -425,6 +425,38 @@
 }
 
 
+#' Write ALU result artefacts (TSV + HTML report)
+#'
+#' Shared by the empty and non-empty exit paths of detect_alu() so negative
+#' runs still leave an audit artefact (the HTML report has an explicit "No
+#' variants detected" state).
+#' @keywords internal
+.write_alu_output <- function(final_df, output_prefix, output_folder, sample_name,
+                              gene_name, gene_config, html_report, verbose) {
+  if (is.null(output_prefix) || !nzchar(output_prefix)) return(invisible(NULL))
+  sample_folder <- .ensure_dir(file.path(output_folder, sample_name))
+  base_name <- paste(output_prefix, sample_name, gene_name, .ts_stamp(), sep = "_")
+  if (ncol(final_df) > 0L) {
+    tsv_path <- file.path(sample_folder, paste0(base_name, ".tsv"))
+    .write_results_tsv(final_df, tsv_path)
+    if (verbose) message("[ALU] Results written to: ", tsv_path)
+  }
+  if (html_report) {
+    report_path <- file.path(sample_folder, paste0(base_name, "_report.html"))
+    tryCatch({
+      talos_html_report(
+        result_df = final_df,
+        gene_configs = stats::setNames(list(gene_config), gene_name),
+        output_file = report_path,
+        title = sprintf("TALOS ALU Report - %s | %s", gene_name, sample_name),
+        mode = "alu"
+      )
+      if (verbose) message("[ALU] HTML report written to: ", report_path)
+    }, error = function(e) warning("[ALU] HTML report skipped: ", conditionMessage(e)))
+  }
+  invisible(NULL)
+}
+
 #' Detect ALU/SINE mobile-element insertions from a BAM file
 #'
 #' Analyses soft-clipped reads within the targeted genomic window and
@@ -474,7 +506,7 @@ detect_alu <- function(
   start_time <- Sys.time()
   gene_name <- gene_config$gene %||% "UNKNOWN"
   if (is.null(sample_name)) {
-    sample_name <- sub("\\..*", "", basename(bam_path))
+    sample_name <- .sample_from_bam(bam_path)
   }
 
   if (verbose) {
@@ -512,7 +544,9 @@ detect_alu <- function(
     if (verbose) {
       message("[ALU] No reads in target region.")
     }
-    return(data.frame())
+    .write_alu_output(data.frame(), output_prefix, output_folder, sample_name,
+                      gene_name, gene_config, html_report, verbose)
+    return(invisible(data.frame()))
   }
 
   mapqs <- S4Vectors::mcols(all_reads)$mapq
@@ -532,7 +566,9 @@ detect_alu <- function(
     if (verbose) {
       message("[ALU] No ALU-positive soft-clips found.")
     }
-    return(data.frame())
+    .write_alu_output(data.frame(), output_prefix, output_folder, sample_name,
+                      gene_name, gene_config, html_report, verbose)
+    return(invisible(data.frame()))
   }
   if (verbose) {
     message(sprintf(
@@ -577,7 +613,9 @@ detect_alu <- function(
     if (verbose) {
       message("[ALU] No insertions passed all filters.")
     }
-    return(data.frame())
+    .write_alu_output(data.frame(), output_prefix, output_folder, sample_name,
+                      gene_name, gene_config, html_report, verbose)
+    return(invisible(data.frame()))
   }
 
   final_df <- do.call(rbind, lapply(results, as.data.frame))
@@ -613,44 +651,8 @@ detect_alu <- function(
     )
   }
 
-  if (!is.null(output_prefix) && nchar(output_prefix) > 0L) {
-    timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-    sample_folder <- file.path(output_folder, sample_name)
-    dir.create(sample_folder, recursive = TRUE, showWarnings = FALSE)
-    base_name <- paste(
-      output_prefix,
-      sample_name,
-      gene_name,
-      timestamp,
-      sep = "_"
-    )
-    tsv_path <- file.path(sample_folder, paste0(base_name, ".tsv"))
-    write.table(
-      final_df,
-      tsv_path,
-      sep = "\t",
-      quote = FALSE,
-      row.names = FALSE,
-      na = "."
-    )
-    if (verbose) {
-      message("[ALU] Results written to: ", tsv_path)
-    }
-
-    if (html_report) {
-      report_path <- file.path(sample_folder, paste0(base_name, "_report.html"))
-      tryCatch({
-        talos_html_report(
-          result_df = final_df,
-          gene_configs = stats::setNames(list(gene_config), gene_name),
-          output_file = report_path,
-          title = sprintf("TALOS ALU Report - %s | %s", gene_name, sample_name),
-          mode = "alu"
-        )
-        if (verbose) message("[ALU] HTML report written to: ", report_path)
-      }, error = function(e) warning("[ALU] HTML report skipped: ", conditionMessage(e)))
-    }
-  }
+  .write_alu_output(final_df, output_prefix, output_folder, sample_name,
+                    gene_name, gene_config, html_report, verbose)
 
   elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
   if (verbose) {

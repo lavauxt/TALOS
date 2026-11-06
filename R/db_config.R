@@ -504,12 +504,18 @@ get_gene_config <- function(
     strand <- entry$strand %||% "?"
     auto_cds_offset <- as.integer(entry$cds_offset %||% 0L)
 
+    yaml_starts <- vapply(build_cfg$exons, `[`, numeric(1), 1)
+    yaml_ends   <- vapply(build_cfg$exons, `[`, numeric(1), 2)
+    # BUG FIX (offline exon ordering): exon_idx must follow transcript order,
+    # exactly like .finalize_transcript() does for the online path (minus
+    # strand = descending genomic start). A hand-written YAML listing exons
+    # in ascending genomic order for a minus-strand gene (e.g. FLT3) used to
+    # produce reversed exon numbering, which silently corrupted rnaseq /
+    # full_cdna concatenation, DupExons and HGVS c./p. notation.
+    yaml_order <- if (strand == "-") order(yaml_starts, decreasing = TRUE) else order(yaml_starts)
     all_exons_gr <- GenomicRanges::GRanges(
       seqnames = chrom,
-      ranges   = IRanges::IRanges(
-        start = vapply(build_cfg$exons, `[`, numeric(1), 1),
-        end   = vapply(build_cfg$exons, `[`, numeric(1), 2)
-      ),
+      ranges   = IRanges::IRanges(start = yaml_starts[yaml_order], end = yaml_ends[yaml_order]),
       strand = strand
     )
     S4Vectors::mcols(all_exons_gr)$exon_idx <- seq_along(all_exons_gr)

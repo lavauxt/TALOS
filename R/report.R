@@ -616,9 +616,11 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
 # ── Self-contained HTML report (no R Markdown) ───────────────────────────────
 
 # Internal columns kept in the downloadable table but hidden by default.
+# "Genome" is redundant with GenomeBuild (which the report appends next to
+# Gene); the TSD_RawSeq_* columns never existed in the ALU output.
 .HTML_HIDDEN_COLS <- c("ITD_Sequence", "ITDCoverageRLE", "SequenceImputed", "SequencePartial",
-                       "SupportConsistency", "SpanMeanCoverage",
-                       "ALU_RawScore", "TSD_RawSeq_Left", "TSD_RawSeq_Right", "ALU_Sequence")
+                       "SupportConsistency", "SpanMeanCoverage", "Genome",
+                       "ALU_RawScore", "ALU_Sequence")
 
 # Stylesheet / app script of the HTML report. Embedded in R (report_assets.R);
 # options(TALOS.report_dir = "<dir>") swaps in external copies while editing.
@@ -678,7 +680,10 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
   data <- lapply(df, function(col) {
     if (is.list(col)) col <- vapply(col, function(x) paste(x, collapse = ";"), character(1L))
     if (is.factor(col)) col <- as.character(col)
-    if (is.numeric(col)) .arr(signif(col, 6L)) else .arr(col)
+    # signif(, 15) keeps doubles exact (genomic positions, depths) while still
+    # cleaning representation noise; signif(, 6) used to round e.g.
+    # 28,057,643 -> 28,057,600 in the HTML table.
+    if (is.numeric(col)) .arr(signif(col, 15L)) else .arr(col)
   })
   list(cols = .arr(names(df)), data = data, n = nrow(df))
 }
@@ -896,6 +901,7 @@ talos_html_report <- function(result_df,
     "<div class=\"title-row\"><h1>", esc(title), "</h1>",
     "<span class=\"badge\">", toupper(mode), "</span>",
     "<span class=\"spacer\"></span>",
+    "<button id=\"print-btn\" class=\"btn\" type=\"button\" aria-label=\"Print or save the report as PDF\">Print</button>",
     "<button id=\"theme-btn\" class=\"btn\" type=\"button\" aria-label=\"Toggle colour theme\">Theme</button></div>\n",
     "<nav id=\"tabs\" class=\"tabs\" role=\"tablist\" aria-label=\"Report sections\"></nav>\n",
     "</div></header>\n<main id=\"panels\"></main>\n",
@@ -914,29 +920,27 @@ talos_html_report <- function(result_df,
                                 gene_config, ref_dna, bam_path, write_vcf, plot,
                                 html_report, verbose, add_config_to_report = FALSE,
                                 precomputed_cov = NULL) {
-  if (is.null(base_name) || nrow(final_df) == 0) return(invisible(NULL))
-  sample_folder <- file.path(output_folder, sample_name)
-  dir.create(sample_folder, recursive = TRUE, showWarnings = FALSE)
+  if (is.null(base_name)) return(invisible(NULL))
+  sample_folder <- .ensure_dir(file.path(output_folder, sample_name))
   tsv_file <- file.path(sample_folder, paste0(base_name, ".tsv"))
 
-  for (col in names(final_df)) {
-    if (is.list(final_df[[col]])) {
-      final_df[[col]] <- vapply(final_df[[col]], function(x) {
-        if (length(x) == 0 || all(is.na(x))) NA_character_ else paste(x, collapse = ";")
-      }, FUN.VALUE = character(1), USE.NAMES = FALSE)
-    }
+  # Negative runs still produce a TSV (when there are columns to write) and an
+  # HTML report with an explicit "No variants detected" state, so every
+  # analysis has an audit artefact. VCF/PDF are skipped: they carry no
+  # information for zero calls.
+  if (ncol(final_df) > 0L) {
+    .write_results_tsv(final_df, tsv_file)
+    if (verbose) message(sprintf("Results written to: %s", tsv_file))
   }
-  utils::write.table(final_df, file = tsv_file, sep = "\t", quote = FALSE, row.names = FALSE, na = ".")
-  if (verbose) message(sprintf("Results written to: %s", tsv_file))
 
-  if (write_vcf) {
+  if (write_vcf && nrow(final_df) > 0L) {
     write_itd_vcf(itd_df = final_df, ref_dna = ref_dna, genomic_start = gene_config$genomic_start,
                   chrom = gene_config$chrom, sample_name = sample_name, genome_build = gene_config$build,
                   vcf_path = file.path(sample_folder, paste0(base_name, ".vcf")), overwrite = TRUE)
   }
 
   pdf_path <- NULL
-  if (plot) {
+  if (plot && nrow(final_df) > 0L) {
     pdf_path <- file.path(sample_folder, paste0(base_name, ".pdf"))
     plot_talos_report(itd_row = final_df, gene_config = gene_config, bam_path = bam_path,
                       sample_name = sample_name, output_pdf = pdf_path,
@@ -950,7 +954,7 @@ talos_html_report <- function(result_df,
     ok <- tryCatch({
       talos_html_report(
         result_df = final_df,
-        bam_paths = stats::setNames(bam_path, sample_name),
+        bam_paths = if (is.null(bam_path)) NULL else stats::setNames(bam_path, sample_name),
         gene_configs = stats::setNames(list(gene_config), gene_config$gene),
         output_file = report_path,
         title = paste("TALOS Report -", gene_config$gene, sample_name),
