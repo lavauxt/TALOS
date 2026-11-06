@@ -136,15 +136,15 @@ talos(
   detect_orientation = NULL,
   do_annotate_hotspots = NULL,
   hotspot_db_path = NULL,
-  compute_alignment_score = TRUE,
-  compute_support_bases = TRUE,
-  compute_consistency = FALSE,
-  compute_itd_coverage = TRUE,
-  compute_coverage_drop = TRUE,
-  compute_microhomology = TRUE,
-  compute_repeat_entropy = TRUE,
-  compute_discordant_ratio = TRUE,
-  compute_hgvs = TRUE,
+  compute_alignment_score = NULL,
+  compute_support_bases = NULL,
+  compute_consistency = NULL,
+  compute_itd_coverage = NULL,
+  compute_coverage_drop = NULL,
+  compute_microhomology = NULL,
+  compute_repeat_entropy = NULL,
+  compute_discordant_ratio = NULL,
+  compute_hgvs = NULL,
   min_itd_read_coverage = NULL,
   html_report = NULL,
   use_gviz = NULL,
@@ -399,6 +399,12 @@ reconstruction (requires exon annotations in gene_config$all_exons).
 Graph-derived candidates supplement rather than replace the legacy
 candidate extraction below; the two are combined and reconciled by
 the merge_ptd_intervals step. No longer requires ptd_mode=TRUE.
+Graph calls are reported with the duplicated interval found from
+split reads / everted pairs (GenomicPosition = first duplicated
+base, Length = interval length, DupExons = duplicated exons) and
+zero-length clip calls at either end of a graph call are folded
+into it. Tuning keys (YAML \code{graph_settings:}):
+max_exon_distance, buffer_bp, min_support, expected_isize_max.
 Default FALSE.}
 
 \item{...}{Other parameters passed to the underlying engine.}

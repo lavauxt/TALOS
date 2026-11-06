@@ -266,10 +266,17 @@
     .dbg("Ensembl path for '%s' [build=%s]", transcript_id, build)
     db <- .get_ensdb(build)
 
+    # exon_idx is not a default exon column: without asking for it,
+    # order(NULL) returned an empty exon set.
     exons_gr <- ensembldb::exons(
-      db, filter = AnnotationFilter::TxIdFilter(transcript_id)
+      db, columns = c("exon_id", "exon_idx"),
+      filter = AnnotationFilter::TxIdFilter(transcript_id)
     )
     exons_gr  <- exons_gr[order(exons_gr$exon_idx)]
+    # EnsDb uses "11"; BSgenome.UCSC and the rest of TALOS use "chr11".
+    exons_gr <- tryCatch({
+      GenomeInfoDb::seqlevelsStyle(exons_gr) <- "UCSC"; exons_gr
+    }, error = function(e) exons_gr)
     strand_val <- as.character(unique(BiocGenerics::strand(exons_gr)))
     chrom      <- as.character(GenomeInfoDb::seqnames(exons_gr)[1])
 
@@ -278,6 +285,11 @@
       filter = AnnotationFilter::TxIdFilter(transcript_id)
     )
     cds_gr <- cds_list[[transcript_id]]
+    if (!is.null(cds_gr)) {
+      cds_gr <- tryCatch({
+        GenomeInfoDb::seqlevelsStyle(cds_gr) <- "UCSC"; cds_gr
+      }, error = function(e) cds_gr)
+    }
 
     return(.finalize_transcript(transcript_id, exons_gr, cds_gr,
                                 chrom, strand_val, cache_key,
@@ -586,18 +598,22 @@ save_offline_config <- function(gene, build = "hg19",
   config <- get_gene_config(gene, build, padding = padding, use_db = TRUE)
 
   exon_data <- lapply(seq_along(config$all_exons), function(i)
-    c(start(config$all_exons)[i], end(config$all_exons)[i])
+    c(GenomicRanges::start(config$all_exons)[i], GenomicRanges::end(config$all_exons)[i])
   )
 
   key <- paste0(gene, "_OFFLINE")
   out <- list()
   out[[key]] <- list(
+    gene_symbol    = config$gene,
     transcript     = config$transcript,
     targeted_exons = as.integer(unique(S4Vectors::mcols(config$target_exons)$exon_idx)),
     cds_offset     = config$cds_offset,
     chrom          = config$chrom,
     strand         = config$strand
   )
+  for (blk in c("gene_settings", "alu_settings", "graph_settings")) {
+    if (!is.null(config[[blk]])) out[[key]][[blk]] <- config[[blk]]
+  }
   out[[key]][[build]] <- list(
     start = config$genomic_start,
     end   = config$genomic_end,

@@ -11,14 +11,16 @@ talos_html_report(
   output_file = "TALOS_report.html",
   title = "TALOS Analysis Report",
   show_config = FALSE,
-  mode = c("itd", "alu")
+  mode = c("itd", "alu"),
+  coverages = NULL,
+  plotly_js = c("auto", "inline", "cdn")
 )
 }
 \arguments{
 \item{result_df}{Data frame from \code{\link{talos}} or \code{\link{detect_alu}}.}
 
 \item{bam_paths}{Named character vector of BAM paths (optional; used to
-generate interactive plotly widgets). Names must match \code{result_df$Sample}.}
+draw coverage). Names must match \code{result_df$Sample}.}
 
 \item{gene_configs}{Named list of resolved gene config lists.}
 
@@ -26,15 +28,24 @@ generate interactive plotly widgets). Names must match \code{result_df$Sample}.}
 
 \item{title}{Report title string.}
 
-\item{show_config}{Include per-gene configuration block in the report.}
+\item{show_config}{Include the per-gene configuration tab.}
 
 \item{mode}{\code{"itd"} (default) or \code{"alu"}.}
+
+\item{coverages}{Optional named list of precomputed coverage Rle, keyed
+\code{"<sample>_<gene>"} (avoids re-reading the BAM).}
+
+\item{plotly_js}{\code{"auto"} (inline plotly.js when the R plotly
+package is installed, else CDN), \code{"inline"} or \code{"cdn"}.}
 }
 \value{
 Invisibly, the normalised path to the written HTML file.
 }
 \description{
-Renders the external template at \code{inst/rmd/TALOS_report.Rmd}.
-For development (package not installed), falls back to
-\code{./inst/rmd/TALOS_report.Rmd} relative to the working directory.
+Writes \strong{one self-contained HTML file} (no R Markdown, no pandoc):
+results are embedded as JSON and drawn client side, SPARKS style, with
+tabs for an overview, a sortable / filterable results table with CSV
+export, an interactive genome view per sample and gene (coverage, exons,
+ITD read coverage, calls), per-variant details, the configuration and the
+run information. Light / dark theme follows the system and can be toggled.
 }

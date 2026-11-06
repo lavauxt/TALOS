@@ -1,176 +1,125 @@
-.load_bam_data_streaming <- function(
-  bam_path,
-  gene_config,
-  compute_pairs = FALSE,
-  max_reads = NULL,
-  chunk_size = 50000L,
-  verbose = FALSE
-) {
-  if (verbose) {
-    message(
-      "[TALOS] Loading BAM region: ",
-      gene_config$chrom,
-      ":",
-      gene_config$genomic_start,
-      "-",
-      gene_config$genomic_end
-    )
-  }
+#' Resolve the BAM sequence name matching a configured chromosome
+#'
+#' Gene configs use UCSC names ("chr11"); BAMs may use Ensembl names ("11",
+#' "MT"). Querying a BAM with a name absent from its header is an error, so
+#' the name is resolved against the header first.
+#'
+#' Replaces the post-hoc mapSeqlevels() conversion (ITEM 10): that branch
+#' could only run after a successful query, i.e. when the name already
+#' matched. The collision guard of ITEM 10 is kept implicitly: only the one
+#' target contig is ever renamed.
+#'
+#' @param bam_path Path to an indexed BAM.
+#' @param chrom Configured chromosome name.
+#' @return The BAM's name for \code{chrom}; \code{chrom} itself (with a
+#'   warning) when no candidate is found.
+#' @keywords internal
+.resolve_bam_seqname <- function(bam_path, chrom) {
+  bam_names <- tryCatch(
+    GenomeInfoDb::seqnames(Rsamtools::seqinfo(Rsamtools::BamFile(bam_path))),
+    error = function(e) character(0)
+  )
+  if (!length(bam_names) || chrom %in% bam_names) return(chrom)
+  bare <- sub("^chr", "", chrom)
+  candidates <- unique(c(
+    bare, paste0("chr", bare),
+    if (bare %in% c("M", "MT")) c("MT", "M", "chrM", "chrMT")
+  ))
+  hit <- candidates[candidates %in% bam_names]
+  if (length(hit)) return(hit[[1L]])
+  warning("Chromosome '", chrom, "' not found in BAM header of ", basename(bam_path),
+          ". Coverage will be NA.")
+  chrom
+}
 
+# Rename the BAM contig back to the configured name so every downstream
+# GRanges (exons, coverage lookups, overlaps) uses one naming style.
+.rename_to_config <- function(x, bam_chrom, chrom) {
+  if (is.null(x) || identical(bam_chrom, chrom)) return(x)
+  lv <- GenomeInfoDb::seqlevels(x)
+  if (!bam_chrom %in% lv || chrom %in% lv) return(x)
+  lv[lv == bam_chrom] <- chrom
+  GenomeInfoDb::renameSeqlevels(x, stats::setNames(lv, GenomeInfoDb::seqlevels(x)))
+}
+
+# Chunked reader shared by single reads and read pairs (DRY).
+.read_bam_chunks <- function(bam_path, reader, max_n, chunk_size, label, verbose) {
+  bam_file <- Rsamtools::BamFile(bam_path, yieldSize = chunk_size)
+  open(bam_file)
+  on.exit(close(bam_file), add = TRUE)
+  chunks <- list()
+  total <- 0L
+  repeat {
+    chunk <- reader(bam_file)
+    if (length(chunk) == 0L) break
+    total <- total + length(chunk)
+    if (!is.null(max_n) && total >= max_n) {
+      chunk <- chunk[seq_len(max_n - (total - length(chunk)))]
+      chunks[[length(chunks) + 1L]] <- chunk
+      if (verbose) message("[TALOS] Stopping early at max_reads = ", max_n)
+      break
+    }
+    chunks[[length(chunks) + 1L]] <- chunk
+    if (verbose) {
+      message("[TALOS] Loaded ", label, " chunk ", length(chunks), " (",
+              length(chunk), ", total ", total, ")")
+    }
+  }
+  if (length(chunks) == 0L) NULL else do.call(c, chunks)
+}
+
+.load_bam_data_streaming <- function(
+    bam_path,
+    gene_config,
+    compute_pairs = FALSE,
+    max_reads = NULL,
+    chunk_size = 50000L,
+    verbose = FALSE
+) {
   target_chrom <- gene_config$chrom
+  bam_chrom <- .resolve_bam_seqname(bam_path, target_chrom)
+  if (verbose) {
+    message("[TALOS] Loading BAM region: ", bam_chrom, ":",
+            gene_config$genomic_start, "-", gene_config$genomic_end)
+  }
   which_range <- GenomicRanges::GRanges(
-    seqnames = target_chrom,
-    ranges = IRanges::IRanges(
-      start = gene_config$genomic_start,
-      end = gene_config$genomic_end
-    )
+    seqnames = bam_chrom,
+    ranges = IRanges::IRanges(start = gene_config$genomic_start, end = gene_config$genomic_end)
   )
   param <- Rsamtools::ScanBamParam(
     which = which_range,
     what = c("seq", "qname", "cigar", "flag", "mapq", "isize"),
-    flag = Rsamtools::scanBamFlag(
-      isSecondaryAlignment = FALSE,
-      isSupplementaryAlignment = FALSE
-    )
+    flag = Rsamtools::scanBamFlag(isSecondaryAlignment = FALSE, isSupplementaryAlignment = FALSE)
   )
 
-  .read_chunks <- function(bam_file, max_n) {
-    chunk_list <- list()
-    total <- 0L
-    chunk_count <- 0L
-    open(bam_file)
-    on.exit(close(bam_file), add = TRUE)
-    repeat {
-      chunk <- GenomicAlignments::readGAlignments(
-        bam_file,
-        param = param,
-        use.names = TRUE
-      )
-      if (length(chunk) == 0L) {
-        break
-      }
-      chunk_count <- chunk_count + 1L
-      total <- total + length(chunk)
-      if (verbose) {
-        message(
-          "[TALOS] Loaded chunk ",
-          chunk_count,
-          " (",
-          length(chunk),
-          " reads, total ",
-          total,
-          ")"
-        )
-      }
-      chunk_list[[chunk_count]] <- chunk
-      if (!is.null(max_n) && total >= max_n) {
-        keep <- max_n - (total - length(chunk))
-        chunk_list[[chunk_count]] <- chunk[seq_len(keep)]
-        if (verbose) {
-          message("[TALOS] Stopping early at max_reads = ", max_n)
-        }
-        break
-      }
-    }
-    if (length(chunk_list) == 0L) NULL else do.call(c, chunk_list)
-  }
-
-  bam_file <- Rsamtools::BamFile(bam_path, yieldSize = chunk_size)
-  all_reads <- .read_chunks(bam_file, max_reads)
-
-  if (verbose) {
-    message("[TALOS] Total reads loaded: ", length(all_reads %||% integer(0L)))
-  }
-
+  all_reads <- .read_bam_chunks(
+    bam_path, function(bf) GenomicAlignments::readGAlignments(bf, param = param, use.names = TRUE),
+    max_reads, chunk_size, "read", verbose
+  )
+  if (verbose) message("[TALOS] Total reads loaded: ", length(all_reads %||% integer(0L)))
   if (is.null(all_reads) || length(all_reads) == 0L) {
-    if (verbose) {
-      message("[TALOS] No reads found in target region.")
-    }
-    return(list(
-      reads = GenomicAlignments::GAlignments(),
-      cov = NULL,
-      pairs = NULL,
-      cov_list = NULL
-    ))
+    if (verbose) message("[TALOS] No reads found in target region.")
+    return(list(reads = GenomicAlignments::GAlignments(), cov = NULL, pairs = NULL, cov_list = NULL))
   }
+  all_reads <- .rename_to_config(all_reads, bam_chrom, target_chrom)
 
-  current_levels <- GenomeInfoDb::seqlevels(all_reads)
-  if (!target_chrom %in% current_levels) {
-    converted <- GenomeInfoDb::mapSeqlevels(current_levels, "UCSC")
-    if (any(!is.na(converted))) {
-      new_levels <- ifelse(is.na(converted), current_levels, converted)
-      all_reads <- GenomeInfoDb::renameSeqlevels(all_reads, new_levels)
-      if (!target_chrom %in% GenomeInfoDb::seqlevels(all_reads)) {
-        warning(
-          "Chromosome '",
-          target_chrom,
-          "' not found after seqlevel conversion. Coverage will be NA."
-        )
-      }
-    } else {
-      warning(
-        "Chromosome '",
-        target_chrom,
-        "' not found in BAM seqlevels. Coverage will be NA."
-      )
-    }
-  }
-
-  if (verbose) {
-    message("[TALOS] Computing coverage...")
-  }
+  if (verbose) message("[TALOS] Computing coverage...")
   cov_rle_list <- GenomicAlignments::coverage(all_reads)
-  cov <- cov_rle_list[[target_chrom]]
+  cov <- if (target_chrom %in% names(cov_rle_list)) cov_rle_list[[target_chrom]] else NULL
 
   pairs <- NULL
   if (compute_pairs) {
-    if (verbose) {
-      message("[TALOS] Loading read pairs...")
-    }
-    bam_pairs <- Rsamtools::BamFile(bam_path, yieldSize = chunk_size)
-    pair_list <- list()
-    total_pairs <- 0L
-    chunk_count <- 0L
-    open(bam_pairs)
-    on.exit(close(bam_pairs), add = TRUE)
-    repeat {
-      p_chunk <- suppressWarnings(
-        GenomicAlignments::readGAlignmentPairs(bam_pairs, param = param)
-      )
-      if (length(p_chunk) == 0L) {
-        break
-      }
-      chunk_count <- chunk_count + 1L
-      total_pairs <- total_pairs + length(p_chunk)
-      if (verbose) {
-        message(
-          "[TALOS] Loaded pair chunk ",
-          chunk_count,
-          " (",
-          length(p_chunk),
-          " pairs, total ",
-          total_pairs,
-          ")"
-        )
-      }
-      pair_list[[chunk_count]] <- p_chunk
-      if (!is.null(max_reads) && total_pairs >= max_reads) {
-        keep <- max_reads - (total_pairs - length(p_chunk))
-        pair_list[[chunk_count]] <- p_chunk[seq_len(keep)]
-        break
-      }
-    }
-    if (length(pair_list) > 0L) {
-      pairs <- do.call(c, pair_list)
-    }
-    if (verbose) {
-      message("[TALOS] Total pairs loaded: ", length(pairs %||% integer(0L)))
-    }
+    if (verbose) message("[TALOS] Loading read pairs...")
+    pairs <- .read_bam_chunks(
+      bam_path,
+      function(bf) suppressWarnings(GenomicAlignments::readGAlignmentPairs(bf, param = param, use.names = TRUE)),
+      max_reads, chunk_size, "pair", verbose
+    )
+    pairs <- .rename_to_config(pairs, bam_chrom, target_chrom)
+    if (verbose) message("[TALOS] Total pairs loaded: ", length(pairs %||% integer(0L)))
   }
-
   list(reads = all_reads, cov = cov, pairs = pairs, cov_list = cov_rle_list)
 }
-
 
 .filter_reads_by_cigar <- function(
   reads,

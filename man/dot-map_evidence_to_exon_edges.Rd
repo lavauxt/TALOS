@@ -2,28 +2,36 @@
 % Please edit documentation in R/engine_graph_ptd.R
 \name{.map_evidence_to_exon_edges}
 \alias{.map_evidence_to_exon_edges}
-\title{Map Raw Genomic Evidence Coordinates to Annotated Exon Graph Edges}
+\title{Map tandem-duplication evidence onto annotated exon-graph edges}
 \usage{
-.map_evidence_to_exon_edges(evidence_dt, exon_granges, max_distance = 5000L)
+.map_evidence_to_exon_edges(
+  evidence_dt,
+  exon_granges,
+  max_distance = 5000L,
+  exon_tol = 10L
+)
 }
 \arguments{
-\item{evidence_dt}{data.frame of split reads, discordant mates, shadows
-(from .parse_sa_tags() / .extract_discordant_and_shadow())}
+\item{evidence_dt}{data.frame(qname, start, end, prob, evidence_type, precise)}
 
-\item{exon_granges}{Annotated GRanges for exons (must carry an exon_idx column)}
+\item{exon_granges}{Exons (GRanges with exon_idx, or data.frame start/end/exon_idx)}
 
-\item{max_distance}{Maximum genomic distance (bp) to assign a boundary
-mapping. NOTE: this was hardcoded to 250bp in the original version, which
-silently drops most evidence for deep-intronic PTD breakpoints -- KMT2A
-introns run into the multiple-kb range, and two of the three fragments in
-the sample this module was built for were intronic. Callers should pass a
-per-gene value (see extract_graph_candidates()) rather than relying on a
-short-intron-tuned default.}
+\item{max_distance}{Maximum distance (bp) between each breakpoint and the
+nearest exon; events further away are ignored. KMT2A introns run into
+several kb, hence the default.}
+
+\item{exon_tol}{Slack (bp) when testing that an exon lies inside [S, E].}
 }
 \value{
-Aggregated edge data.frame with joint probabilities (one row per
-  distinct (from,to) exon pair)
+Aggregated edge data.frame (one row per (from, to) exon pair) with
+  joint probability, unique-read support and consensus S / E.
 }
 \description{
-Map Raw Genomic Evidence Coordinates to Annotated Exon Graph Edges
+Each event is a duplicated interval [S, E]. The duplicated exons are those
+lying inside [S, E] (within \code{exon_tol} bp); the back-edge runs from
+the last duplicated exon to the first one, in transcript order, so it is
+strand independent. The previous "nearest exon to each coordinate" rule
+mis-assigned intronic breakpoints (nearest exon of a breakpoint in intron
+k/k+1 can be either exon) and dropped single-exon duplications as
+self-loops.
 }

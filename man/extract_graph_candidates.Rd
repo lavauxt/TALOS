@@ -8,24 +8,32 @@ extract_graph_candidates(
   bam_file,
   gene_config,
   max_exon_distance = NULL,
-  buffer_bp = NULL
+  buffer_bp = NULL,
+  min_support = NULL,
+  expected_isize_max = NULL
 )
 }
 \arguments{
 \item{bam_file}{Path to BAM file}
 
-\item{gene_config}{Resolved gene config list (must include $all_exons with
-an exon_idx column for this to run)}
+\item{gene_config}{Resolved gene config list (must include $all_exons)}
 
-\item{max_exon_distance}{Max genomic distance (bp) for mapping evidence to
-the nearest exon. Defaults to gene_config$graph_settings$max_exon_distance
-if set in the YAML, otherwise 5000L.}
+\item{max_exon_distance}{Max distance (bp) between a breakpoint and the
+nearest exon. Default gene_config$graph_settings$max_exon_distance, else 5000.}
 
-\item{buffer_bp}{Flanking BAM-scan window in bp (see .get_evidence_dt).
-Defaults to gene_config$graph_settings$buffer_bp if set, otherwise 15000L.}
+\item{buffer_bp}{Flanking BAM-scan window in bp. Default
+gene_config$graph_settings$buffer_bp, else 15000.}
+
+\item{min_support}{Minimum distinct reads per cycle. Default
+gene_config$graph_settings$min_support, else 2.}
+
+\item{expected_isize_max}{Minimum mate separation for a discordant pair.
+Default gene_config$graph_settings$expected_isize_max, else 1000.}
 }
 \value{
-list of candidate PTD cycle structures (possibly empty list())
+list of PTD cycles (possibly empty). Each carries the duplicated
+  exons, the consensus duplicated interval (dup_start, dup_end,
+  dup_length) and the supporting read names.
 }
 \description{
 Main Graph Candidate Extraction Workflow

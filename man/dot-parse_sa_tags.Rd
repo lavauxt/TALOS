@@ -2,7 +2,7 @@
 % Please edit documentation in R/engine_bam_extractor.R
 \name{.parse_sa_tags}
 \alias{.parse_sa_tags}
-\title{Parse Split-Read Supplementary Alignments (SA Tags)}
+\title{Tandem-duplication evidence from split reads (SA tags)}
 \usage{
 .parse_sa_tags(dt)
 }
@@ -10,10 +10,22 @@
 \item{dt}{data.frame of BAM records (from .get_evidence_dt)}
 }
 \value{
-data.frame of split-read coordinate pairs with raw probabilities
+data.frame(qname, start = S, end = E, prob, evidence_type, precise)
 }
 \description{
-Vectorized (no per-row R loop): expands each read's ';'-delimited SA
-entries into rows, then parses the fixed 6-field SA format
-("rname,pos,strand,CIGAR,mapq,NM") with vapply instead of a nested loop.
+A read crossing the novel junction of a tandem duplication [S, E] has one
+alignment ending at E with its trailing part clipped, and one starting at S
+with its leading part clipped, with S < E (a deletion gives the mirror
+image: the left-clipped piece lies downstream). The previous version kept
+only \code{pmax/pmin} of the two positions, which discarded this direction:
+on a + strand gene every split read (deletions, inversions, fusions to
+another chromosome) became a PTD back-edge, and on a - strand gene none
+did. Here:
+\itemize{
+  \item SA entries on another chromosome or strand are ignored
+    (translocation / inversion, not a tandem duplication);
+  \item the clip side of each piece decides which end is S and which is E;
+  \item the primary and supplementary records of a read describe the same
+    junction once (deduplicated by read name).
+}
 }

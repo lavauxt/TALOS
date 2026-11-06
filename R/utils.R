@@ -75,7 +75,7 @@
     if (op_type == "I") {
       bp <- ref_cursor - 1L
       local_bp <- bp - genomic_start + 1L
-      if (op_len >= min_size && local_bp >= 1L && local_bp <= ref_len) {
+      if (op_len > 0L && op_len >= min_size && local_bp >= 1L && local_bp <= ref_len) {
         n_insertions <- n_insertions + 1L
         insertions[[n_insertions]] <- data.frame(
           local_breakpoint = as.integer(local_bp),
@@ -147,12 +147,43 @@
   )
 }
 
+
+# ── Vectorised CIGAR helpers (base R; used by the split-read DUP parser) ─────
+#' Parse CIGAR strings into reference width and end clips (soft + hard)
+#' @param cig Character vector of CIGAR strings.
+#' @return data.frame(width, lead, trail), one row per CIGAR. \code{width} is
+#'   the span along the reference (M, D, N, =, X); \code{lead}/\code{trail}
+#'   are the summed leading / trailing S and H operations.
+#' @keywords internal
+.cigar_layout <- function(cig) {
+  one <- function(cg) {
+    if (is.na(cg) || !nzchar(cg) || cg == "*") return(c(NA_integer_, 0L, 0L))
+    ops <- regmatches(cg, gregexpr("[0-9]+[MIDNSHP=X]", cg, perl = TRUE))[[1L]]
+    if (!length(ops)) return(c(NA_integer_, 0L, 0L))
+    len <- as.integer(sub("[A-Z=]$", "", ops))
+    op <- sub("^[0-9]+", "", ops)
+    clip <- op %in% c("S", "H")
+    if (all(clip)) return(c(NA_integer_, 0L, 0L))
+    first_al <- which(!clip)[1L]
+    last_al <- max(which(!clip))
+    c(sum(len[op %in% c("M", "D", "N", "=", "X")]),
+      sum(len[seq_len(first_al - 1L)]),
+      if (last_al < length(ops)) sum(len[(last_al + 1L):length(ops)]) else 0L)
+  }
+  m <- vapply(as.character(cig), one, integer(3L), USE.NAMES = FALSE)
+  if (!length(cig)) m <- matrix(integer(0), nrow = 3L)
+  data.frame(width = m[1L, ], lead = m[2L, ], trail = m[3L, ])
+}
+
 #' Annotate ITDs with known hotspot information
-#' @param itd_df Data frame with columns \code{Gene}, \code{GenomicPosition}, \code{Length}.
+#' @param itd_df Data frame with columns \code{Gene}, a position column and
+#'   (optionally) \code{Length}.
 #' @param db_path Optional path to CSV file (forces CSV mode).
 #' @param genome_build \code{"hg19"} or \code{"hg38"}.
 #' @param db_conn Optional DBI connection (overrides CSV).
 #' @param fallback_csv_path Optional fallback CSV path.
+#' @param pos_col Position column (default \code{"GenomicPosition"};
+#'   \code{"InsertionSite"} for ALU results).
 #' @return Data frame with added columns \code{Hotspot} and \code{HotspotName}.
 #' @export
 annotate_hotspots <- function(
@@ -160,127 +191,80 @@ annotate_hotspots <- function(
   db_path = NULL,
   genome_build = NULL,
   db_conn = NULL,
-  fallback_csv_path = NULL
+  fallback_csv_path = NULL,
+  pos_col = "GenomicPosition"
 ) {
   itd_df$Hotspot <- rep(FALSE, nrow(itd_df))
   itd_df$HotspotName <- rep(NA_character_, nrow(itd_df))
-
   if (nrow(itd_df) == 0L) {
     return(itd_df)
   }
+  if (!pos_col %in% names(itd_df)) {
+    stop("annotate_hotspots(): position column '", pos_col, "' not found.")
+  }
 
+  hotspots <- NULL
   if (!is.null(db_conn)) {
     if (!requireNamespace("DBI", quietly = TRUE)) {
       stop("Package 'DBI' required for database mode.")
     }
-
-    genes_in_df <- unique(itd_df$Gene)
-    hs_list <- lapply(genes_in_df, function(g) {
+    hs_list <- lapply(unique(itd_df$Gene), function(g) {
       build_clause <- if (!is.null(genome_build)) " AND Build = ?" else ""
       params <- if (!is.null(genome_build)) list(g, genome_build) else list(g)
       DBI::dbGetQuery(
         db_conn,
-        paste0(
-          "SELECT Gene, Start, End, Name FROM hotspots WHERE Gene = ?",
-          build_clause
-        ),
+        paste0("SELECT Gene, Start, End, Name FROM hotspots WHERE Gene = ?", build_clause),
         params = params
       )
     })
-    hotspots_all <- do.call(rbind, hs_list)
-
-    if (!is.null(hotspots_all) && nrow(hotspots_all) > 0) {
-      hs_gr <- GenomicRanges::GRanges(
-        seqnames = hotspots_all$Gene,
-        ranges = IRanges::IRanges(
-          start = hotspots_all$Start,
-          end = hotspots_all$End
-        ),
-        Name = hotspots_all$Name
-      )
-      itd_end <- itd_df$GenomicPosition +
-        ifelse(is.na(itd_df$Length), 0L, itd_df$Length) -
-        1L
-      itd_end <- pmax(itd_end, itd_df$GenomicPosition)
-      itd_gr <- GenomicRanges::GRanges(
-        seqnames = itd_df$Gene,
-        ranges = IRanges::IRanges(start = itd_df$GenomicPosition, end = itd_end)
-      )
-      hits <- GenomicRanges::findOverlaps(itd_gr, hs_gr, type = "any")
-      if (length(hits) > 0) {
-        qh <- S4Vectors::queryHits(hits)
-        sh <- S4Vectors::subjectHits(hits)
-        for (qi in unique(qh)) {
-          names_i <- paste(
-            unique(hotspots_all$Name[sh[qh == qi]]),
-            collapse = ";"
-          )
-          itd_df$Hotspot[qi] <- TRUE
-          itd_df$HotspotName[qi] <- names_i
-        }
+    hotspots <- do.call(rbind, hs_list)
+  } else {
+    csv_path <- db_path %||% system.file("extdata", "hotspots.csv", package = "TALOS")
+    if (nzchar(csv_path) && file.exists(csv_path)) {
+      hotspots <- utils::read.csv(csv_path, stringsAsFactors = FALSE)
+      if (!is.null(genome_build) && "Build" %in% colnames(hotspots)) {
+        hotspots <- hotspots[hotspots$Build == genome_build, , drop = FALSE]
       }
-    }
-    return(itd_df)
-  }
-
-  csv_path <- db_path
-  if (is.null(csv_path)) {
-    csv_path <- system.file("extdata", "hotspots.csv", package = "TALOS")
-  }
-
-  if (!is.null(csv_path) && file.exists(csv_path)) {
-    hotspots <- read.csv(csv_path, stringsAsFactors = FALSE)
-    if (!is.null(genome_build) && "Build" %in% colnames(hotspots)) {
-      hotspots <- hotspots[hotspots$Build == genome_build, ]
-    }
-
-    if (nrow(hotspots) == 0L) {
+    } else if (!is.null(fallback_csv_path) && file.exists(fallback_csv_path)) {
+      return(annotate_hotspots(itd_df, db_path = fallback_csv_path,
+                               genome_build = genome_build, pos_col = pos_col))
+    } else {
+      message("No hotspot data available. Hotspot annotation skipped.")
       return(itd_df)
     }
-
-    hs_gr <- GenomicRanges::GRanges(
-      seqnames = hotspots$Gene,
-      ranges = IRanges::IRanges(start = hotspots$Start, end = hotspots$End),
-      Name = hotspots$Name,
-      Gene = hotspots$Gene
-    )
-
-    itd_end <- itd_df$GenomicPosition +
-      ifelse(is.na(itd_df$Length), 0L, itd_df$Length) -
-      1L
-    itd_end <- pmax(itd_end, itd_df$GenomicPosition)
-
-    itd_gr <- GenomicRanges::GRanges(
-      seqnames = itd_df$Gene,
-      ranges = IRanges::IRanges(
-        start = itd_df$GenomicPosition,
-        end = itd_end
-      )
-    )
-
-    hits <- GenomicRanges::findOverlaps(itd_gr, hs_gr, type = "any")
-    if (length(hits) > 0) {
-      qh <- S4Vectors::queryHits(hits)
-      sh <- S4Vectors::subjectHits(hits)
-      for (qi in unique(qh)) {
-        names_i <- paste(unique(hotspots$Name[sh[qh == qi]]), collapse = ";")
-        itd_df$Hotspot[qi] <- TRUE
-        itd_df$HotspotName[qi] <- names_i
-      }
-    }
+  }
+  if (is.null(hotspots) || nrow(hotspots) == 0L) {
     return(itd_df)
   }
+  .overlap_hotspots(itd_df, hotspots, pos_col)
+}
 
-  if (!is.null(fallback_csv_path) && file.exists(fallback_csv_path)) {
-    return(annotate_hotspots(
-      itd_df,
-      db_path = fallback_csv_path,
-      genome_build = genome_build
-    ))
+# Shared overlap step for the DB and CSV paths of annotate_hotspots().
+.overlap_hotspots <- function(itd_df, hotspots, pos_col) {
+  pos <- as.integer(itd_df[[pos_col]])
+  len <- if ("Length" %in% names(itd_df)) as.integer(itd_df$Length) else rep(0L, nrow(itd_df))
+  len[is.na(len)] <- 0L
+  itd_end <- pmax(pos + len - 1L, pos)
+  ok <- !is.na(pos) & !is.na(itd_df$Gene)
+  if (!any(ok)) return(itd_df)
+  hs_gr <- GenomicRanges::GRanges(
+    seqnames = hotspots$Gene,
+    ranges = IRanges::IRanges(start = hotspots$Start, end = hotspots$End)
+  )
+  itd_gr <- GenomicRanges::GRanges(
+    seqnames = itd_df$Gene[ok],
+    ranges = IRanges::IRanges(start = pos[ok], end = itd_end[ok])
+  )
+  hits <- suppressWarnings(GenomicRanges::findOverlaps(itd_gr, hs_gr, type = "any"))
+  if (length(hits) == 0L) return(itd_df)
+  rows <- which(ok)
+  qh <- S4Vectors::queryHits(hits)
+  sh <- S4Vectors::subjectHits(hits)
+  for (qi in unique(qh)) {
+    itd_df$Hotspot[rows[qi]] <- TRUE
+    itd_df$HotspotName[rows[qi]] <- paste(unique(hotspots$Name[sh[qh == qi]]), collapse = ";")
   }
-
-  message("No hotspot data available. Hotspot annotation skipped.")
-  return(itd_df)
+  itd_df
 }
 
 .annotate_exonic_region <- function(
@@ -333,6 +317,15 @@ annotate_hotspots <- function(
 }
 
 
+#' HGVS c./p. annotation of a tandem duplication
+#'
+#' @param gene_config Resolved gene configuration.
+#' @param genomic_pos Leftmost genomic base of the duplicated segment.
+#' @param dup_seq Duplicated sequence (optional, used for its length).
+#' @param dup_len Duplication length (bp).
+#' @param debug Verbose debugging.
+#' @return list(c_notation, p_notation)
+#' @export
 compute_hgvs_annotations <- function(
   gene_config,
   genomic_pos,
@@ -443,11 +436,16 @@ compute_hgvs_annotations <- function(
     gene_config$cds_offset
   }
 
-  genomic_end <- if (strand == "+") {
-    genomic_pos + dup_len - 1L
-  } else {
-    genomic_pos - dup_len + 1L
-  }
+  # The duplicated segment is always [genomic_pos, genomic_pos + dup_len - 1]
+  # on the reference (+) strand (GenomicPosition is its leftmost base). On a
+  # minus-strand transcript the 5' end of the segment in cDNA space is its
+  # rightmost genomic base, so c.start / c.end are taken from opposite ends.
+  # (Previous versions used genomic_pos - dup_len + 1, i.e. the wrong
+  # segment, for minus-strand genes such as FLT3.)
+  seg_lo <- genomic_pos
+  seg_hi <- genomic_pos + dup_len - 1L
+  cdna_first <- if (strand == "-") seg_hi else seg_lo
+  cdna_last <- if (strand == "-") seg_lo else seg_hi
 
   .genomic_to_cdna_hgvs <- function(pos, exons_df, strand, cds_offset) {
     exon_hit <- which(exons_df$start <= pos & exons_df$end >= pos)
@@ -459,8 +457,9 @@ compute_hgvs_annotations <- function(
         exons_df$end[idx] - pos + 1L
       }
       c_pos <- exons_df$cum_len_before[idx] + pos_in_exon - cds_offset
+      # 5' UTR: there is no c.0, the base before c.1 is c.-1.
       if (c_pos <= 0L) {
-        return(NA_character_)
+        return(as.character(c_pos - 1L))
       }
       return(as.character(c_pos))
     }
@@ -514,13 +513,13 @@ compute_hgvs_annotations <- function(
   }
 
   start_notation <- .genomic_to_cdna_hgvs(
-    genomic_pos,
+    cdna_first,
     exons_df,
     strand,
     cds_offset
   )
   end_notation <- .genomic_to_cdna_hgvs(
-    genomic_end,
+    cdna_last,
     exons_df,
     strand,
     cds_offset
@@ -551,8 +550,6 @@ compute_hgvs_annotations <- function(
         dup_cds <- substr(coding_seq, c_start, c_end)
 
         if (nchar(dup_cds) >= 3L) {
-          trim_len <- nchar(dup_cds) - (nchar(dup_cds) %% 3L)
-
           aa_start_pos <- ceiling(c_start / 3L)
           aa_end_pos <- ceiling(c_end / 3L)
 
@@ -595,14 +592,19 @@ compute_hgvs_annotations <- function(
     }
   }
 
+  # "123+45" / "124-30" are intronic offsets; a leading "-" is the 5' UTR.
+  intronic_pat <- "[0-9][+-][0-9]"
   if (is.na(p_notation)) {
-    if (grepl("[+-]", start_notation)) {
+    if (grepl(intronic_pat, start_notation) || grepl(intronic_pat, end_notation)) {
       p_notation <- "intronic"
+    } else if (startsWith(start_notation, "-")) {
+      p_notation <- "5'UTR"
     }
   }
 
   list(c_notation = c_notation, p_notation = p_notation)
 }
+
 
 
 .get_coverage_rle <- function(cov_all, chrom) {
@@ -843,6 +845,58 @@ compute_span_depth_fold_change <- function(
 }
 
 
+
+#' Shared per-pair summary for the paired-end metrics (DRY helper)
+#'
+#' Extracts first/last mates, MAPQ, flags, coordinates, primary/MAPQ validity
+#' and pair orientation once, so compute_discordant_ratio(),
+#' compute_pe_itd_length() and compute_pe_softclip_metrics() read pairs the
+#' same way.
+#' @param all_pairs A \code{GAlignmentPairs} object.
+#' @param min_mapq Minimum MAPQ for both mates.
+#' @return list of per-pair vectors, or NULL when there are no pairs.
+#' @keywords internal
+.pair_info <- function(all_pairs, min_mapq = 20L) {
+  if (is.null(all_pairs) || length(all_pairs) == 0L) return(NULL)
+  r1 <- GenomicAlignments::first(all_pairs)
+  r2 <- GenomicAlignments::last(all_pairs)
+  n <- length(r1)
+  col_or <- function(x, name, default) {
+    v <- S4Vectors::mcols(x)[[name]]
+    if (is.null(v)) v <- rep(default, n)
+    v[is.na(v)] <- default
+    v
+  }
+  mq1 <- col_or(r1, "mapq", 0L); mq2 <- col_or(r2, "mapq", 0L)
+  f1 <- col_or(r1, "flag", 0L);  f2 <- col_or(r2, "flag", 0L)
+  primary <- bitwAnd(f1, 0x100L) == 0L & bitwAnd(f1, 0x800L) == 0L &
+    bitwAnd(f2, 0x100L) == 0L & bitwAnd(f2, 0x800L) == 0L
+  s1 <- GenomicRanges::start(r1); e1 <- GenomicRanges::end(r1)
+  s2 <- GenomicRanges::start(r2); e2 <- GenomicRanges::end(r2)
+  rev1 <- bitwAnd(f1, 0x10L) != 0L
+  rev2 <- bitwAnd(f2, 0x10L) != 0L
+  left_is_1 <- s1 <= s2
+  left_rev <- ifelse(left_is_1, rev1, rev2)
+  right_rev <- ifelse(left_is_1, rev2, rev1)
+  orientation <- ifelse(!left_rev & right_rev, "FR",
+                 ifelse(left_rev & !right_rev, "RF",
+                 ifelse(!left_rev & !right_rev, "FF", "RR")))
+  qn <- names(all_pairs)
+  if (is.null(qn) || length(qn) != n || all(is.na(qn))) {
+    qn <- as.character(S4Vectors::mcols(r1)$qname)
+  }
+  pair_start <- pmin(s1, s2)
+  pair_end <- pmax(e1, e2)
+  list(
+    n = n, qname = qn, s1 = s1, e1 = e1, s2 = s2, e2 = e2,
+    rev1 = rev1, rev2 = rev2, left_rev = left_rev, right_rev = right_rev,
+    orientation = orientation, primary = primary,
+    valid = primary & mq1 >= min_mapq & mq2 >= min_mapq,
+    pair_start = pair_start, pair_end = pair_end,
+    outer_insert = pair_end - pair_start + 1L
+  )
+}
+
 compute_discordant_ratio <- function(
   all_pairs,
   breakpoint,
@@ -851,90 +905,24 @@ compute_discordant_ratio <- function(
   insert_size_factor = 2.0,
   min_everted_separation = 100L
 ) {
-  if (is.null(all_pairs) || length(all_pairs) == 0) {
-    return(NA_real_)
-  }
+  pi <- .pair_info(all_pairs, min_mapq)
+  if (is.null(pi)) return(NA_real_)
+  in_window <- pi$s1 >= max(1L, breakpoint - flank) & pi$e1 <= breakpoint + flank
+  keep <- in_window & pi$valid
+  if (!any(in_window) || sum(keep) == 0L) return(NA_real_)
 
-  start_region <- max(1L, breakpoint - flank)
-  end_region <- breakpoint + flank
-
-  pairs_in_window <- all_pairs[
-    GenomicRanges::start(GenomicAlignments::first(all_pairs)) >= start_region &
-      GenomicRanges::end(GenomicAlignments::first(all_pairs)) <= end_region
-  ]
-  if (length(pairs_in_window) == 0) {
-    return(NA_real_)
-  }
-
-  r1 <- GenomicAlignments::first(pairs_in_window)
-  r2 <- GenomicAlignments::last(pairs_in_window)
-
-  flag1 <- S4Vectors::mcols(r1)$flag
-  if (is.null(flag1)) {
-    flag1 <- rep(0L, length(r1))
-  }
-  flag2 <- S4Vectors::mcols(r2)$flag
-  if (is.null(flag2)) {
-    flag2 <- rep(0L, length(r2))
-  }
-  mapq1 <- S4Vectors::mcols(r1)$mapq
-  if (is.null(mapq1)) {
-    mapq1 <- rep(0L, length(r1))
-  }
-  mapq2 <- S4Vectors::mcols(r2)$mapq
-  if (is.null(mapq2)) {
-    mapq2 <- rep(0L, length(r2))
-  }
-
-  mapq1[is.na(mapq1)] <- 0L
-  mapq2[is.na(mapq2)] <- 0L
-
-  valid_mask <- mapq1 >= min_mapq &
-    mapq2 >= min_mapq &
-    bitwAnd(flag1, 0x100) == 0 &
-    bitwAnd(flag1, 0x800) == 0 &
-    bitwAnd(flag2, 0x100) == 0 &
-    bitwAnd(flag2, 0x800) == 0
-
-  if (sum(valid_mask) == 0) {
-    return(NA_real_)
-  }
-
-  start1 <- GenomicRanges::start(r1)[valid_mask]
-  start2 <- GenomicRanges::start(r2)[valid_mask]
-
-  end1 <- GenomicRanges::end(r1)[valid_mask]
-  end2 <- GenomicRanges::end(r2)[valid_mask]
-  mapped_isize <- pmax(end1, end2) - pmin(start1, start2)
-
-  med_insert <- median(mapped_isize, na.rm = TRUE)
-  sd_insert <- sd(mapped_isize, na.rm = TRUE)
-  if (is.na(sd_insert)) {
-    sd_insert <- 0
-  }
-
-  large_insert <- mapped_isize > (med_insert + (insert_size_factor * sd_insert))
-
+  start1 <- pi$s1[keep]; start2 <- pi$s2[keep]
+  mapped_isize <- pmax(pi$e1[keep], pi$e2[keep]) - pmin(start1, start2)
+  med_insert <- stats::median(mapped_isize, na.rm = TRUE)
+  sd_insert <- stats::sd(mapped_isize, na.rm = TRUE)
+  if (is.na(sd_insert)) sd_insert <- 0
+  large_insert <- mapped_isize > (med_insert + insert_size_factor * sd_insert)
   spanning <- (start1 <= breakpoint & start2 > breakpoint) |
     (start2 <= breakpoint & start1 > breakpoint)
-
-  rev1_full <- bitwAnd(flag1, 0x10) != 0
-  rev2_full <- bitwAnd(flag2, 0x10) != 0
-  rev1 <- rev1_full[valid_mask]
-  rev2 <- rev2_full[valid_mask]
-
-  left_is_r1 <- start1 <= start2
-  left_rev <- ifelse(left_is_r1, rev1, rev2)
-  right_rev <- ifelse(left_is_r1, rev2, rev1)
-  mate_sep <- abs(start1 - start2)
-  everted <- left_rev & !right_rev & mate_sep >= min_everted_separation
-
-  discordant_spanning <- sum(spanning & (large_insert | everted))
-  total_valid_pairs <- sum(valid_mask)
-
-  discordant_spanning / total_valid_pairs
+  everted <- pi$left_rev[keep] & !pi$right_rev[keep] &
+    abs(start1 - start2) >= min_everted_separation
+  sum(spanning & (large_insert | everted)) / sum(keep)
 }
-
 
 #' Estimate ITD length from paired-end insert sizes
 #'
@@ -975,68 +963,22 @@ compute_pe_itd_length <- function(
   max_insert = 5000L
 ) {
   empty <- list(length_pe = NA_real_, n_spanning = 0L, n_background = 0L)
-  if (is.null(all_pairs) || length(all_pairs) == 0L) {
-    return(empty)
-  }
-
-  r1 <- GenomicAlignments::first(all_pairs)
-  r2 <- GenomicAlignments::last(all_pairs)
-
-  mq1 <- S4Vectors::mcols(r1)$mapq
-  mq1[is.na(mq1)] <- 0L
-  mq2 <- S4Vectors::mcols(r2)$mapq
-  mq2[is.na(mq2)] <- 0L
-  f1 <- S4Vectors::mcols(r1)$flag
-  if (is.null(f1)) {
-    f1 <- rep(0L, length(r1))
-  }
-  f2 <- S4Vectors::mcols(r2)$flag
-  if (is.null(f2)) {
-    f2 <- rep(0L, length(r2))
-  }
-
-  primary_mask <- bitwAnd(f1, 0x100L) == 0L &
-    bitwAnd(f1, 0x800L) == 0L &
-    bitwAnd(f2, 0x100L) == 0L &
-    bitwAnd(f2, 0x800L) == 0L
-  mapq_mask <- mq1 >= min_mapq & mq2 >= min_mapq
-  valid <- primary_mask & mapq_mask
-
-  s1 <- GenomicRanges::start(r1)
-  e2 <- GenomicRanges::end(r2)
-
-  pair_start <- pmin(s1, GenomicRanges::start(r2))
-  pair_end <- pmax(GenomicRanges::end(r1), e2)
-  isize <- pair_end - pair_start + 1L
-
+  pi <- .pair_info(all_pairs, min_mapq)
+  if (is.null(pi)) return(empty)
+  isize <- pi$outer_insert
   size_mask <- isize > 0L & isize <= max_insert
-
-  bg_mask <- valid &
-    size_mask &
-    pair_start >= (breakpoint - flank) &
-    pair_end <= (breakpoint + flank) &
-    !(pair_start < breakpoint & pair_end > breakpoint)
-
-  span_mask <- valid &
-    size_mask &
-    pair_start <= (breakpoint - nominal_read_len) &
-    pair_end >= (breakpoint + nominal_read_len)
-
+  bg_mask <- pi$valid & size_mask &
+    pi$pair_start >= (breakpoint - flank) & pi$pair_end <= (breakpoint + flank) &
+    !(pi$pair_start < breakpoint & pi$pair_end > breakpoint)
+  span_mask <- pi$valid & size_mask &
+    pi$pair_start <= (breakpoint - nominal_read_len) &
+    pi$pair_end >= (breakpoint + nominal_read_len)
   n_span <- sum(span_mask, na.rm = TRUE)
   n_bg <- sum(bg_mask, na.rm = TRUE)
-
-  if (n_span < min_spanning || n_bg < 10L) {
-    return(empty)
-  }
-
-  med_span <- stats::median(isize[span_mask], na.rm = TRUE)
-  med_bg <- stats::median(isize[bg_mask], na.rm = TRUE)
-
-  est <- round(med_span - med_bg)
-  if (is.na(est) || est <= 0L) {
-    return(empty)
-  }
-
+  if (n_span < min_spanning || n_bg < 10L) return(empty)
+  est <- round(stats::median(isize[span_mask], na.rm = TRUE) -
+                 stats::median(isize[bg_mask], na.rm = TRUE))
+  if (is.na(est) || est <= 0L) return(empty)
   list(length_pe = est, n_spanning = n_span, n_background = n_bg)
 }
 
@@ -1193,158 +1135,62 @@ detect_orientation <- function(itd_seq, ref_seq, min_pid = 0.90) {
 
 .resolve_ref_base <- function(pos, ref_dna, genomic_start) {
   local_pos <- pos - genomic_start + 1L
-  ref_len <- nchar(ref_dna)
-  if (local_pos > 0L && local_pos <= ref_len) {
+  if (!is.na(local_pos) && local_pos > 0L && local_pos <= nchar(ref_dna)) {
     substr(ref_dna, local_pos, local_pos)
   } else {
     "N"
   }
 }
 
+# VCF INFO values must not contain ';', '=', whitespace or commas-in-names.
+.vcf_safe <- function(x) gsub("[;=[:space:]]", "_", as.character(x))
+
+# Optional INFO fields: column, key, sprintf format, coercion.
+.VCF_OPTIONAL_INFO <- list(
+  list("StrandBias", "SB", "%.4f", as.numeric),
+  list("MeanSupportMAPQ", "MMAPQ", "%.1f", as.numeric),
+  list("BreakpointSpread", "BPSPREAD", "%d", as.integer),
+  list("SoftclipFraction", "SCFRAC", "%.4f", as.numeric),
+  list("UniqueBreakpoints", "UBP", "%d", as.integer),
+  list("CoverageDrop", "CD", "%.2f", as.numeric),
+  list("DiscordantRatio", "DRATIO", "%.4f", as.numeric),
+  list("MedianMicrohomology", "MH", "%d", as.integer),
+  list("RepeatEntropy", "ENT", "%.2f", as.numeric),
+  list("Orientation", "ORIENT", "%s", .vcf_safe),
+  list("SupportConsistency", "CONSIST", "%.4f", as.numeric),
+  list("RefMatch_Observed", "REFMATCH_OBS", "%.1f", as.numeric),
+  list("RefMatch_Total", "REFMATCH_TOT", "%.1f", as.numeric),
+  list("ITDReadCoverage", "ITDCOV", "%.1f", as.numeric),
+  list("HotspotName", "HOTSPOT", "%s", function(v) .vcf_safe(gsub(";[[:space:]]*", ",", v))),
+  list("AlignmentScore", "ALNSCORE", "%.4f", as.numeric),
+  list("TotalSupportBases", "SUPBASES", "%d", as.integer),
+  list("LeftSoftclipCount", "LSC", "%d", as.integer),
+  list("RightSoftclipCount", "RSC", "%d", as.integer),
+  list("LeftSoftclipPctSupport", "LSCPCT", "%.1f", as.numeric),
+  list("RightSoftclipPctSupport", "RSCPCT", "%.1f", as.numeric)
+)
+
 .format_info <- function(row) {
-  cds_val <- if (is.na(row$HGVS_cDNA)) "." else row$HGVS_cDNA
+  len <- suppressWarnings(as.integer(row$Length))
+  pos <- as.integer(row$GenomicPosition)
+  end <- if (!is.na(len) && len > 0L) pos + len - 1L else pos
+  cds_val <- if (is.na(row$HGVS_cDNA)) "." else .vcf_safe(row$HGVS_cDNA)
   info <- sprintf(
-    "SVTYPE=DUP;SVLEN=%d;END=%d;GENE=%s;CDS=%s;AF=%.4f;DP=%d;SUPPORT=%d;WT=%d",
-    row$Length,
-    row$GenomicPosition + row$Length - 1L,
-    row$Gene,
-    cds_val,
-    row$AlleleFrequency,
-    row$DepthAtBreakpoint,
-    row$SupportingReads,
-    row$WildtypeReads
+    "SVTYPE=DUP;SVLEN=%s;END=%d;GENE=%s;CDS=%s;AF=%.4f;DP=%d;SUPPORT=%d;WT=%d",
+    if (is.na(len)) "." else as.character(len), end, .vcf_safe(row$Gene), cds_val,
+    as.numeric(row$AlleleFrequency), as.integer(row$DepthAtBreakpoint),
+    as.integer(row$SupportingReads), as.integer(row$WildtypeReads)
   )
   if (!is.na(row$HGVS_Protein) && row$HGVS_Protein != "") {
-    info <- paste0(info, sprintf(";AA=%s", row$HGVS_Protein))
+    info <- paste0(info, ";AA=", .vcf_safe(row$HGVS_Protein))
   }
-
-  append_if <- function(info, cond, fmt, val) {
-    if (cond) paste0(info, sprintf(fmt, val)) else info
+  for (spec in .VCF_OPTIONAL_INFO) {
+    col <- spec[[1L]]
+    v <- row[[col]]
+    if (is.null(v) || length(v) == 0L || is.na(v)) next
+    if (col == "HotspotName" && !isTRUE(row$Hotspot)) next
+    info <- paste0(info, ";", spec[[2L]], "=", sprintf(spec[[3L]], spec[[4L]](v)))
   }
-  info <- append_if(
-    info,
-    !is.null(row$StrandBias) && !is.na(row$StrandBias),
-    ";SB=%.4f",
-    row$StrandBias
-  )
-  info <- append_if(
-    info,
-    !is.null(row$MeanSupportMAPQ) && !is.na(row$MeanSupportMAPQ),
-    ";MMAPQ=%.1f",
-    row$MeanSupportMAPQ
-  )
-  info <- append_if(
-    info,
-    !is.null(row$BreakpointSpread) && !is.na(row$BreakpointSpread),
-    ";BPSPREAD=%d",
-    as.integer(row$BreakpointSpread)
-  )
-  info <- append_if(
-    info,
-    !is.null(row$SoftclipFraction) && !is.na(row$SoftclipFraction),
-    ";SCFRAC=%.4f",
-    row$SoftclipFraction
-  )
-  info <- append_if(
-    info,
-    !is.null(row$UniqueBreakpoints) && !is.na(row$UniqueBreakpoints),
-    ";UBP=%d",
-    as.integer(row$UniqueBreakpoints)
-  )
-  info <- append_if(
-    info,
-    !is.null(row$CoverageDrop) && !is.na(row$CoverageDrop),
-    ";CD=%.2f",
-    row$CoverageDrop
-  )
-  info <- append_if(
-    info,
-    !is.null(row$DiscordantRatio) && !is.na(row$DiscordantRatio),
-    ";DRATIO=%.4f",
-    row$DiscordantRatio
-  )
-  info <- append_if(
-    info,
-    !is.null(row$MedianMicrohomology) && !is.na(row$MedianMicrohomology),
-    ";MH=%d",
-    as.integer(row$MedianMicrohomology)
-  )
-  info <- append_if(
-    info,
-    !is.null(row$RepeatEntropy) && !is.na(row$RepeatEntropy),
-    ";ENT=%.2f",
-    row$RepeatEntropy
-  )
-  info <- append_if(
-    info,
-    !is.null(row$Orientation) && !is.na(row$Orientation),
-    ";ORIENT=%s",
-    row$Orientation
-  )
-  info <- append_if(
-    info,
-    !is.null(row$SupportConsistency) && !is.na(row$SupportConsistency),
-    ";CONSIST=%.4f",
-    row$SupportConsistency
-  )
-  info <- append_if(
-    info,
-    !is.null(row$RefMatch_Observed) && !is.na(row$RefMatch_Observed),
-    ";REFMATCH_OBS=%.1f",
-    row$RefMatch_Observed
-  )
-  info <- append_if(
-    info,
-    !is.null(row$RefMatch_Total) && !is.na(row$RefMatch_Total),
-    ";REFMATCH_TOT=%.1f",
-    row$RefMatch_Total
-  )
-  info <- append_if(
-    info,
-    !is.null(row$ITDReadCoverage) && !is.na(row$ITDReadCoverage),
-    ";ITDCOV=%.1f",
-    row$ITDReadCoverage
-  )
-  if (!is.null(row$Hotspot) && isTRUE(row$Hotspot) && !is.na(row$HotspotName)) {
-    info <- paste0(info, sprintf(";HOTSPOT=%s", row$HotspotName))
-  }
-  info <- append_if(
-    info,
-    !is.null(row$AlignmentScore) && !is.na(row$AlignmentScore),
-    ";ALNSCORE=%.4f",
-    row$AlignmentScore
-  )
-  info <- append_if(
-    info,
-    !is.null(row$TotalSupportBases) && !is.na(row$TotalSupportBases),
-    ";SUPBASES=%d",
-    as.integer(row$TotalSupportBases)
-  )
-  info <- append_if(
-    info,
-    !is.null(row$LeftSoftclipCount) && !is.na(row$LeftSoftclipCount),
-    ";LSC=%d",
-    row$LeftSoftclipCount
-  )
-  info <- append_if(
-    info,
-    !is.null(row$RightSoftclipCount) && !is.na(row$RightSoftclipCount),
-    ";RSC=%d",
-    row$RightSoftclipCount
-  )
-  info <- append_if(
-    info,
-    !is.null(row$LeftSoftclipPctSupport) && !is.na(row$LeftSoftclipPctSupport),
-    ";LSCPCT=%.1f",
-    row$LeftSoftclipPctSupport
-  )
-  info <- append_if(
-    info,
-    !is.null(row$RightSoftclipPctSupport) &&
-      !is.na(row$RightSoftclipPctSupport),
-    ";RSCPCT=%.1f",
-    row$RightSoftclipPctSupport
-  )
   info
 }
 
@@ -1446,24 +1292,12 @@ build_vcf_records <- function(itd_df, ref_dna, genomic_start, chrom) {
   records <- character(nrow(itd_df))
   for (i in seq_len(nrow(itd_df))) {
     row <- itd_df[i, ]
-    if (row$DepthAtBreakpoint == 0L) {
-      next
-    }
+    if (!isTRUE(row$DepthAtBreakpoint > 0)) next
     pos <- row$GenomicPosition
-    ref_base <- .resolve_ref_base(pos, ref_dna, genomic_start)
-    id_field <- if (!is.na(row$HGVS_cDNA)) row$HGVS_cDNA else "."
-    info <- .format_info(row)
+    id_field <- if (!is.na(row$HGVS_cDNA)) .vcf_safe(row$HGVS_cDNA) else "."
     records[i] <- paste(
-      chrom,
-      pos,
-      id_field,
-      ref_base,
-      "<DUP>",
-      ".",
-      "PASS",
-      info,
-      "GT",
-      "0/1",
+      chrom, pos, id_field, .resolve_ref_base(pos, ref_dna, genomic_start),
+      "<DUP>", ".", "PASS", .format_info(row), "GT", "0/1",
       sep = "\t"
     )
   }
@@ -1732,159 +1566,53 @@ compute_pe_softclip_metrics <- function(
   min_mapq = 20L,
   max_insert = 5000L
 ) {
+  orient_levels <- c("FR", "RF", "FF", "RR", "other")
   empty <- list(
-    pe_softclip_support = 0L,
-    pe_softclip_event_pairs = 0L,
-    pe_softclip_long_pairs = 0L,
-    pe_orientation_fr = 0L,
-    pe_orientation_rf = 0L,
-    pe_orientation_ff = 0L,
-    pe_orientation_rr = 0L,
-    pe_orientation_other = 0L,
+    pe_softclip_support = 0L, pe_softclip_event_pairs = 0L, pe_softclip_long_pairs = 0L,
+    pe_orientation_fr = 0L, pe_orientation_rf = 0L, pe_orientation_ff = 0L,
+    pe_orientation_rr = 0L, pe_orientation_other = 0L,
     pe_orientation_dominant = NA_character_
   )
-  if (
-    is.null(all_pairs) ||
-      length(all_pairs) == 0L ||
-      is.null(support_rows) ||
-      nrow(support_rows) == 0L
-  ) {
+  if (is.null(support_rows) || nrow(support_rows) == 0L ||
+      is.null(support_rows$cigar) || is.null(support_rows$read_name)) {
     return(empty)
   }
-  if (is.null(support_rows$cigar) || is.null(support_rows$read_name)) {
-    return(empty)
-  }
-
   has_sc <- grepl("^\\d+S", support_rows$cigar, perl = TRUE) |
     grepl("\\d+S$", support_rows$cigar, perl = TRUE)
-  sc_qnames <- unique(support_rows$read_name[
-    has_sc & !is.na(support_rows$read_name)
-  ])
-  if (length(sc_qnames) == 0L) {
-    return(empty)
-  }
+  sc_qnames <- unique(support_rows$read_name[has_sc & !is.na(support_rows$read_name)])
+  if (length(sc_qnames) == 0L) return(empty)
 
-  r1 <- GenomicAlignments::first(all_pairs)
-  r2 <- GenomicAlignments::last(all_pairs)
-  pair_qnames <- names(all_pairs)
-  if (
-    is.null(pair_qnames) ||
-      length(pair_qnames) != length(all_pairs) ||
-      all(is.na(pair_qnames))
-  ) {
-    pair_qnames <- as.character(S4Vectors::mcols(r1)$qname)
-  }
-  if (is.null(pair_qnames) || length(pair_qnames) != length(all_pairs)) {
-    return(empty)
-  }
+  pi <- .pair_info(all_pairs, min_mapq)
+  if (is.null(pi) || is.null(pi$qname) || length(pi$qname) != pi$n) return(empty)
 
-  mq1 <- S4Vectors::mcols(r1)$mapq
-  if (is.null(mq1)) {
-    mq1 <- rep(0L, length(r1))
-  }
-  mq1[is.na(mq1)] <- 0L
-  mq2 <- S4Vectors::mcols(r2)$mapq
-  if (is.null(mq2)) {
-    mq2 <- rep(0L, length(r2))
-  }
-  mq2[is.na(mq2)] <- 0L
-  f1 <- S4Vectors::mcols(r1)$flag
-  if (is.null(f1)) {
-    f1 <- rep(0L, length(r1))
-  }
-  f2 <- S4Vectors::mcols(r2)$flag
-  if (is.null(f2)) {
-    f2 <- rep(0L, length(r2))
-  }
-
-  primary <- bitwAnd(f1, 0x100L) == 0L &
-    bitwAnd(f1, 0x800L) == 0L &
-    bitwAnd(f2, 0x100L) == 0L &
-    bitwAnd(f2, 0x800L) == 0L
-  valid <- primary & mq1 >= min_mapq & mq2 >= min_mapq
-
-  s1 <- GenomicRanges::start(r1)
-  e1 <- GenomicRanges::end(r1)
-  s2 <- GenomicRanges::start(r2)
-  e2 <- GenomicRanges::end(r2)
-  pair_start <- pmin(s1, s2)
-  pair_end <- pmax(e1, e2)
-  outer_insert <- pair_end - pair_start + 1L
+  outer_insert <- pi$outer_insert
   size_ok <- outer_insert > 0L & outer_insert <= max_insert
+  support_pair_mask <- pi$valid & size_ok & pi$qname %in% sc_qnames
+  if (!any(support_pair_mask, na.rm = TRUE)) return(empty)
 
-  support_pair_mask <- valid & size_ok & pair_qnames %in% sc_qnames
-  if (!any(support_pair_mask, na.rm = TRUE)) {
-    return(empty)
-  }
-
-  span_bp <- pair_start <= breakpoint & pair_end >= breakpoint
-  bg_mask <- valid &
-    size_ok &
-    pair_start >= (breakpoint - flank) &
-    pair_end <= (breakpoint + flank) &
-    !span_bp
+  span_bp <- pi$pair_start <= breakpoint & pi$pair_end >= breakpoint
+  bg_mask <- pi$valid & size_ok &
+    pi$pair_start >= (breakpoint - flank) & pi$pair_end <= (breakpoint + flank) & !span_bp
   bg_med <- stats::median(outer_insert[bg_mask], na.rm = TRUE)
   bg_mad <- stats::mad(outer_insert[bg_mask], na.rm = TRUE)
-  if (!is.finite(bg_mad) || bg_mad == 0) {
-    bg_mad <- stats::sd(outer_insert[bg_mask], na.rm = TRUE)
-  }
-  if (!is.finite(bg_mad) || bg_mad == 0) {
-    bg_mad <- 50
-  }
+  if (!is.finite(bg_mad) || bg_mad == 0) bg_mad <- stats::sd(outer_insert[bg_mask], na.rm = TRUE)
+  if (!is.finite(bg_mad) || bg_mad == 0) bg_mad <- 50
 
-  len_used <- if (is.na(best_len) || best_len <= 0L) {
-    0L
-  } else {
-    as.numeric(best_len)
-  }
-  event_size_span <- long_span <- rep(FALSE, length(all_pairs))
+  len_used <- if (is.na(best_len) || best_len <= 0L) 0 else as.numeric(best_len)
+  event_size_span <- long_span <- rep(FALSE, pi$n)
   if (is.finite(bg_med) && len_used > 0) {
-    expected_insert <- bg_med + len_used
     insert_tol <- max(50, 2 * bg_mad)
-    event_size_span <- span_bp &
-      abs(outer_insert - expected_insert) <= insert_tol
+    event_size_span <- span_bp & abs(outer_insert - (bg_med + len_used)) <= insert_tol
     long_span <- span_bp & outer_insert >= (bg_med + 0.75 * len_used)
   }
 
-  rev1 <- bitwAnd(f1, 0x10L) != 0L
-  rev2 <- bitwAnd(f2, 0x10L) != 0L
-  left_is_1 <- s1 <= s2
-  left_rev <- ifelse(left_is_1, rev1, rev2)
-  right_rev <- ifelse(left_is_1, rev2, rev1)
-  orientation <- ifelse(
-    !left_rev & right_rev,
-    "FR",
-    ifelse(
-      left_rev & !right_rev,
-      "RF",
-      ifelse(
-        !left_rev & !right_rev,
-        "FF",
-        ifelse(left_rev & right_rev, "RR", "other")
-      )
-    )
-  )
-
-  orient_tab <- table(factor(
-    orientation[support_pair_mask],
-    levels = c("FR", "RF", "FF", "RR", "other")
-  ))
-  dominant <- if (sum(orient_tab) > 0L) {
-    names(sort(orient_tab, decreasing = TRUE))[1L]
-  } else {
-    NA_character_
-  }
+  orient_tab <- table(factor(pi$orientation[support_pair_mask], levels = orient_levels))
+  dominant <- if (sum(orient_tab) > 0L) names(sort(orient_tab, decreasing = TRUE))[1L] else NA_character_
 
   list(
-    pe_softclip_support = length(unique(pair_qnames[support_pair_mask])),
-    pe_softclip_event_pairs = as.integer(sum(
-      support_pair_mask & event_size_span,
-      na.rm = TRUE
-    )),
-    pe_softclip_long_pairs = as.integer(sum(
-      support_pair_mask & long_span,
-      na.rm = TRUE
-    )),
+    pe_softclip_support = length(unique(pi$qname[support_pair_mask])),
+    pe_softclip_event_pairs = as.integer(sum(support_pair_mask & event_size_span, na.rm = TRUE)),
+    pe_softclip_long_pairs = as.integer(sum(support_pair_mask & long_span, na.rm = TRUE)),
     pe_orientation_fr = as.integer(orient_tab[["FR"]]),
     pe_orientation_rf = as.integer(orient_tab[["RF"]]),
     pe_orientation_ff = as.integer(orient_tab[["FF"]]),
@@ -1892,4 +1620,49 @@ compute_pe_softclip_metrics <- function(
     pe_orientation_other = as.integer(orient_tab[["other"]]),
     pe_orientation_dominant = dominant
   )
+}
+
+#' Plain data.frame view of an exon GRanges (DRY helper)
+#'
+#' One place resolves the exon numbering column (\code{exon_idx}, else
+#' \code{exon_number}, else order) so the graph, plots and report agree.
+#' @param exons_gr GRanges of exons, or a data.frame with start/end.
+#' @return data.frame(start, end, exon_idx) in transcript order, or NULL.
+#' @keywords internal
+.exons_df <- function(exons_gr) {
+  if (is.null(exons_gr) || length(exons_gr) == 0L) return(NULL)
+  if (is.data.frame(exons_gr)) {
+    df <- exons_gr
+    if (is.null(df$exon_idx)) df$exon_idx <- seq_len(nrow(df))
+  } else {
+    mc <- S4Vectors::mcols(exons_gr)
+    idx <- if (!is.null(mc$exon_idx)) mc$exon_idx else if (!is.null(mc$exon_number)) mc$exon_number else seq_along(exons_gr)
+    df <- data.frame(start = GenomicRanges::start(exons_gr), end = GenomicRanges::end(exons_gr),
+                     exon_idx = as.integer(unlist(idx)))
+  }
+  df <- df[order(df$exon_idx), c("start", "end", "exon_idx"), drop = FALSE]
+  rownames(df) <- NULL
+  df
+}
+
+#' Resolve run settings: explicit argument > YAML gene settings > default
+#'
+#' Shared by talos() and talos_alu() (DRY). Defaults come straight from the
+#' engine's formals, so the wrapper and the engine can no longer drift apart.
+#' @param env Calling environment holding the user's arguments (NULL = unset).
+#' @param defaults Named list / pairlist of default expressions.
+#' @param yaml_vals Named list from the gene YAML (may be NULL).
+#' @return Named list of resolved values.
+#' @keywords internal
+.resolve_settings <- function(env, defaults, yaml_vals = NULL) {
+  yaml_vals <- yaml_vals %||% list()
+  out <- lapply(names(defaults), function(nm) {
+    user_val <- if (exists(nm, envir = env, inherits = FALSE)) base::get(nm, envir = env, inherits = FALSE) else NULL
+    if (!is.null(user_val)) return(user_val)
+    if (!is.null(yaml_vals[[nm]])) return(yaml_vals[[nm]])
+    d <- defaults[[nm]]
+    if (is.null(d)) NULL else eval(d, envir = baseenv())
+  })
+  names(out) <- names(defaults)
+  out
 }

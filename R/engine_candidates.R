@@ -47,79 +47,70 @@
 }
 
 
+# One constructor for every candidate record (DRY: the record shape was
+# spelled out by hand in nine places). read_start / read_end are the read's
+# aligned genomic span; the anchor search needs them (see
+# .estimate_itd_from_anchors()).
+.new_candidate <- function(read_name, local_breakpoint, length, type, mapq,
+                           is_reverse, cigar, read_seq, itd_seq = NA_character_,
+                           read_start = NA_integer_, read_end = NA_integer_) {
+  list(read_name = read_name, local_breakpoint = as.integer(local_breakpoint),
+       length = length, type = type, mapq = mapq, is_reverse = is_reverse,
+       cigar = cigar, read_seq = read_seq, itd_seq = itd_seq,
+       read_start = as.integer(read_start), read_end = as.integer(read_end))
+}
+
+# Per-read vectors used by every candidate extractor (DRY).
+.read_fields <- function(reads) {
+  mapqs <- S4Vectors::mcols(reads)$mapq
+  mapqs[is.na(mapqs)] <- 0L
+  cigars <- GenomicAlignments::cigar(reads)
+  list(
+    qnames = .safe_qnames(reads),
+    mapqs = mapqs,
+    flags = S4Vectors::mcols(reads)$flag,
+    is_reverse = bitwAnd(S4Vectors::mcols(reads)$flag, 0x10L) != 0L,
+    starts = BiocGenerics::start(reads),
+    ends = BiocGenerics::end(reads),
+    cigars = cigars,
+    seqs = as.character(S4Vectors::mcols(reads)$seq),
+    clips = lapply(cigars, .get_softclip_lengths)
+  )
+}
+
+# Zero-length clip candidates at the aligned start (leading clip) and/or end
+# (trailing clip) of read i. Shared by the PTD and CIGAR extractors.
+.clip_candidates <- function(rf, i, genomic_start, ref_len) {
+  out <- list()
+  sides <- c(lead = rf$starts[i], trail = rf$ends[i])
+  for (side in names(sides)) {
+    if (rf$clips[[i]][[side]] <= 0L) next
+    local_bp <- sides[[side]] - genomic_start + 1L
+    if (local_bp < 1L || local_bp > ref_len) next
+    out[[length(out) + 1L]] <- .new_candidate(
+      rf$qnames[i], local_bp, 0L, "ptd_clip", rf$mapqs[i], rf$is_reverse[i],
+      rf$cigars[i], rf$seqs[i], read_start = rf$starts[i], read_end = rf$ends[i]
+    )
+  }
+  out
+}
+
 .extract_candidates_ptd <- function(
   reads,
   genomic_start,
   ref_len,
   verbose = FALSE
 ) {
-  n_reads <- length(reads)
-  if (n_reads == 0L) {
-    return(list())
-  }
-  if (verbose) {
-    message("[TALOS] Extracting PTD candidates from ", n_reads, " reads")
-  }
-
-  all_qnames <- .safe_qnames(reads)
-  all_mapqs <- S4Vectors::mcols(reads)$mapq
-  all_mapqs[is.na(all_mapqs)] <- 0L
-  all_flags <- S4Vectors::mcols(reads)$flag
-  is_reverse <- bitwAnd(all_flags, 0x10L) != 0L
-  read_starts <- BiocGenerics::start(reads)
-  read_ends <- BiocGenerics::end(reads)
-  read_cigars <- GenomicAlignments::cigar(reads)
-  read_seqs <- as.character(S4Vectors::mcols(reads)$seq)
-  clip_lengths <- lapply(read_cigars, .get_softclip_lengths)
-  has_lead <- vapply(clip_lengths, function(x) x$lead > 0L, logical(1L))
-  has_trail <- vapply(clip_lengths, function(x) x$trail > 0L, logical(1L))
-  idxs <- which(has_lead | has_trail)
-
-  candidates <- vector("list", 2L * length(idxs))
-  cand_idx <- 1L
-
-  for (i in idxs) {
-    if (has_lead[i]) {
-      local_bp <- read_starts[i] - genomic_start + 1L
-      if (local_bp >= 1L && local_bp <= ref_len) {
-        candidates[[cand_idx]] <- list(
-          read_name = all_qnames[i],
-          local_breakpoint = local_bp,
-          length = 0L,
-          type = "ptd_clip",
-          mapq = all_mapqs[i],
-          is_reverse = is_reverse[i],
-          cigar = read_cigars[i],
-          read_seq = read_seqs[i]
-        )
-        cand_idx <- cand_idx + 1L
-      }
-    }
-    if (has_trail[i]) {
-      local_bp <- read_ends[i] - genomic_start + 1L
-      if (local_bp >= 1L && local_bp <= ref_len) {
-        candidates[[cand_idx]] <- list(
-          read_name = all_qnames[i],
-          local_breakpoint = local_bp,
-          length = 0L,
-          type = "ptd_clip",
-          mapq = all_mapqs[i],
-          is_reverse = is_reverse[i],
-          cigar = read_cigars[i],
-          read_seq = read_seqs[i]
-        )
-        cand_idx <- cand_idx + 1L
-      }
-    }
-  }
-
-  candidates <- candidates[seq_len(cand_idx - 1L)]
-  if (verbose) {
-    message("[TALOS] Found ", length(candidates), " PTD candidates")
-  }
+  if (length(reads) == 0L) return(list())
+  if (verbose) message("[TALOS] Extracting PTD candidates from ", length(reads), " reads")
+  rf <- .read_fields(reads)
+  candidates <- unlist(lapply(seq_along(reads), function(i) {
+    .clip_candidates(rf, i, genomic_start, ref_len)
+  }), recursive = FALSE)
+  if (is.null(candidates)) candidates <- list()
+  if (verbose) message("[TALOS] Found ", length(candidates), " PTD candidates")
   candidates
 }
-
 
 .assemble_ptd_consensus <- function(
   support_rows,
@@ -155,117 +146,61 @@
   verbose = FALSE
 ) {
   n_reads <- length(reads)
-  if (n_reads == 0L) {
-    return(list())
-  }
-  if (verbose) {
-    message("[TALOS] Extracting candidates from CIGAR ops only")
-  }
-
-  all_qnames <- .safe_qnames(reads)
-  all_mapqs <- S4Vectors::mcols(reads)$mapq
-  all_mapqs[is.na(all_mapqs)] <- 0L
-  all_flags <- S4Vectors::mcols(reads)$flag
-  is_reverse <- bitwAnd(all_flags, 0x10L) != 0L
-  read_starts <- BiocGenerics::start(reads)
-  read_ends <- BiocGenerics::end(reads)
-  read_cigars <- GenomicAlignments::cigar(reads)
-  read_seqs <- as.character(S4Vectors::mcols(reads)$seq)
-  clip_lengths <- lapply(read_cigars, .get_softclip_lengths)
-
-  candidates <- vector("list", 2L * n_reads)
-  cand_idx <- 1L
-
+  if (n_reads == 0L) return(list())
+  if (verbose) message("[TALOS] Extracting candidates from CIGAR ops only")
+  rf <- .read_fields(reads)
   op_table <- if (.has_cigarillo) {
-    cigarillo::tabulate_cigar_ops(read_cigars)
+    cigarillo::tabulate_cigar_ops(rf$cigars)
   } else {
-    suppressWarnings(GenomicAlignments::cigarOpTable(read_cigars))
+    suppressWarnings(GenomicAlignments::cigarOpTable(rf$cigars))
   }
+  has_ins <- if ("I" %in% colnames(op_table)) op_table[, "I"] > 0L else rep(FALSE, n_reads)
 
-  has_ins <- if ("I" %in% colnames(op_table)) {
-    op_table[, "I"] > 0L
-  } else {
-    rep(FALSE, n_reads)
-  }
-  has_soft <- vapply(
-    clip_lengths,
-    function(x) x$lead > 0L || x$trail > 0L,
-    logical(1L)
-  )
-
+  candidates <- list()
   for (i in seq_len(n_reads)) {
     if (has_ins[i]) {
-      insertions <- .parse_cigar_insertions(
-        read_cigars[i],
-        read_starts[i],
-        genomic_start,
-        ref_len,
-        min_size = 1L
-      )
+      insertions <- .parse_cigar_insertions(rf$cigars[i], rf$starts[i], genomic_start,
+                                            ref_len, min_size = 1L)
       for (j in seq_len(nrow(insertions))) {
-        candidates[[cand_idx]] <- list(
-          read_name = all_qnames[i],
-          local_breakpoint = insertions$local_breakpoint[j],
-          length = insertions$length[j],
-          type = "cigar_ins",
-          mapq = all_mapqs[i],
-          is_reverse = is_reverse[i],
-          cigar = read_cigars[i],
-          read_seq = read_seqs[i],
-          itd_seq = NA_character_
+        candidates[[length(candidates) + 1L]] <- .new_candidate(
+          rf$qnames[i], insertions$local_breakpoint[j], insertions$length[j], "cigar_ins",
+          rf$mapqs[i], rf$is_reverse[i], rf$cigars[i], rf$seqs[i],
+          read_start = rf$starts[i], read_end = rf$ends[i]
         )
-        cand_idx <- cand_idx + 1L
       }
     }
-    if (has_soft[i]) {
-      clips <- clip_lengths[[i]]
-      lead_clip <- clips$lead > 0L
-      trail_clip <- clips$trail > 0L
-      if (lead_clip) {
-        local_bp <- read_starts[i] - genomic_start + 1L
-        if (local_bp >= 1L && local_bp <= ref_len) {
-          candidates[[cand_idx]] <- list(
-            read_name = all_qnames[i],
-            local_breakpoint = local_bp,
-            length = 0L,
-            type = "ptd_clip",
-            mapq = all_mapqs[i],
-            is_reverse = is_reverse[i],
-            cigar = read_cigars[i],
-            read_seq = read_seqs[i],
-            itd_seq = NA_character_
-          )
-          cand_idx <- cand_idx + 1L
-        }
-      }
-      if (trail_clip) {
-        local_bp <- read_ends[i] - genomic_start + 1L
-        if (local_bp >= 1L && local_bp <= ref_len) {
-          candidates[[cand_idx]] <- list(
-            read_name = all_qnames[i],
-            local_breakpoint = local_bp,
-            length = 0L,
-            type = "ptd_clip",
-            mapq = all_mapqs[i],
-            is_reverse = is_reverse[i],
-            cigar = read_cigars[i],
-            read_seq = read_seqs[i],
-            itd_seq = NA_character_
-          )
-          cand_idx <- cand_idx + 1L
-        }
-      }
-    }
+    candidates <- c(candidates, .clip_candidates(rf, i, genomic_start, ref_len))
   }
-
-  candidates <- candidates[seq_len(cand_idx - 1L)]
-  if (verbose) {
-    message("[TALOS] Found ", length(candidates), " CIGAR‑based candidates")
-  }
+  if (verbose) message("[TALOS] Found ", length(candidates), " CIGAR-based candidates")
   candidates
 }
 
-
+#' Estimate a duplication length from soft-clip re-anchoring
+#'
+#' For a tandem duplication [S, E] (length L = E - S + 1):
+#' \itemize{
+#'   \item a read aligned from S with a leading clip C (length c) carries the
+#'     end of the first copy, C = ref[E - c + 1 .. E]. The prefix of C is found
+#'     downstream at h = E - c + 1, hence L = h - S + c;
+#'   \item a read aligned up to E with a trailing clip C carries the start of
+#'     the second copy, C = ref[S .. S + c - 1]. The prefix of C is found
+#'     upstream of E at h = S, hence L = E - h + 1.
+#' }
+#' Bug fixed: the lead side returned h - S (short by the clip length; the
+#' 40 bp k-mer band is why HORIZON FLT3 300 bp came out at ~260 bp) and the
+#' trail side searched upstream of the breakpoint S instead of the read end E
+#' (it could only hit repeats).
+#'
+#' [BUG 8] Two-pass search: pass 1 keeps hits within kmer_len +/- kmer_band;
+#' when a side has none, pass 2 retries without the band.
+#'
+#' @param lead_clip,trail_clip Leading / trailing soft-clip sequences (or NA).
+#' @param ref_dna Local reference sequence.
+#' @param orig_bp_local Local breakpoint (default anchor for both sides).
+#' @param lead_bp_local Local aligned start of the read (S side).
+#' @param trail_bp_local Local aligned end of the read (E side); the trail
+#'   side is skipped when NA.
+#' @return Mode of the candidate sizes, or NA.
 .estimate_itd_from_anchors <- function(
   lead_clip,
   trail_clip,
@@ -277,140 +212,75 @@
   kmer_band = 40L,
   require_unique_anchor = FALSE,
   debug_label = NULL,
-  verbose = FALSE
+  verbose = FALSE,
+  lead_bp_local = orig_bp_local,
+  trail_bp_local = NA_integer_
 ) {
   ref_len <- nchar(ref_dna)
-  candidate_sizes <- integer(0)
-
-  .collect_mode <- function(sizes) {
-    if (length(sizes) == 0L) {
-      return(NA_integer_)
-    }
-    tb <- sort(table(sizes), decreasing = TRUE)
-    as.integer(names(tb)[1L])
-  }
-
   .top5_str <- function(sizes) {
-    if (length(sizes) == 0L) {
-      return("none")
-    }
-    tb <- sort(table(sizes), decreasing = TRUE)
-    top <- head(tb, 5)
+    if (length(sizes) == 0L) return("none")
+    top <- utils::head(sort(table(sizes), decreasing = TRUE), 5)
     paste0(names(top), "x", as.integer(top), collapse = ", ")
   }
-
-  if (!is.na(lead_clip) && nchar(lead_clip) >= min_anchor_len) {
-    start_pos <- orig_bp_local + 1L
-    end_pos <- min(ref_len, start_pos + search_window - 1L)
-    if (start_pos <= end_pos) {
-      win <- substr(ref_dna, start_pos, end_pos)
-      max_prefix <- min(50L, nchar(lead_clip))
-      left_sizes <- integer(0)
-      for (plen in seq(min_anchor_len, max_prefix, by = 2L)) {
-        q <- substr(lead_clip, 1L, plen)
-        if (require_unique_anchor) {
-          hits <- .unique_fixed_match(q, win)
-          if (length(hits) != 1L) next
-        } else {
-          hits <- gregexpr(q, win, fixed = TRUE)[[1L]]
-          if (length(hits) == 0L || hits[1L] == -1L) next
-        }
-        offsets <- start_pos + hits - 1L - orig_bp_local
-        offsets <- offsets[offsets > 0L]
-        if (!is.na(kmer_len)) {
-          offsets <- offsets[
-            abs(offsets - as.integer(kmer_len)) <= as.integer(kmer_band)
-          ]
-        }
-        if (length(offsets) > 0L) {
-          left_sizes <- c(left_sizes, as.integer(offsets))
-        }
-      }
-      candidate_sizes <- c(candidate_sizes, left_sizes)
+  .collect_side <- function(clip_seq, side, use_band) {
+    bp <- if (side == "lead") lead_bp_local else trail_bp_local
+    if (is.na(clip_seq) || is.na(bp) || nchar(clip_seq) < min_anchor_len) return(integer(0))
+    if (side == "lead") {
+      start_pos <- bp + 1L
+      end_pos <- min(ref_len, start_pos + search_window - 1L)
+    } else {
+      end_pos <- bp - 1L
+      start_pos <- max(1L, end_pos - search_window + 1L)
     }
-  }
-
-  if (!is.na(trail_clip) && nchar(trail_clip) >= min_anchor_len) {
-    end_pos <- orig_bp_local - 1L
-    start_pos <- max(1L, end_pos - search_window + 1L)
-    if (start_pos <= end_pos) {
-      win <- substr(ref_dna, start_pos, end_pos)
-      max_prefix <- min(50L, nchar(trail_clip))
-      right_sizes <- integer(0)
-      for (plen in seq(min_anchor_len, max_prefix, by = 2L)) {
-        q <- substr(trail_clip, 1L, plen)
-        # Same reasoning and gating as the lead-anchor search above.
-        if (require_unique_anchor) {
-          hits <- .unique_fixed_match(q, win)
-          if (length(hits) != 1L) next
-        } else {
-          hits <- gregexpr(q, win, fixed = TRUE)[[1L]]
-          if (length(hits) == 0L || hits[1L] == -1L) next
-        }
-        offsets <- orig_bp_local - (start_pos + hits - 1L)
-        offsets <- offsets[offsets > 0L]
-        if (!is.na(kmer_len)) {
-          offsets <- offsets[
-            abs(offsets - as.integer(kmer_len)) <= as.integer(kmer_band)
-          ]
-        }
-        if (length(offsets) > 0L) {
-          right_sizes <- c(right_sizes, as.integer(offsets))
-        }
+    if (start_pos > end_pos) return(integer(0))
+    win <- substr(ref_dna, start_pos, end_pos)
+    clip_len <- nchar(clip_seq)
+    sizes <- integer(0)
+    for (plen in seq(min_anchor_len, min(50L, clip_len), by = 2L)) {
+      q <- substr(clip_seq, 1L, plen)
+      if (require_unique_anchor) {
+        hits <- .unique_fixed_match(q, win)
+        if (length(hits) != 1L) next
+      } else {
+        hits <- gregexpr(q, win, fixed = TRUE)[[1L]]
+        if (length(hits) == 0L || hits[1L] == -1L) next
       }
-      candidate_sizes <- c(candidate_sizes, right_sizes)
+      abs_hits <- start_pos + hits - 1L
+      offsets <- if (side == "lead") abs_hits - bp + clip_len else bp - abs_hits + 1L
+      offsets <- offsets[offsets > 0L]
+      if (use_band && !is.na(kmer_len)) {
+        offsets <- offsets[abs(offsets - as.integer(kmer_len)) <= as.integer(kmer_band)]
+      }
+      sizes <- c(sizes, as.integer(offsets))
     }
+    sizes
   }
-
-  candidate_sizes <- candidate_sizes[
-    !is.na(candidate_sizes) & candidate_sizes > 0L
-  ]
+  candidate_sizes <- integer(0)
+  recovered_unbanded <- FALSE
+  for (side in c("lead", "trail")) {
+    clip <- if (side == "lead") lead_clip else trail_clip
+    sz <- .collect_side(clip, side, use_band = TRUE)
+    if (length(sz) == 0L && !is.na(kmer_len)) {
+      sz <- .collect_side(clip, side, use_band = FALSE)
+      if (length(sz) > 0L) recovered_unbanded <- TRUE
+    }
+    candidate_sizes <- c(candidate_sizes, sz)
+  }
+  candidate_sizes <- candidate_sizes[!is.na(candidate_sizes) & candidate_sizes > 0L]
   if (verbose && !is.null(debug_label)) {
-    message(
-      "[TALOS] Anchor sizes ",
-      debug_label,
-      ": ",
-      .top5_str(candidate_sizes)
-    )
-  }
-  .collect_mode(candidate_sizes)
-}
-
-.validate_kmer_trace <- function(
-  trace,
-  max_missing_kmers = 0.5,
-  require_backward_jump = FALSE,
-  k = 11L
-) {
-  # k added as parameter
-  if (length(trace) == 0L) {
-    return(FALSE)
-  }
-  missing_rate <- sum(trace == -1L) / length(trace)
-  if (missing_rate > max_missing_kmers) {
-    return(FALSE)
-  }
-
-  if (require_backward_jump) {
-    has_jump <- FALSE
-    for (j in seq(2L, length(trace))) {
-      if (trace[j] == -1L || trace[j - 1L] == -1L) {
-        next
-      }
-      if (trace[j - 1L] + k - 1L > trace[j]) {
-        has_jump <- TRUE
-        break
-      }
+    if (recovered_unbanded) {
+      message("[TALOS] Anchor ", debug_label, ": kmer band (", kmer_len, " +/- ", kmer_band,
+              ") excluded all hits; recovered un-banded")
     }
-    if (!has_jump) return(FALSE)
+    message("[TALOS] Anchor sizes ", debug_label, ": ", .top5_str(candidate_sizes))
   }
-  TRUE
+  if (length(candidate_sizes) == 0L) return(NA_integer_)
+  as.integer(names(sort(table(candidate_sizes), decreasing = TRUE))[1L])
 }
-
 
 # ---------------------------------------------------------------------------
 # Standard k-mer tracing (backward-jump and missing-block strategies)
-# Uses anchor‑based size when soft‑clips are available, falls back to k‑mer.
+# Uses anchor-based size when soft-clips are available, falls back to k-mer.
 .extract_candidates_standard <- function(
   reads,
   ref_kmers,
@@ -430,150 +300,96 @@
   n_reads <- length(reads)
   k <- nchar(ref_kmers[1L])
   if (verbose) {
-    message(
-      "[TALOS] Extracting standard candidates from ",
-      n_reads,
-      " reads",
-      " (k=",
-      k,
-      ", ptd_mode=",
-      ptd_mode,
-      ", max_itd_length=",
-      max_itd_length,
-      ")"
-    )
+    message("[TALOS] Extracting standard candidates from ", n_reads, " reads (k=", k,
+            ", ptd_mode=", ptd_mode, ", max_itd_length=", max_itd_length, ")")
   }
-
-  all_qnames <- .safe_qnames(reads)
-  all_mapqs <- S4Vectors::mcols(reads)$mapq
-  all_mapqs[is.na(all_mapqs)] <- 0L
-  all_flags <- S4Vectors::mcols(reads)$flag
-  all_starts <- BiocGenerics::start(reads)
-  all_ends <- BiocGenerics::end(reads)
-  all_cigars <- GenomicAlignments::cigar(reads)
-  all_seqs <- as.character(S4Vectors::mcols(reads)$seq)
-
+  rf <- .read_fields(reads)
   candidates <- vector("list", 2L * n_reads)
   cand_idx <- 1L
   ref_len <- nchar(ref_dna)
   reads_processed <- 0L
+  add <- function(cand) {
+    candidates[[cand_idx]] <<- cand
+    cand_idx <<- cand_idx + 1L
+  }
 
   for (i in seq_len(n_reads)) {
-    read_seq <- all_seqs[i]
-    if (is.na(read_seq)) {
-      next
-    }
+    read_seq <- rf$seqs[i]
+    if (is.na(read_seq)) next
     read_len <- nchar(read_seq)
-    if (read_len < k || read_len < (k + min_size)) {
-      next
-    }
+    if (read_len < k || read_len < (k + min_size)) next
 
-    is_reverse <- bitwAnd(all_flags[i], 0x10L) != 0L
-
-    if (.has_biostrings) {
-      dna_obj <- Biostrings::DNAString(read_seq)
-      v <- Biostrings::Views(
-        dna_obj,
-        start = seq_len(read_len - k + 1L),
-        width = k
-      )
-      all_kmers <- as.character(v)
+    all_kmers <- if (.has_biostrings) {
+      as.character(Biostrings::Views(Biostrings::DNAString(read_seq),
+                                     start = seq_len(read_len - k + 1L), width = k))
     } else {
       kmer_starts <- seq_len(read_len - k + 1L)
-      all_kmers <- substring(read_seq, kmer_starts, kmer_starts + k - 1L)
+      substring(read_seq, kmer_starts, kmer_starts + k - 1L)
     }
-
     trace <- .kmer_match(all_kmers, ref_kmers)
     trace[is.na(trace)] <- -1L
+    if (!ptd_mode && (sum(trace == -1L) / length(trace) > max_missing_kmers)) next
 
-    missing <- sum(trace == -1L)
-    if (!ptd_mode && (missing / length(trace) > max_missing_kmers)) {
-      next
+    read_start <- rf$starts[i]
+    read_end <- rf$ends[i]
+    sc <- .get_softclips(rf$cigars[i], read_seq)
+    mk <- function(local_bp, len, type, itd_seq = NA_character_) {
+      .new_candidate(rf$qnames[i], local_bp, len, type, rf$mapqs[i], rf$is_reverse[i],
+                     rf$cigars[i], read_seq, itd_seq, read_start, read_end)
     }
 
-    read_qname <- all_qnames[i]
-    read_mapq <- all_mapqs[i]
-    read_cigar <- all_cigars[i]
-    read_start <- all_starts[i]
-    read_end <- all_ends[i]
+    # Shared by both k-mer strategies: anchor refinement, ITD length limit,
+    # candidate creation. Returns FALSE when the length limit drops it.
+    emit_dup <- function(pos_after, dup_len, seq_from, kmer_type) {
+      anchor_size <- .estimate_itd_from_anchors(
+        sc$lead, sc$trail, ref_dna,
+        orig_bp_local = pos_after,
+        search_window = search_window,
+        require_unique_anchor = require_unique_anchor,
+        kmer_len = dup_len,
+        debug_label = paste0(rf$qnames[i], " @", pos_after),
+        verbose = verbose,
+        lead_bp_local = read_start - genomic_start + 1L,
+        trail_bp_local = read_end - genomic_start + 1L
+      )
+      if (!is.na(anchor_size) && anchor_size >= min_size) {
+        final_len <- anchor_size
+        dup_seq <- NA_character_
+        dup_type <- "anchor_ext"
+      } else {
+        final_len <- dup_len
+        dup_seq <- if (!ptd_mode && dup_len <= 500L) substr(read_seq, seq_from, seq_from + dup_len - 1L) else NA_character_
+        dup_type <- kmer_type
+      }
+      if (!ptd_mode) {
+        length_result <- .apply_itd_length_limit(final_len, dup_type, max_itd_length, convert_long_to_ptd)
+        if (is.null(length_result)) return(FALSE)
+        if (length_result$converted) {
+          dup_seq <- NA_character_
+          if (verbose) {
+            message("[TALOS] Anchor-refined long dup (", final_len, " bp) -> PTD at ",
+                    genomic_start + pos_after - 1L)
+          }
+        }
+        final_len <- length_result$length
+        dup_type <- length_result$type
+      }
+      add(mk(pos_after, if (ptd_mode) 0L else as.integer(final_len), dup_type, dup_seq))
+      TRUE
+    }
 
-    sc <- .get_softclips(read_cigar, read_seq)
-
+    # Strategy 1: backward jump between consecutive matched k-mers.
     if (length(trace) >= 2L) {
       for (j in seq(2L, length(trace))) {
-        if (trace[j] == -1L || trace[j - 1L] == -1L) {
-          next
-        }
+        if (trace[j] == -1L || trace[j - 1L] == -1L) next
         if (trace[j - 1L] + k - 1L > trace[j]) {
-          pos_after <- trace[j]
-          pos_before <- trace[j - 1L]
-          dup_len <- (pos_before + k - 1L) - pos_after + 1L
-          if (dup_len >= min_size) {
-            anchor_size <- .estimate_itd_from_anchors(
-              sc$lead,
-              sc$trail,
-              ref_dna,
-              orig_bp_local = pos_after,
-              search_window = search_window,
-              require_unique_anchor = require_unique_anchor,
-              kmer_len = dup_len,
-              debug_label = paste0(read_qname, " @", pos_after),
-              verbose = verbose
-            )
-            if (!is.na(anchor_size) && anchor_size >= min_size) {
-              final_len <- anchor_size
-              dup_seq <- NA_character_
-              dup_type <- "anchor_ext"
-            } else {
-              final_len <- dup_len
-              dup_seq <- if (!ptd_mode && dup_len <= 500L) {
-                substr(read_seq, j, j + dup_len - 1L)
-              } else {
-                NA_character_
-              }
-              dup_type <- "bwd_jump"
-            }
-            if (!ptd_mode) {
-              length_result <- .apply_itd_length_limit(
-                final_len,
-                dup_type,
-                max_itd_length,
-                convert_long_to_ptd
-              )
-              if (is.null(length_result)) {
-                next
-              }
-              if (length_result$converted) {
-                dup_seq <- NA_character_
-                if (verbose) {
-                  message(
-                    "[TALOS] Anchor-refined long dup (",
-                    final_len,
-                    " bp) → PTD at ",
-                    genomic_start + pos_after - 1L
-                  )
-                }
-              }
-              final_len <- length_result$length
-              dup_type <- length_result$type
-            }
-            candidates[[cand_idx]] <- list(
-              read_name = read_qname,
-              local_breakpoint = pos_after,
-              itd_seq = dup_seq,
-              read_seq = read_seq,
-              length = if (ptd_mode) 0L else as.integer(final_len),
-              type = dup_type,
-              mapq = read_mapq,
-              is_reverse = is_reverse,
-              cigar = read_cigar
-            )
-            cand_idx <- cand_idx + 1L
-          }
+          dup_len <- (trace[j - 1L] + k - 1L) - trace[j] + 1L
+          if (dup_len >= min_size) emit_dup(trace[j], dup_len, j, "bwd_jump")
         }
       }
     }
 
+    # Strategy 2: block of missing k-mers bracketed by a backward jump.
     in_break <- FALSE
     break_start <- NULL
     for (j in seq_along(trace)) {
@@ -585,123 +401,33 @@
         if (break_start > 1L && break_end < length(trace)) {
           pos_before <- trace[break_start - 1L]
           pos_after <- trace[break_end + 1L]
-          if (
-            pos_before != -1L &&
-              pos_after != -1L &&
-              (pos_before + k - 1L > pos_after)
-          ) {
+          if (pos_before != -1L && pos_after != -1L && (pos_before + k - 1L > pos_after)) {
             dup_len <- pos_before - pos_after + (break_end - break_start) + 2L
-            if (dup_len >= min_size) {
-              anchor_size <- .estimate_itd_from_anchors(
-                sc$lead,
-                sc$trail,
-                ref_dna,
-                orig_bp_local = pos_after,
-                search_window = search_window,
-                require_unique_anchor = require_unique_anchor,
-                kmer_len = dup_len,
-                debug_label = paste0(read_qname, " @", pos_after),
-                verbose = verbose
-              )
-              if (!is.na(anchor_size) && anchor_size >= min_size) {
-                final_len <- anchor_size
-                dup_seq <- NA_character_
-                dup_type <- "anchor_ext"
-              } else {
-                final_len <- dup_len
-                dup_seq <- if (!ptd_mode && dup_len <= 500L) {
-                  substr(read_seq, break_start, break_start + dup_len - 1L)
-                } else {
-                  NA_character_
-                }
-                dup_type <- "missing_kmer"
-              }
-              if (!ptd_mode) {
-                length_result <- .apply_itd_length_limit(
-                  final_len,
-                  dup_type,
-                  max_itd_length,
-                  convert_long_to_ptd
-                )
-                if (is.null(length_result)) {
-                  in_break <- FALSE
-                  next
-                }
-                if (length_result$converted) {
-                  dup_seq <- NA_character_
-                  if (verbose) {
-                    message(
-                      "[TALOS] Anchor-refined long dup (",
-                      final_len,
-                      " bp) → PTD at ",
-                      genomic_start + pos_after - 1L
-                    )
-                  }
-                }
-                final_len <- length_result$length
-                dup_type <- length_result$type
-              }
-              candidates[[cand_idx]] <- list(
-                read_name = read_qname,
-                local_breakpoint = pos_after,
-                itd_seq = dup_seq,
-                read_seq = read_seq,
-                length = if (ptd_mode) 0L else as.integer(final_len),
-                type = dup_type,
-                mapq = read_mapq,
-                is_reverse = is_reverse,
-                cigar = read_cigar
-              )
-              cand_idx <- cand_idx + 1L
-            }
+            if (dup_len >= min_size) emit_dup(pos_after, dup_len, break_start, "missing_kmer")
           }
         } else if (ptd_mode && break_start == 1L) {
           pos_after <- trace[j]
-          if (pos_after != -1L) {
-            refined_bp <- pos_after
-            if (use_cigar_bp && !is.na(sc$lead)) {
-              refined_bp <- read_start - genomic_start + 1L
-            } else if (refine_bp) {
-              max_offset <- min(40L, max(0L, pos_after - 1L))
-              for (offset in 0:max_offset) {
-                test_pos <- pos_after - offset
-                if (test_pos + k - 1L <= ref_len) {
-                  ref_kmer <- substr(ref_dna, test_pos, test_pos + k - 1L)
-                  read_kmer <- substr(read_seq, j, j + k - 1L)
-                  if (ref_kmer == read_kmer) {
-                    match_len <- 0L
-                    while (
-                      (j - match_len > 0L) &&
-                        (test_pos - match_len > 0L) &&
-                        substr(read_seq, j - match_len, j - match_len) ==
-                          substr(
-                            ref_dna,
-                            test_pos - match_len,
-                            test_pos - match_len
-                          )
-                    ) {
-                      match_len <- match_len + 1L
-                    }
-                    refined_bp <- test_pos - match_len + 1L
-                    break
-                  }
+          refined_bp <- pos_after
+          if (use_cigar_bp && !is.na(sc$lead)) {
+            refined_bp <- read_start - genomic_start + 1L
+          } else if (refine_bp) {
+            max_offset <- min(40L, max(0L, pos_after - 1L))
+            for (offset in 0:max_offset) {
+              test_pos <- pos_after - offset
+              if (test_pos + k - 1L <= ref_len &&
+                  substr(ref_dna, test_pos, test_pos + k - 1L) == substr(read_seq, j, j + k - 1L)) {
+                match_len <- 0L
+                while ((j - match_len > 0L) && (test_pos - match_len > 0L) &&
+                       substr(read_seq, j - match_len, j - match_len) ==
+                       substr(ref_dna, test_pos - match_len, test_pos - match_len)) {
+                  match_len <- match_len + 1L
                 }
+                refined_bp <- test_pos - match_len + 1L
+                break
               }
             }
-            refined_bp <- max(1L, refined_bp)
-            candidates[[cand_idx]] <- list(
-              read_name = read_qname,
-              local_breakpoint = refined_bp,
-              itd_seq = NA_character_,
-              read_seq = read_seq,
-              length = 0L,
-              type = "ptd_clip",
-              mapq = read_mapq,
-              is_reverse = is_reverse,
-              cigar = read_cigar
-            )
-            cand_idx <- cand_idx + 1L
           }
+          add(mk(max(1L, refined_bp), 0L, "ptd_clip"))
         }
         in_break <- FALSE
       }
@@ -711,108 +437,53 @@
       pos_before <- trace[break_start - 1L]
       if (pos_before != -1L) {
         refined_bp <- pos_before + k - 1L
-        if (use_cigar_bp && !is.na(sc$trail)) {
-          refined_bp <- read_end - genomic_start + 1L
-        }
-        refined_bp <- max(1L, refined_bp)
-        candidates[[cand_idx]] <- list(
-          read_name = read_qname,
-          local_breakpoint = refined_bp,
-          itd_seq = NA_character_,
-          read_seq = read_seq,
-          length = 0L,
-          type = "ptd_clip",
-          mapq = read_mapq,
-          is_reverse = is_reverse,
-          cigar = read_cigar
-        )
-        cand_idx <- cand_idx + 1L
+        if (use_cigar_bp && !is.na(sc$trail)) refined_bp <- read_end - genomic_start + 1L
+        add(mk(max(1L, refined_bp), 0L, "ptd_clip"))
       }
     }
 
     reads_processed <- reads_processed + 1L
     if (verbose && reads_processed %% 1000L == 0L) {
-      message(
-        "[TALOS] Processed ",
-        reads_processed,
-        " / ",
-        n_reads,
-        " reads for candidate extraction"
-      )
+      message("[TALOS] Processed ", reads_processed, " / ", n_reads, " reads for candidate extraction")
     }
   }
 
   candidates <- candidates[seq_len(cand_idx - 1L)]
-  if (verbose) {
-    message("[TALOS] Found ", length(candidates), " standard candidates")
-  }
+  if (verbose) message("[TALOS] Found ", length(candidates), " standard candidates")
   candidates
 }
 
+# Typed field extraction from a list of records, NULL/NA safe (DRY helper for
+# the data.frame builders below).
+.pluck <- function(records, field, type = c("integer", "character", "logical")) {
+  type <- match.arg(type)
+  na <- switch(type, integer = NA_integer_, character = NA_character_, logical = NA)
+  cast <- switch(type, integer = as.integer, character = as.character, logical = as.logical)
+  vapply(records, function(x) {
+    v <- x[[field]]
+    if (is.null(v) || length(v) == 0L || is.na(v[1L])) na else cast(v[1L])
+  }, switch(type, integer = integer(1L), character = character(1L), logical = logical(1L)),
+  USE.NAMES = FALSE)
+}
 
 .candidates_to_df <- function(candidates, genomic_start) {
-  n <- length(candidates)
-  if (n == 0L) {
-    return(data.frame())
-  }
+  if (length(candidates) == 0L) return(data.frame())
   data.frame(
-    breakpoint = vapply(
-      candidates,
-      function(x) {
-        as.integer(
-          as.numeric(genomic_start) + as.numeric(x$local_breakpoint) - 1L
-        )
-      },
-      integer(1L)
-    ),
-    length = vapply(
-      candidates,
-      function(x) {
-        v <- x$length
-        if (is.null(v) || (length(v) == 1L && is.na(v))) {
-          NA_integer_
-        } else {
-          as.integer(v[1L])
-        }
-      },
-      integer(1L)
-    ),
-    read_name = vapply(candidates, `[[`, character(1L), "read_name"),
-    read_seq = vapply(
-      candidates,
-      function(x) {
-        s <- x$read_seq
-        if (is.null(s) || is.na(s)) NA_character_ else s
-      },
-      character(1L)
-    ),
-    type = vapply(candidates, `[[`, character(1L), "type"),
-    mapq = vapply(
-      candidates,
-      function(x) {
-        v <- x$mapq
-        if (is.null(v) || (length(v) == 1L && is.na(v))) {
-          NA_integer_
-        } else {
-          as.integer(v[1L])
-        }
-      },
-      integer(1L)
-    ),
-    is_reverse = vapply(candidates, `[[`, logical(1L), "is_reverse"),
-    cigar = vapply(candidates, `[[`, character(1L), "cigar"),
-    itd_seq = vapply(
-      candidates,
-      function(x) {
-        s <- x$itd_seq
-        if (is.null(s) || is.na(s)) NA_character_ else s
-      },
-      character(1L)
-    ),
+    breakpoint = as.integer(as.numeric(genomic_start) + .pluck(candidates, "local_breakpoint") - 1L),
+    length = .pluck(candidates, "length"),
+    read_name = .pluck(candidates, "read_name", "character"),
+    read_seq = .pluck(candidates, "read_seq", "character"),
+    type = .pluck(candidates, "type", "character"),
+    mapq = .pluck(candidates, "mapq"),
+    is_reverse = .pluck(candidates, "is_reverse", "logical"),
+    cigar = .pluck(candidates, "cigar", "character"),
+    itd_seq = .pluck(candidates, "itd_seq", "character"),
+    read_start = .pluck(candidates, "read_start"),
+    read_end = .pluck(candidates, "read_end"),
+    dup_exons = .pluck(candidates, "dup_exons", "character"),
     stringsAsFactors = FALSE
   )
 }
-
 
 .cluster_breakpoints <- function(bp_values, cluster_tolerance) {
   if (length(bp_values) == 0L) {
@@ -885,41 +556,34 @@
   require_unique_anchor = FALSE,
   verbose = FALSE
 ) {
-  if (is.null(candidates_df) || nrow(candidates_df) == 0L) {
-    return(data.frame())
-  }
-  results <- vector("list", nrow(candidates_df))
-  n_out <- 0L
-
+  if (is.null(candidates_df) || nrow(candidates_df) == 0L) return(data.frame())
+  has_span <- all(c("read_start", "read_end") %in% names(candidates_df))
+  results <- list()
   for (i in seq_len(nrow(candidates_df))) {
     row <- candidates_df[i, ]
-    read_seq <- row$read_seq
-    cigar <- row$cigar
-    if (is.na(read_seq) || nchar(read_seq) == 0L || is.na(cigar)) {
-      next
-    }
-
-    sc <- .get_softclips(cigar, read_seq)
-    if (is.na(sc$lead) && is.na(sc$trail)) {
-      next
-    }
+    if (is.na(row$read_seq) || nchar(row$read_seq) == 0L || is.na(row$cigar)) next
+    sc <- .get_softclips(row$cigar, row$read_seq)
+    if (is.na(sc$lead) && is.na(sc$trail)) next
 
     orig_bp <- as.integer(row$breakpoint)
-    refined_bp <- orig_bp
     orig_bp_local <- orig_bp - genomic_start + 1L
-
+    # Lead anchor at the read's aligned start, trail anchor at its aligned
+    # end (falls back to breakpoint + length - 1 for records without a span).
+    lead_bp <- if (has_span && !is.na(row$read_start)) row$read_start - genomic_start + 1L else orig_bp_local
+    trail_bp <- if (has_span && !is.na(row$read_end)) {
+      row$read_end - genomic_start + 1L
+    } else if (!is.na(row$length) && row$length > 0L) {
+      orig_bp_local + row$length - 1L
+    } else {
+      NA_integer_
+    }
     anchor_size <- .estimate_itd_from_anchors(
-      lead_clip = sc$lead,
-      trail_clip = sc$trail,
-      ref_dna = ref_dna,
-      orig_bp_local = orig_bp_local,
-      search_window = search_window,
-      require_unique_anchor = require_unique_anchor,
-      kmer_len = row$length,
-      debug_label = as.character(row$read_name),
-      verbose = verbose
+      lead_clip = sc$lead, trail_clip = sc$trail, ref_dna = ref_dna,
+      orig_bp_local = orig_bp_local, search_window = search_window,
+      require_unique_anchor = require_unique_anchor, kmer_len = row$length,
+      debug_label = as.character(row$read_name), verbose = verbose,
+      lead_bp_local = lead_bp, trail_bp_local = trail_bp
     )
-
     if (!is.na(anchor_size) && anchor_size >= min_size) {
       itdsize <- anchor_size
       itdsize_source <- "anchor"
@@ -929,100 +593,66 @@
     } else {
       next
     }
-
-    itdsize <- as.integer(itdsize)
-    if (itdsize < min_size) {
-      next
-    }
-
-    n_out <- n_out + 1L
-    results[[n_out]] <- list(
-      breakpoint_original = orig_bp,
-      breakpoint_refined = refined_bp,
-      itdsize = itdsize,
-      itdsize_source = itdsize_source,
-      read_name = as.character(row$read_name),
+    results[[length(results) + 1L]] <- list(
+      breakpoint = orig_bp, breakpoint_refined = orig_bp, itdsize = as.integer(itdsize),
+      itdsize_source = itdsize_source, read_name = as.character(row$read_name),
       extended = NA_character_
     )
   }
-
-  if (n_out == 0L) {
-    return(data.frame())
-  }
-  results <- results[seq_len(n_out)]
+  if (length(results) == 0L) return(data.frame())
   data.frame(
-    breakpoint = vapply(
-      results,
-      function(x) {
-        v <- x[["breakpoint_original"]]
-        if (is.null(v) || (length(v) == 1L && is.na(v))) {
-          NA_integer_
-        } else {
-          as.integer(v[1L])
-        }
-      },
-      integer(1L)
-    ),
-    breakpoint_refined = vapply(
-      results,
-      function(x) {
-        v <- x[["breakpoint_refined"]]
-        if (is.null(v) || (length(v) == 1L && is.na(v))) {
-          NA_integer_
-        } else {
-          as.integer(v[1L])
-        }
-      },
-      integer(1L)
-    ),
-    itdsize = vapply(
-      results,
-      function(x) {
-        v <- x[["itdsize"]]
-        if (is.null(v) || (length(v) == 1L && is.na(v))) {
-          NA_integer_
-        } else {
-          as.integer(v[1L])
-        }
-      },
-      integer(1L)
-    ),
-    itdsize_source = vapply(
-      results,
-      function(x) {
-        v <- x[["itdsize_source"]]
-        if (is.null(v) || length(v) == 0L || is.na(v[1L])) {
-          NA_character_
-        } else {
-          as.character(v[1L])
-        }
-      },
-      character(1L)
-    ),
-    read_name = vapply(
-      results,
-      function(x) {
-        v <- x[["read_name"]]
-        if (is.null(v) || length(v) == 0L || is.na(v[1L])) {
-          NA_character_
-        } else {
-          as.character(v[1L])
-        }
-      },
-      character(1L)
-    ),
-    extended = vapply(
-      results,
-      function(x) {
-        v <- x[["extended"]]
-        if (is.null(v) || length(v) == 0L || is.na(v[1L])) {
-          NA_character_
-        } else {
-          as.character(v[1L])
-        }
-      },
-      character(1L)
-    ),
+    breakpoint = .pluck(results, "breakpoint"),
+    breakpoint_refined = .pluck(results, "breakpoint_refined"),
+    itdsize = .pluck(results, "itdsize"),
+    itdsize_source = .pluck(results, "itdsize_source", "character"),
+    read_name = .pluck(results, "read_name", "character"),
+    extended = .pluck(results, "extended", "character"),
     stringsAsFactors = FALSE
   )
+}
+
+#' Turn exon-graph PTD cycles into read-level candidates
+#'
+#' One candidate per supporting read present in \code{reads}, placed at the
+#' duplicated interval found by the graph (dup_start, length dup_length).
+#' Previously the breakpoint was a KDE of the reads' own start/end positions,
+#' the length was 0 and every read's sequence was replaced by the junction
+#' consensus, so soft-clip metrics read the wrong sequence.
+#'
+#' @param cycles Output of extract_graph_candidates().
+#' @param reads GAlignments to look the supporting reads up in (use the
+#'   MAPQ-filtered set, not the CIGAR-prefiltered one: discordant mates have
+#'   no clip and would be lost).
+#' @param genomic_start Window start.
+#' @return list(candidates, cycles_used)
+.graph_cycles_to_candidates <- function(cycles, reads, genomic_start) {
+  if (!length(cycles) || length(reads) == 0L) return(list(candidates = list(), cycles_used = 0L))
+  rf <- .read_fields(reads)
+  out <- list()
+  used <- 0L
+  for (cand in cycles) {
+    qn <- unique(unlist(strsplit(cand$support_qnames, ";", fixed = TRUE)))
+    idx <- which(rf$qnames %in% qn)
+    idx <- idx[!duplicated(rf$qnames[idx])]
+    if (!length(idx) || is.na(cand$dup_start) || is.na(cand$dup_length)) next
+    sc_seqs <- vapply(idx, function(i) {
+      sc <- .get_softclips(rf$cigars[i], rf$seqs[i])
+      paste(stats::na.omit(c(sc$lead, sc$trail)), collapse = "")
+    }, character(1L))
+    sc_seqs <- sc_seqs[nzchar(sc_seqs)]
+    junction_seq <- if (length(sc_seqs)) .build_local_debruijn(sc_seqs) else NA_character_
+    if (is.na(junction_seq) && length(sc_seqs)) {
+      junction_seq <- .assemble_weighted_consensus(sc_seqs, rf$mapqs[idx][nzchar(sc_seqs)])
+    }
+    local_bp <- cand$dup_start - genomic_start + 1L
+    for (i in idx) {
+      c1 <- .new_candidate(rf$qnames[i], local_bp, as.integer(cand$dup_length), "ptd_graph",
+                           rf$mapqs[i], rf$is_reverse[i], rf$cigars[i], rf$seqs[i],
+                           itd_seq = junction_seq, read_start = rf$starts[i], read_end = rf$ends[i])
+      c1$dup_exons <- paste0(sub("Exon_", "", cand$dup_start_exon), "-", sub("Exon_", "", cand$dup_end_exon))
+      out[[length(out) + 1L]] <- c1
+    }
+    used <- used + 1L
+  }
+  list(candidates = out, cycles_used = used)
 }

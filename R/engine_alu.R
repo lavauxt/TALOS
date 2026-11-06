@@ -169,14 +169,13 @@
 #' @param ref_dna     Character – full reference sequence for the region.
 #' @param ins_pos     Integer – insertion site (1-based, local coordinates).
 #' @param max_tsd     Integer – maximum TSD length to search (default 20).
-#' @param genomic_start Integer – genomic offset for the region.
 #' @return Named list: tsd_len (integer), tsd_seq (character).
+#'   [ITEM 11] The unused genomic_start parameter was removed.
 #' @keywords internal
 .detect_alu_tsd <- function(
   ref_dna,
   ins_pos,
-  max_tsd = 20L,
-  genomic_start = 1L
+  max_tsd = 20L
 ) {
   ref_len <- nchar(ref_dna)
   if (is.na(ins_pos) || ins_pos < 1L || ins_pos > ref_len) {
@@ -350,7 +349,13 @@
 
   tsd <- .detect_alu_tsd(ref_dna, local_pos)
 
-  poly_a_len <- max(cluster_df$poly_a_len, na.rm = TRUE)
+  # [ITEM 9] max(..., na.rm = TRUE) on an all-NA vector is -Inf with a warning.
+  poly_a_vals <- cluster_df$poly_a_len
+  poly_a_len <- if (length(poly_a_vals) == 0L || all(is.na(poly_a_vals))) {
+    NA_integer_
+  } else {
+    as.integer(max(poly_a_vals, na.rm = TRUE))
+  }
 
   consensus_len <- tryCatch(
     Biostrings::nchar(alu_seqs[[best_hit$alu_subtype]]),
@@ -377,7 +382,7 @@
     ALUOrientation = ifelse(best_hit$alu_strand == "+", "sense", "antisense"),
     TSD_Length = tsd$tsd_len,
     TSD_Sequence = tsd$tsd_seq,
-    PolyALength = as.integer(poly_a_len),
+    PolyALength = poly_a_len,
     ALU5pTruncation = trunc_5p,
     ALU_Sequence = best_clip,
     ALU_RawScore = best_hit$alu_score,
@@ -592,7 +597,8 @@ detect_alu <- function(
     final_df <- annotate_hotspots(
       final_df,
       db_path = hotspot_db_path,
-      genome_build = gene_config$build
+      genome_build = gene_config$build,
+      pos_col = "InsertionSite"
     )
   } else {
     final_df$Hotspot <- FALSE
@@ -612,7 +618,7 @@ detect_alu <- function(
     sample_folder <- file.path(output_folder, sample_name)
     dir.create(sample_folder, recursive = TRUE, showWarnings = FALSE)
     base_name <- paste(
-      "TALOS_ALU",
+      output_prefix,
       sample_name,
       gene_name,
       timestamp,
@@ -631,16 +637,18 @@ detect_alu <- function(
       message("[ALU] Results written to: ", tsv_path)
     }
 
-    if (html_report && requireNamespace("rmarkdown", quietly = TRUE)) {
+    if (html_report) {
       report_path <- file.path(sample_folder, paste0(base_name, "_report.html"))
-      talos_html_report(
-        result_df = final_df,
-        gene_configs = setNames(list(gene_config), gene_name),
-        output_file = report_path,
-        title = sprintf("TALOS ALU Report – %s | %s", gene_name, sample_name),
-        mode = "alu"
-      )
-      if (verbose) message("[ALU] HTML report written to: ", report_path)
+      tryCatch({
+        talos_html_report(
+          result_df = final_df,
+          gene_configs = stats::setNames(list(gene_config), gene_name),
+          output_file = report_path,
+          title = sprintf("TALOS ALU Report - %s | %s", gene_name, sample_name),
+          mode = "alu"
+        )
+        if (verbose) message("[ALU] HTML report written to: ", report_path)
+      }, error = function(e) warning("[ALU] HTML report skipped: ", conditionMessage(e)))
     }
   }
 
@@ -699,58 +707,21 @@ talos_alu <- function(
   verbose = TRUE,
   ...
 ) {
+  # Named arguments: the positional call mapped padding -> config_path,
+  # yaml_path -> bsgenome, bsgenome -> padding and exon_padding -> use_db.
   config <- get_gene_config(
-    gene,
-    build,
-    padding,
-    yaml_path,
-    bsgenome,
-    exon_padding
+    gene = gene,
+    build = build,
+    config_path = yaml_path,
+    bsgenome = bsgenome,
+    padding = padding,
+    exon_padding = exon_padding
   )
   config$build <- build
-  yaml_vals <- config$alu_settings %||% list()
 
-  defaults <- list(
-    min_support = 3L,
-    min_alu_score = 0.60,
-    min_clip_len = 25L,
-    min_mapq = 20L,
-    cluster_tolerance = 15L,
-    vaf_threshold = 0.01,
-    min_tsd = 0L
-  )
-
-  resolve <- function(user_val, yaml_key, default_val) {
-    if (!is.null(user_val)) {
-      return(user_val)
-    }
-    if (!is.null(yaml_vals[[yaml_key]])) {
-      return(yaml_vals[[yaml_key]])
-    }
-    default_val
-  }
-
-  p <- list(
-    min_support = resolve(min_support, "min_support", defaults$min_support),
-    min_alu_score = resolve(
-      min_alu_score,
-      "min_alu_score",
-      defaults$min_alu_score
-    ),
-    min_clip_len = resolve(min_clip_len, "min_clip_len", defaults$min_clip_len),
-    min_mapq = resolve(min_mapq, "min_mapq", defaults$min_mapq),
-    cluster_tolerance = resolve(
-      cluster_tolerance,
-      "cluster_tolerance",
-      defaults$cluster_tolerance
-    ),
-    vaf_threshold = resolve(
-      vaf_threshold,
-      "vaf_threshold",
-      defaults$vaf_threshold
-    ),
-    min_tsd = resolve(min_tsd, "min_tsd", defaults$min_tsd)
-  )
+  defaults <- formals(detect_alu)[c("min_support", "min_alu_score", "min_clip_len",
+                                     "min_mapq", "cluster_tolerance", "vaf_threshold", "min_tsd")]
+  p <- .resolve_settings(environment(), defaults, config$alu_settings)
 
   detect_alu(
     bam_path = bam_path,

@@ -4,7 +4,7 @@
 \alias{.get_evidence_dt}
 \title{Extract BAM Evidence into a Plain data.frame}
 \usage{
-.get_evidence_dt(bam_file, gene_config, buffer_bp = 15000L)
+.get_evidence_dt(bam_file, gene_config, buffer_bp = 15000L, min_mapq = 10L)
 }
 \arguments{
 \item{bam_file}{Path to BAM file}
@@ -12,9 +12,13 @@
 \item{gene_config}{Resolved gene config list}
 
 \item{buffer_bp}{Flanking window size in base pairs (default 15000)}
+
+\item{min_mapq}{Minimum MAPQ of a record (default 10)}
 }
 \value{
-data.frame of parsed BAM records (one row per alignment record)
+data.frame of parsed BAM records (one row per alignment record).
+  \code{rname}/\code{mrnm} keep the BAM spelling; only coordinates are
+  used downstream.
 }
 \description{
 Extract BAM Evidence into a Plain data.frame

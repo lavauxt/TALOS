@@ -13,9 +13,7 @@
 
 \item{min_coverage}{Minimum k-mer coverage to keep}
 
-\item{max_steps}{Hard cap on walk length (safety bound against cycles in
-repetitive/duplicated sequence; O(max_steps), independent of how many
-k-mers or how branchy/cyclic the graph is)}
+\item{max_steps}{Hard cap on walk length (safety bound against cycles)}
 }
 \value{
 Assembled sequence, or NA if assembly isn't possible

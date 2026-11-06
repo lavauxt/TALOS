@@ -2,20 +2,20 @@
 % Please edit documentation in R/engine_assembly.R
 \name{.assemble_weighted_consensus}
 \alias{.assemble_weighted_consensus}
-\title{Weighted Consensus from Soft-Clip Sequences (fallback when de Bruijn fails)}
+\title{[BUG 6 FIX] Weighted Consensus from Soft-Clip Sequences}
 \usage{
 .assemble_weighted_consensus(seqs, weights = NULL)
 }
 \arguments{
 \item{seqs}{Character vector of sequences}
 
-\item{weights}{Numeric vector of weights (e.g. MAPQ) -- currently used only
-to break ties in a future revision; majority vote is unweighted for now,
-same as the code this replaces.}
+\item{weights}{Numeric vector of weights, one per sequence (optional)}
 }
 \value{
 Consensus sequence
 }
 \description{
-Weighted Consensus from Soft-Clip Sequences (fallback when de Bruijn fails)
+Per-position weighted majority vote. Weights (e.g. MAPQ) are now actually
+used: each base vote is weighted by its read's weight. Falls back to
+unweighted voting when weights are NULL, malformed, or all zero.
 }

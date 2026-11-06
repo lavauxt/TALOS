@@ -18,6 +18,5 @@ character vector of node names on the shortest path (empty if unreachable)
 }
 \description{
 Exon graphs here are tiny (dozens of nodes at most), so a plain O(V^2)
-Dijkstra in base R is more than fast enough and avoids an igraph
-dependency for a single-purpose lookup.
+Dijkstra in base R is fast enough and avoids an igraph dependency.
 }

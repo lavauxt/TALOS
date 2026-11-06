@@ -11,10 +11,16 @@
 #
 # Optional fields
 # ───────────────
+#   gene_symbol:     Gene name used in outputs / hotspot matching (default: the YAML key).
 #   cds_offset:      Integer override.  If omitted, auto-computed from the CDS.
-#   gene_settings:   Per-gene parameter overrides (see below).
+#   build:           Informative only: the build used is the `build` argument of talos().
+#   gene_settings:   Per-gene parameter overrides (any detect_itd() argument,
+#                    plus padding / exon_padding for the analysis window).
 #                    Any key in this block overrides the package default and
 #                    is itself overridable by an explicit caller argument.
+#   graph_settings:  Exon-graph PTD detection (use_exon_graph = TRUE; on by
+#                    default for KMT2A): max_exon_distance, buffer_bp,
+#                    min_support, expected_isize_max.
 #
 # ALU detection settings  (used by detect_alu() / talos_alu())
 # ─────────────────────────────────────────────────────────────
@@ -58,6 +64,11 @@ KMT2A:
   targeted_exons: [2,3,4,5,6,7,8,9,10,11,12]
   build: hg19
   gene_settings:
+    # Analysis window = targeted exons +/- padding. PTD breakpoints are
+    # intronic (often upstream of exon 2): with the default 500 bp the S side
+    # of the duplication falls outside the window, its coverage reads 0 and
+    # min_local_coverage rejects the call. 5000 matches max_exon_distance.
+    padding: 5000
     ptd_mode: FALSE
     min_support: 3
     min_size: 15
@@ -76,8 +87,10 @@ KMT2A:
     require_unique_anchor: true
     search_window: 15000
   graph_settings:
-    max_exon_distance: 5000
-    buffer_bp: 15000
+    max_exon_distance: 5000     # breakpoints further than this from any exon are ignored
+    buffer_bp: 15000            # BAM scan flank for split reads / everted pairs
+    min_support: 2              # distinct reads per PTD cycle (pre-filter; min_support above applies after)
+    expected_isize_max: 1000    # mate separation above which an everted (RF) pair counts as DUP evidence
 
 
 BCOR:

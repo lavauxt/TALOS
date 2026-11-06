@@ -2,18 +2,23 @@
 % Please edit documentation in R/engine_graph_ptd.R
 \name{.detect_ptd_cycles}
 \alias{.detect_ptd_cycles}
-\title{Identify PTD Back-Edges and Solve Maximum-Likelihood Duplication Cycles}
+\title{Identify PTD back-edges and score their duplication cycles}
 \usage{
 .detect_ptd_cycles(edges, nodes)
 }
 \arguments{
-\item{edges}{data.frame(from, to, weight, support_count, qnames, evidence_type)}
+\item{edges}{data.frame(from, to, prob, weight, support_count, qnames,
+evidence_type, ...)}
 
 \item{nodes}{character vector of exon node names, in transcript order}
 }
 \value{
-list of detected PTD candidates (one entry per back-edge), or NULL
+list of PTD candidates, or NULL
 }
 \description{
-Identify PTD Back-Edges and Solve Maximum-Likelihood Duplication Cycles
+[BUG 7] The score now uses the back-edge itself: \code{nll_score} is the
+cycle cost (forward path + back-edge, each \code{-log(p)}) and
+\code{evidence_score = log1p(support) - nll_score} is the sortable
+quantity. Single-exon duplications (back-edge onto the same exon) are
+valid cycles. Results are sorted by evidence_score, best first.
 }

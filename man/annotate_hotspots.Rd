@@ -9,11 +9,13 @@ annotate_hotspots(
   db_path = NULL,
   genome_build = NULL,
   db_conn = NULL,
-  fallback_csv_path = NULL
+  fallback_csv_path = NULL,
+  pos_col = "GenomicPosition"
 )
 }
 \arguments{
-\item{itd_df}{Data frame with columns \code{Gene}, \code{GenomicPosition}, \code{Length}.}
+\item{itd_df}{Data frame with columns \code{Gene}, a position column and
+(optionally) \code{Length}.}
 
 \item{db_path}{Optional path to CSV file (forces CSV mode).}
 
@@ -22,6 +24,9 @@ annotate_hotspots(
 \item{db_conn}{Optional DBI connection (overrides CSV).}
 
 \item{fallback_csv_path}{Optional fallback CSV path.}
+
+\item{pos_col}{Position column (default \code{"GenomicPosition"};
+\code{"InsertionSite"} for ALU results).}
 }
 \value{
 Data frame with added columns \code{Hotspot} and \code{HotspotName}.

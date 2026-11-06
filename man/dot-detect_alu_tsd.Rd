@@ -4,7 +4,7 @@
 \alias{.detect_alu_tsd}
 \title{Detect target-site duplication (TSD)}
 \usage{
-.detect_alu_tsd(ref_dna, ins_pos, max_tsd = 20L, genomic_start = 1L)
+.detect_alu_tsd(ref_dna, ins_pos, max_tsd = 20L)
 }
 \arguments{
 \item{ref_dna}{Character – full reference sequence for the region.}
@@ -12,11 +12,10 @@
 \item{ins_pos}{Integer – insertion site (1-based, local coordinates).}
 
 \item{max_tsd}{Integer – maximum TSD length to search (default 20).}
-
-\item{genomic_start}{Integer – genomic offset for the region.}
 }
 \value{
 Named list: tsd_len (integer), tsd_seq (character).
+  [ITEM 11] The unused genomic_start parameter was removed.
 }
 \description{
 ALU insertions generate a 5–20 bp direct repeat (TSD) flanking the

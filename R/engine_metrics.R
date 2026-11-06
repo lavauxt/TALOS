@@ -50,6 +50,10 @@
 }
 
 
+# Longest duplication on which sequence-level work (reference imputation,
+# pairwise ref / orientation alignment) is attempted.
+.MAX_SEQUENCE_OPS_LEN <- 2000L
+
 .compute_variant_metrics <- function(
   cluster_bps,
   best_len,
@@ -80,6 +84,7 @@
   span_flank = 300L,
   length_ext = NA_integer_,
   pre_assembled_seq = NA_character_,
+  max_itd_length = 1000L,
   debug = FALSE,
   verbose = FALSE
 ) {
@@ -127,6 +132,23 @@
   }
   support_qnames <- unique(support_rows$read_name)
   raw_support <- length(support_qnames)
+  # Checked before any alignment work (it used to come after the pairwise
+  # alignments, which were then thrown away).
+  if (raw_support < min_support) {
+    return(NULL)
+  }
+  # PTD-scale events (graph PTDs, multi-kb): the read-level sequence is a
+  # junction consensus, not the duplicated segment. Reference imputation of
+  # a multi-kb segment, positional ref matching and segment-vs-segment
+  # orientation alignment are meaningless (and quadratic) there.
+  # Capped at .MAX_SEQUENCE_OPS_LEN: with max_itd_length = 30000 (KMT2A YAML)
+  # a 20 kb call would otherwise get a 20 kb imputed sequence and a
+  # 20 kb x 20 kb orientation alignment.
+  seq_ops_limit <- min(c(max_itd_length, .MAX_SEQUENCE_OPS_LEN), na.rm = TRUE)
+  is_ptd_scale <- isTRUE(ptd_mode) || (!is.na(best_len) && best_len > seq_ops_limit)
+  local_seg_start <- len_specific_bp - genomic_start + 1L
+  seg_in_ref <- !is.na(best_len) && best_len > 0L && local_seg_start >= 1L &&
+    local_seg_start + best_len - 1L <= nchar(ref_dna)
 
   left_sc_count <- 0L
   right_sc_count <- 0L
@@ -220,7 +242,7 @@
       !is.na(best_len) &&
       best_len > 0L &&
       nchar(itd_seq) < best_len &&
-      !ptd_mode
+      !is_ptd_scale && seg_in_ref
   ) {
     partial_obs_len <- nchar(itd_seq)
     ref_local_start <- len_specific_bp - genomic_start + partial_obs_len + 1L
@@ -236,7 +258,7 @@
     }
   }
 
-  if (is.na(itd_seq) && !is.na(best_len) && best_len > 0L && !ptd_mode) {
+  if (is.na(itd_seq) && !is_ptd_scale && seg_in_ref) {
     local_start <- len_specific_bp - genomic_start + 1L
     local_end <- local_start + best_len - 1L
     if (!is.na(local_end) && local_end <= nchar(ref_dna)) {
@@ -297,9 +319,10 @@
           if (length(good_idx) > 0L) {
             subj_ranges <- pwalign::subject(aln[good_idx])
             cov_vec <- integer(nchar(itd_seq))
+            s_st <- BiocGenerics::start(subj_ranges)
+            s_en <- BiocGenerics::end(subj_ranges)
             for (ki in seq_along(good_idx)) {
-              cov_vec[start(subj_ranges)[ki]:end(subj_ranges)[ki]] <-
-                cov_vec[start(subj_ranges)[ki]:end(subj_ranges)[ki]] + 1L
+              cov_vec[s_st[ki]:s_en[ki]] <- cov_vec[s_st[ki]:s_en[ki]] + 1L
             }
             itd_coverage_percent <- sum(cov_vec > 0L) / length(cov_vec) * 100
             rle_res <- rle(cov_vec)
@@ -336,8 +359,7 @@
     }
   }
 
-  if (do_alignment_score && !is.na(itd_seq) &&
-      !is.na(best_len) && best_len > 0L) {
+  if (do_alignment_score && !is.na(itd_seq) && !is_ptd_scale && seg_in_ref) {
     local_start <- len_specific_bp - genomic_start + 1L
     local_end <- local_start + best_len - 1L
     if (!is.na(local_end) && local_end <= nchar(ref_dna)) {
@@ -376,10 +398,6 @@
     lead_S <- vapply(support_clip_lengths, `[[`, integer(1L), "lead")
     trail_S <- vapply(support_clip_lengths, `[[`, integer(1L), "trail")
     total_support_bases <- sum(lead_S, trail_S, na.rm = TRUE)
-  }
-
-  if (raw_support < min_support) {
-    return(NULL)
   }
 
   vaf_metrics <- .calculate_vaf_and_depth(
@@ -574,12 +592,7 @@
     pe_orientation_dominant <- pe_sc$pe_orientation_dominant
   }
 
-  if (
-    do_detect_orientation &&
-      !is.na(itd_seq) &&
-      !is.na(best_len) &&
-      best_len > 0L
-  ) {
+  if (do_detect_orientation && !is.na(itd_seq) && !is_ptd_scale && seg_in_ref) {
     local_start <- len_specific_bp - genomic_start + 1L
     local_end <- local_start + best_len - 1L
     if (!is.na(local_end) && local_end <= nchar(ref_dna)) {
@@ -597,10 +610,12 @@
     exon_ranges
   )
   if (do_hgvs) {
-    dup_len_for_hgvs <- if (!is.na(itd_seq) && nchar(itd_seq) > 0L) {
-      nchar(itd_seq)
-    } else if (!is.na(best_len)) {
+    # The called length wins: for PTD-scale events itd_seq is only the
+    # junction consensus, so its length is not the duplication length.
+    dup_len_for_hgvs <- if (!is.na(best_len) && best_len > 0L) {
       best_len
+    } else if (!is.na(itd_seq) && nchar(itd_seq) > 0L) {
+      nchar(itd_seq)
     } else {
       NA_integer_
     }
@@ -617,6 +632,18 @@
         if (is.na(hgvs$c_notation)) hgvs$c_notation <- "c.?+?"
       }
     }
+  }
+
+  dup_exons <- if (!is.null(support_rows$dup_exons)) {
+    de <- support_rows$dup_exons[!is.na(support_rows$dup_exons)]
+    if (length(de)) .mode(de) else NA_character_
+  } else {
+    NA_character_
+  }
+  candidate_types <- if (!is.null(support_rows$type)) {
+    paste(sort(unique(stats::na.omit(support_rows$type))), collapse = "+")
+  } else {
+    NA_character_
   }
 
   artifact_suspect <- isTRUE(imputed) &&
@@ -649,6 +676,8 @@
     GenomicPosition = len_specific_bp,
     ITD_Sequence = itd_seq,
     Length = best_len,
+    DupExons = dup_exons,
+    CandidateTypes = candidate_types,
     SupportingReads = corrected_support,
     WildtypeReads = wildtype_reads,
     DepthAtBreakpoint = depth_at_bp,
@@ -709,6 +738,30 @@
 }
 
 
+# Threshold rules: metric column, threshold name, direction. A rule only
+# applies when the metric is not NA (same semantics as before, one table
+# instead of seventeen hand-written blocks).
+.FILTER_RULES <- list(
+  c("CoverageDrop", "min_coverage_drop", "min"),
+  c("LocalCoverage", "min_local_coverage", "min"),
+  c("SpanMinCoverage", "min_span_coverage", "min"),
+  c("SpanDepthFoldChange", "min_span_depth_fold_change", "min"),
+  c("SpanDepthFoldChange", "max_span_depth_fold_change", "max"),
+  c("MedianMicrohomology", "min_microhomology", "min"),
+  c("DiscordantRatio", "min_discordant_ratio", "min"),
+  c("RepeatEntropy", "min_entropy", "min"),
+  c("StrandBias", "min_strand_bias", "min"),
+  c("StrandBias", "max_strand_bias", "max"),
+  c("MeanSupportMAPQ", "min_mean_support_mapq", "min"),
+  c("BreakpointSpread", "max_breakpoint_spread", "max"),
+  c("SoftclipFraction", "min_softclip_fraction", "min"),
+  c("UniqueBreakpoints", "min_unique_breakpoints", "min"),
+  c("ITDReadCoverage", "min_itd_read_coverage", "min")
+)
+
+#' Apply the candidate filters
+#' @return TRUE/FALSE; when FALSE the attribute "reason" names the first
+#'   failing rule (shown by the debug log).
 .apply_filters <- function(
   metrics,
   thresholds,
@@ -717,187 +770,60 @@
   ptd_mode = FALSE,
   ptd_allow_asymmetric = TRUE
 ) {
-  with(thresholds, {
-    if (isTRUE(metrics$ArtifactSuspect)) {
-      return(FALSE)
-    }
-    if (
-      !is.na(metrics$AlignmentScore) &&
-        !isTRUE(metrics$SequenceImputed) &&
-        metrics$AlignmentScore < min_alignment_score
-    ) {
-      return(FALSE)
-    }
+  fail <- function(reason) structure(FALSE, reason = reason)
+  num <- function(x) if (is.null(x) || length(x) == 0L) NA_real_ else suppressWarnings(as.numeric(x[[1L]]))
+  th <- function(name) thresholds[[name]] %||% (if (startsWith(name, "max")) Inf else 0)
 
-    if (
-      !is.null(min_length) &&
-        !is.na(metrics$Length) &&
-        metrics$Length > 0L &&
-        metrics$Length < min_length
-    ) {
-      return(FALSE)
-    }
-    if (
-      !is.null(max_length) &&
-        !is.na(metrics$Length) &&
-        metrics$Length > 0L &&
-        metrics$Length > max_length
-    ) {
-      return(FALSE)
-    }
-    if (
-      !is.na(metrics$CoverageDrop) && metrics$CoverageDrop < min_coverage_drop
-    ) {
-      return(FALSE)
-    }
-    if (
-      !is.na(metrics$LocalCoverage) &&
-        metrics$LocalCoverage < min_local_coverage
-    ) {
-      return(FALSE)
-    }
-    if (
-      !is.na(metrics$SpanMinCoverage) &&
-        metrics$SpanMinCoverage < min_span_coverage
-    ) {
-      return(FALSE)
-    }
-    if (
-      !is.na(metrics$SpanDepthFoldChange) &&
-        metrics$SpanDepthFoldChange < min_span_depth_fold_change
-    ) {
-      return(FALSE)
-    }
-    if (
-      !is.na(metrics$SpanDepthFoldChange) &&
-        metrics$SpanDepthFoldChange > max_span_depth_fold_change
-    ) {
-      return(FALSE)
-    }
-    if (
-      !is.na(metrics$MedianMicrohomology) &&
-        metrics$MedianMicrohomology < min_microhomology
-    ) {
-      return(FALSE)
-    }
-    if (
-      !is.na(metrics$DiscordantRatio) &&
-        metrics$DiscordantRatio < min_discordant_ratio
-    ) {
-      return(FALSE)
-    }
-    if (!is.na(metrics$RepeatEntropy) && metrics$RepeatEntropy < min_entropy) {
-      return(FALSE)
-    }
-    if (
-      !is.na(metrics$StrandBias) &&
-        (metrics$StrandBias < min_strand_bias ||
-          metrics$StrandBias > max_strand_bias)
-    ) {
-      return(FALSE)
-    }
-    if (
-      !is.na(metrics$MeanSupportMAPQ) &&
-        metrics$MeanSupportMAPQ < min_mean_support_mapq
-    ) {
-      return(FALSE)
-    }
-    if (
-      !is.na(metrics$BreakpointSpread) &&
-        metrics$BreakpointSpread > max_breakpoint_spread
-    ) {
-      return(FALSE)
-    }
-    if (
-      !is.na(metrics$SoftclipFraction) &&
-        metrics$SoftclipFraction < min_softclip_fraction
-    ) {
-      return(FALSE)
-    }
-    if (
-      !is.na(metrics$UniqueBreakpoints) &&
-        metrics$UniqueBreakpoints < min_unique_breakpoints
-    ) {
-      return(FALSE)
-    }
-    if (
-      !is.na(metrics$ITDReadCoverage) &&
-        metrics$ITDReadCoverage < min_itd_read_coverage
-    ) {
-      return(FALSE)
-    }
+  if (isTRUE(metrics$ArtifactSuspect)) return(fail("ArtifactSuspect"))
+  aln <- num(metrics$AlignmentScore)
+  if (!is.na(aln) && !isTRUE(metrics$SequenceImputed) && aln < th("min_alignment_score")) {
+    return(fail("min_alignment_score"))
+  }
+  len <- num(metrics$Length)
+  if (!is.na(len) && len > 0) {
+    if (!is.null(min_length) && len < min_length) return(fail("min_length"))
+    if (!is.null(max_length) && len > max_length) return(fail("max_length"))
+  }
+  for (r in .FILTER_RULES) {
+    v <- num(metrics[[r[[1L]]]])
+    if (is.na(v)) next
+    t <- th(r[[2L]])
+    if ((r[[3L]] == "min" && v < t) || (r[[3L]] == "max" && v > t)) return(fail(r[[2L]]))
+  }
 
-    left <- metrics$LeftSoftclipCount %||% NA_integer_
-    right <- metrics$RightSoftclipCount %||% NA_integer_
-    if (!is.na(left) && !is.na(right)) {
-      if (ptd_mode && ptd_allow_asymmetric) {
-        max_side <- max(left, right)
-        if (max_side < min_side_softclip_reads) {
-          return(FALSE)
-        }
-        if (left >= right) {
-          if (
-            !is.na(metrics$LeftSoftclipPctSupport) &&
-              metrics$LeftSoftclipPctSupport < min_softclip_pct_side
-          ) {
-            return(FALSE)
-          }
-          if (
-            !is.na(metrics$LeftSoftclipPctWT) &&
-              metrics$LeftSoftclipPctWT < min_left_softclip_pct_wt
-          ) {
-            return(FALSE)
-          }
-        } else {
-          if (
-            !is.na(metrics$RightSoftclipPctSupport) &&
-              metrics$RightSoftclipPctSupport < min_softclip_pct_side
-          ) {
-            return(FALSE)
-          }
-          if (
-            !is.na(metrics$RightSoftclipPctWT) &&
-              metrics$RightSoftclipPctWT < min_right_softclip_pct_wt
-          ) {
-            return(FALSE)
-          }
-        }
-      } else {
-        if (left < min_side_softclip_reads || right < min_side_softclip_reads) {
-          return(FALSE)
-        }
-        lw <- metrics$LeftSoftclipPctWT
-        rw <- metrics$RightSoftclipPctWT
-        if (!is.na(lw) && lw < min_left_softclip_pct_wt) {
-          return(FALSE)
-        }
-        if (!is.na(rw) && rw < min_right_softclip_pct_wt) {
-          return(FALSE)
-        }
-        if (!is.na(metrics$Length) && metrics$Length > 0L) {} else {
-          if (max(left, right) == 0L) {
-            return(FALSE)
-          }
-          if (min(left, right) == 0L) {
-            return(FALSE)
-          }
-          if (max(left, right) / min(left, right) > max_side_ratio) {
-            return(FALSE)
-          }
-          if (left < min_abs_side_softclip || right < min_abs_side_softclip) {
-            return(FALSE)
-          }
-          lp <- metrics$LeftSoftclipPctSupport
-          rp <- metrics$RightSoftclipPctSupport
-          if (!is.na(lp) && lp < min_softclip_pct_side) {
-            return(FALSE)
-          }
-          if (!is.na(rp) && rp < min_softclip_pct_side) return(FALSE)
-        }
-      }
+  left <- num(metrics$LeftSoftclipCount)
+  right <- num(metrics$RightSoftclipCount)
+  if (is.na(left) || is.na(right)) return(TRUE)
+  below <- function(col, thr) { v <- num(metrics[[col]]); !is.na(v) && v < th(thr) }
+
+  if (ptd_mode && ptd_allow_asymmetric) {
+    if (max(left, right) < th("min_side_softclip_reads")) return(fail("min_side_softclip_reads"))
+    side <- if (left >= right) "Left" else "Right"
+    if (below(paste0(side, "SoftclipPctSupport"), "min_softclip_pct_side")) return(fail("min_softclip_pct_side"))
+    if (below(paste0(side, "SoftclipPctWT"), paste0("min_", tolower(side), "_softclip_pct_wt"))) {
+      return(fail(paste0("min_", tolower(side), "_softclip_pct_wt")))
     }
-    TRUE
-  })
+    return(TRUE)
+  }
+
+  if (left < th("min_side_softclip_reads") || right < th("min_side_softclip_reads")) {
+    return(fail("min_side_softclip_reads"))
+  }
+  if (below("LeftSoftclipPctWT", "min_left_softclip_pct_wt")) return(fail("min_left_softclip_pct_wt"))
+  if (below("RightSoftclipPctWT", "min_right_softclip_pct_wt")) return(fail("min_right_softclip_pct_wt"))
+  # Zero-length (PTD clip) calls must be supported on both sides.
+  if (is.na(len) || len <= 0) {
+    if (max(left, right) == 0 || min(left, right) == 0) return(fail("one_sided_softclips"))
+    if (max(left, right) / min(left, right) > th("max_side_ratio")) return(fail("max_side_ratio"))
+    if (left < th("min_abs_side_softclip") || right < th("min_abs_side_softclip")) {
+      return(fail("min_abs_side_softclip"))
+    }
+    if (below("LeftSoftclipPctSupport", "min_softclip_pct_side") ||
+        below("RightSoftclipPctSupport", "min_softclip_pct_side")) {
+      return(fail("min_softclip_pct_side"))
+    }
+  }
+  TRUE
 }
 
 .mode <- function(x) {
@@ -937,7 +863,9 @@
     "LeftSoftclipPctSupport",
     "RightSoftclipPctSupport",
     "LeftSoftclipPctWT",
-    "RightSoftclipPctWT"
+    "RightSoftclipPctWT",
+    "DupExons",
+    "CandidateTypes"
   )
   kv <- vapply(
     fields,
@@ -956,6 +884,12 @@
   sprintf(
     "[CANDIDATE] %s -> %s",
     paste(kv, collapse = " "),
-    if (isTRUE(passed)) "KEPT" else "FILTERED"
+    if (isTRUE(passed)) {
+      "KEPT"
+    } else if (!is.null(attr(passed, "reason"))) {
+      paste0("FILTERED (", attr(passed, "reason"), ")")
+    } else {
+      "FILTERED"
+    }
   )
 }

@@ -4,12 +4,18 @@
 \alias{.build_optimized_bam_param}
 \title{Build Optimized ScanBamParam for Evidence Extraction}
 \usage{
-.build_optimized_bam_param(gene_config, buffer_bp = 15000L)
+.build_optimized_bam_param(
+  gene_config,
+  buffer_bp = 15000L,
+  bam_chrom = gene_config$chrom
+)
 }
 \arguments{
 \item{gene_config}{Resolved gene config list from get_gene_config()}
 
 \item{buffer_bp}{Flanking window size in base pairs}
+
+\item{bam_chrom}{Chromosome name as spelled in the BAM header.}
 }
 \value{
 Rsamtools::ScanBamParam object

@@ -3,7 +3,8 @@
 \name{plot_talos_report}
 \alias{plot_talos_report}
 \title{Generate a publication-ready PDF plot (Gviz + summary table)
-Only the region restricted directly by targeted_exons context is shown.}
+Only the region restricted directly by targeted_exons context is shown
+(extended to include the plotted variants).}
 \usage{
 plot_talos_report(
   itd_row,
@@ -39,11 +40,14 @@ plot_talos_report(
 \item{precomputed_cov}{Optional precomputed coverage Rle (to avoid re-reading BAM).}
 
 \item{include_ptd}{If TRUE, include zero-length (PTD) events (default FALSE).}
+
+\item{gap}{Gap between Gviz tracks.}
 }
 \value{
 Invisibly, output_pdf.
 }
 \description{
 Generate a publication-ready PDF plot (Gviz + summary table)
-Only the region restricted directly by targeted_exons context is shown.
+Only the region restricted directly by targeted_exons context is shown
+(extended to include the plotted variants).
 }

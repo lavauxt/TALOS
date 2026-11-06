@@ -2,18 +2,28 @@
 % Please edit documentation in R/engine_bam_extractor.R
 \name{.extract_discordant_and_shadow}
 \alias{.extract_discordant_and_shadow}
-\title{Extract Discordant Pairs and Shadow (Mate-Unmapped) Reads}
+\title{Tandem-duplication evidence from discordant read pairs}
 \usage{
 .extract_discordant_and_shadow(dt, expected_isize_max = 1000L)
 }
 \arguments{
 \item{dt}{data.frame of BAM records}
 
-\item{expected_isize_max}{Insert size threshold for anomaly detection}
+\item{expected_isize_max}{Minimum mate separation (bp) to call a pair
+discordant (default 1000)}
 }
 \value{
-data.frame of paired-end evidence edges
+data.frame(qname, start, end, prob, evidence_type, precise)
 }
 \description{
-Extract Discordant Pairs and Shadow (Mate-Unmapped) Reads
+Pairs spanning a tandem-duplication junction are everted (RF): the
+leftmost mate maps on the reverse strand, the rightmost on the forward
+strand, far apart. The previous test \code{abs(isize) > max | isize < 0}
+selected the reverse mate of every normal pair (isize is negative for the
+rightmost mate by definition) and ignored orientation and chromosome.
+}
+\details{
+Shadow reads (mate unmapped) carry no partner coordinate, so they no
+longer create graph edges (the approximated mate position of BUG 5 created
+spurious short edges instead).
 }
