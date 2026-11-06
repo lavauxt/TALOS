@@ -178,6 +178,28 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
 .kv.wide { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 18px; }
 .kv.wide > div { display: grid; grid-template-columns: 48% 52%; gap: 8px; border-bottom: 1px dashed var(--grid); padding: 2px 0; }
 .kv.wide dt, .kv.wide dd { font-size: 12.5px; }
+
+/* ---- Highlight important results (TALOS) ---- */
+.tbl tbody tr.row-hotspot             { background: rgba(250,178,25,0.08); }
+:root[data-theme="dark"] .tbl tbody tr.row-hotspot { background: rgba(250,178,25,0.12); }
+.tbl tbody tr.row-hotspot td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+.tbl tbody tr.row-flagged             { background: rgba(138,90,0,0.05); }
+.tbl tbody tr.row-flagged td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+.tbl tbody tr.row-hotspot:hover,
+.tbl tbody tr.row-flagged:hover       { background: var(--accent-soft); }
+
+.cell-flag, .cell-hotspot             { color: var(--warn); font-weight: 600; }
+.cell-muted                            { color: var(--muted); }
+.cell-hi                               { font-weight: 600; color: var(--good); }
+.cell-lo                               { color: var(--muted); }
+.cell-ptd                              { color: var(--accent); font-style: italic; font-weight: 600; }
+.cell-support                          { display: inline-flex; align-items: center; gap: 6px; }
+.cell-support .bar                     { display: inline-block; height: 8px; background: var(--accent);
+                                         border-radius: 2px; min-width: 2px; }
+.badge-hotspot { background: rgba(250,178,25,0.15); color: var(--warn); border: 1px solid var(--warn);
+                 padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+.badge-exon    { background: var(--accent-soft); color: var(--text); border: 1px solid var(--ring);
+                 padding: 1px 6px; border-radius: 4px; font-size: 11px; }
 )-----"
 
 .TALOS_REPORT_JS <- r"-----(
@@ -370,6 +392,7 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     var count = h('span', { class: 'muted small' });
     var pager = h('span', { class: 'pager' });
     var thead = h('thead'), tbody = h('tbody');
+    var rowClassFn = opts.rowClass || function () { return ''; };
     var dl = h('button', { class: 'btn', type: 'button', text: 'Download CSV', onclick: function () {
       var lines = [T.cols.map(csvField).join(',')];
       idx.forEach(function (i) { lines.push(T.cols.map(function (c) { return csvField(col(c)[i]); }).join(',')); });
@@ -412,7 +435,9 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
       var start = page * pageSize, end = Math.min(idx.length, start + pageSize);
       for (var k = start; k < end; k++) {
         (function (i) {
-          var row = h('tr', { class: opts.onRow ? 'clickable' : '', title: opts.onRow ? 'Show details' : null,
+          var rc = rowClassFn(i);
+          var cls = [opts.onRow ? 'clickable' : '', rc].filter(Boolean).join(' ');
+          var row = h('tr', { class: cls, title: opts.onRow ? 'Show details' : null,
             onclick: opts.onRow ? function () { opts.onRow(i); } : null });
           cs.forEach(function (c) {
             var v = col(c)[i], r = opts.render && opts.render[c];
@@ -454,8 +479,11 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     var samples = uniq(col('Sample')), genes = uniq(col('Gene'));
     var vaf = col('AlleleFrequency').map(function (v) { return typeof v === 'number' ? v * 100 : NaN; });
     var hot = col('Hotspot').filter(function (v) { return v === true; }).length;
+    var flagged = col('MergeFragmentWarning').concat(col('ArtifactSuspect'))
+                  .filter(function (v) { return v === true; }).length;
     var tiles = [[NROW, M.events.charAt(0).toUpperCase() + M.events.slice(1) + ' called'], [samples.length, 'Samples'],
       [genes.length, 'Genes'], [hot, 'In hotspots']];
+    if (flagged > 0) tiles.push([flagged, '\u26A0 Flagged calls']);
     var mv = median(vaf);
     if (isFinite(mv)) tiles.push([mv.toFixed(1) + '%', 'Median VAF']);
     if (!isAlu) {
@@ -492,38 +520,130 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     onPlotClick(box, function (ev) { if (ev.points && ev.points[0]) showVariant(ev.points[0].customdata); });
   });
 
+  // ---- Shared cell renderers for the results table
+  function makeResultRenderers() {
+    var maxSupport = 0;
+    col('SupportingReads').forEach(function (v) { if (typeof v === 'number' && v > maxSupport) maxSupport = v; });
+    return {
+      AlleleFrequency: function (v) {
+        if (typeof v !== 'number') return h('span', { class: 'cell-muted', text: 'N/A' });
+        var pct = (v * 100).toFixed(1) + '%';
+        var cls = v >= 0.1 ? 'cell-hi' : v < 0.01 ? 'cell-lo' : '';
+        return h('span', { class: cls, text: pct });
+      },
+      Length: function (v) {
+        if (typeof v !== 'number') return '';
+        if (v === 0)  return h('span', { class: 'cell-ptd', text: 'PTD (clip)' });
+        if (v > 1000) return h('span', { class: 'cell-ptd', text: fmt(v) + ' bp (PTD)' });
+        return h('span', { text: fmt(v) + ' bp' });
+      },
+      Region: function (v) {
+        if (!v) return h('span', { class: 'cell-muted', text: '\u2014' });
+        return h('span', { class: v === 'exonic' ? 'badge-exon' : 'cell-muted', text: v });
+      },
+      SupportingReads: function (v) {
+        if (typeof v !== 'number') return '';
+        var w = maxSupport > 0 ? Math.max(2, Math.round(v / maxSupport * 40)) : 2;
+        return h('span', { class: 'cell-support' },
+                 h('span', { class: 'bar', style: { width: w + 'px' } }),
+                 h('span', { text: fmt(v) }));
+      },
+      Hotspot:              function (v) { return v === true ? h('span', { class: 'cell-hotspot', text: '\u2605' }) : h('span', { class: 'cell-muted', text: '\u2014' }); },
+      MergeFragmentWarning: function (v) { return v === true ? h('span', { class: 'cell-flag', text: '\u26A0' }) : ''; },
+      ArtifactSuspect:      function (v) { return v === true ? h('span', { class: 'cell-flag', text: '\u26A0' }) : ''; },
+      SequenceImputed:      function (v) { return v === true ? h('span', { class: 'cell-muted', text: 'imputed' }) : ''; }
+    };
+  }
+
   // ---- Results table
   tab('results', 'Results table', function () { return NROW > 0; }, function (root) {
     var showAll = false, host = h('div');
     var visible = function () { return showAll ? T.cols : T.cols.filter(function (c) { return HIDDEN.indexOf(c) < 0; }); };
-    var toggle = h('label', { class: 'field inline small' }, h('input', { type: 'checkbox', onchange: function (e) { showAll = e.target.checked; view.refresh(); } }), 'All columns');
-    var pct = function (v) { return typeof v === 'number' ? (v * 100).toFixed(1) + '%' : fmt(v); };
-    var view = tableView(host, visible, { toolbar: toggle, filename: 'TALOS_results.csv', onRow: function (i) { showVariant(i + 1); },
-      render: { AlleleFrequency: pct } });
-    root.appendChild(card(M.events.charAt(0).toUpperCase() + M.events.slice(1) + ' detected: ' + NROW + ' across ' + uniq(col('Sample')).length + ' sample(s)',
-      'click a row for details; CSV includes every column', host));
+    var toggle = h('label', { class: 'field inline small' },
+      h('input', { type: 'checkbox', onchange: function (e) { showAll = e.target.checked; view.refresh(); } }),
+      'All columns');
+    var hasCol = function (c) { return T.cols.indexOf(c) >= 0; };
+    var render = makeResultRenderers();
+    var rowClass = function (i) {
+      var cls = [];
+      if (hasCol('Hotspot') && col('Hotspot')[i] === true) cls.push('row-hotspot');
+      if ((hasCol('MergeFragmentWarning') && col('MergeFragmentWarning')[i] === true) ||
+          (hasCol('ArtifactSuspect')      && col('ArtifactSuspect')[i]      === true)) cls.push('row-flagged');
+      if (hasCol('Length')) {
+        var len = col('Length')[i];
+        if (typeof len === 'number' && (len === 0 || len > 1000)) cls.push('row-ptd');
+      }
+      return cls.join(' ');
+    };
+    var view = tableView(host, visible, {
+      toolbar: toggle, filename: 'TALOS_results.csv',
+      onRow: function (i) { showVariant(i + 1); },
+      render: render, rowClass: rowClass
+    });
+    var subtitle = 'Rows are colour-coded: \u2605 hotspot  \u26A0 flagged  italic = PTD  \u25CF bar = support';
+    root.appendChild(card(
+      M.events.charAt(0).toUpperCase() + M.events.slice(1) + ' detected: ' + NROW +
+      ' across ' + uniq(col('Sample')).length + ' sample(s)',
+      subtitle, host));
   });
 
   // ---- Genome view
   tab('genome', 'Genome view', function () { return PANELS.length > 0; }, function (root) {
     var cur = 0, box = plotBox('tall'), legend = h('div', { class: 'legend' }), hidden = {};
-    var sel = h('select', { 'aria-label': 'Sample and gene' }, PANELS.map(function (p, i) { return h('option', { value: i, text: p.sample + ' \u00b7 ' + p.gene + ' (' + p.chrom + ', ' + p.build + ')' }); }));
+    var focusHost = h('span', { class: 'field' });
+    var sel = h('select', { 'aria-label': 'Sample and gene' },
+      PANELS.map(function (p, i) { return h('option', { value: i, text: p.sample + ' \u00b7 ' + p.gene + ' (' + p.chrom + ', ' + p.build + ')' }); }));
     sel.addEventListener('change', function () { cur = +sel.value; hidden = {}; draw(); });
+    var resetBtn = h('button', { class: 'btn', type: 'button', text: 'Reset zoom',
+      onclick: function () {
+        if (!hasPlotly()) return;
+        var P = PANELS[cur];
+        window.Plotly.relayout(box, { 'xaxis.range': [P.from, P.to] });
+      } });
     var bar = h('div', { class: 'toolbar' });
     if (PANELS.length > 1) bar.appendChild(h('label', { class: 'field' }, 'Sample \u00b7 gene', sel));
-    bar.appendChild(h('span', { class: 'note', text: 'Introns are compressed; exons are drawn to scale. Zero-length clip calls are shown as ticks.' }));
+    bar.appendChild(focusHost);
+    bar.appendChild(resetBtn);
+    bar.appendChild(h('span', { class: 'note',
+      text: 'Hover for details; click a call to open it. Exons are drawn to scale, introns compressed.' }));
     root.appendChild(bar);
     root.appendChild(card('Coverage, exons and calls', 'click a call for details', h('div', null, box, legend)));
+
     function draw() {
       var P = PANELS[cur];
-      clear(legend);
-      arr(P.variants).forEach(function (v, k) {
-        var b = h('button', { type: 'button', 'aria-pressed': hidden[v.vid] ? 'false' : 'true', onclick: function () { hidden[v.vid] = !hidden[v.vid]; draw(); } },
-          h('span', { class: 'swatch', style: { background: color(k, resolved()) } }), v.label);
+      clear(legend); clear(focusHost);
+      var vs = arr(P.variants);
+      if (vs.length > 1) {
+        var focusSel = h('select', { 'aria-label': 'Focus on call' },
+          h('option', { value: '', text: 'All ' + vs.length + ' call(s)' }),
+          vs.map(function (v, k) { return h('option', { value: String(k), text: v.label }); }));
+        focusSel.addEventListener('change', function () {
+          if (!hasPlotly()) return;
+          var k = +focusSel.value;
+          if (focusSel.value === '' || isNaN(k)) {
+            window.Plotly.relayout(box, { 'xaxis.range': [P.from, P.to] });
+          } else {
+            var v = vs[k], pad = Math.max(30, (v.x1 - v.x0) * 0.3);
+            window.Plotly.relayout(box, { 'xaxis.range': [v.x0 - pad, v.x1 + pad] });
+            showVariant(v.vid);
+          }
+        });
+        focusHost.appendChild(h('span', { class: 'small muted', text: 'Focus: ' }));
+        focusHost.appendChild(focusSel);
+      }
+      vs.forEach(function (v, k) {
+        var b = h('button', { type: 'button',
+          'aria-pressed': hidden[v.vid] ? 'false' : 'true',
+          onclick: function () { hidden[v.vid] = !hidden[v.vid]; draw(); } },
+          h('span', { class: 'swatch', style: { background: color(k, resolved()) } }),
+          v.label);
         legend.appendChild(b);
       });
       plot(box, function (t) { return genomeFigure(P, t, hidden); });
-      onPlotClick(box, function (ev) { var p = ev.points && ev.points[0]; if (p && p.data && p.data.meta && p.data.meta.vid) showVariant(p.data.meta.vid); });
+      onPlotClick(box, function (ev) {
+        var p = ev.points && ev.points[0];
+        if (p && p.data && p.data.meta && p.data.meta.vid) showVariant(p.data.meta.vid);
+      });
     }
     draw();
   });
@@ -582,7 +702,9 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
       var body = h('div', null, kv(v.keys, v.values, true));
       if (v.sequence) body.appendChild(h('details', { class: 'seq' }, h('summary', { text: (isAlu ? 'Matched ALU sequence' : 'ITD sequence') + ' (' + v.sequence.length + ' bp)' }), h('pre', { text: v.sequence })));
       var c = card(v.title, v.flag ? 'review flagged' : null, body, { id: 'v-' + v.id, class: 'card vcard' });
-      if (v.flag) $('header', c).appendChild(h('span', { class: 'badge flag', text: 'flagged' }));
+      var hdr = $('header', c);
+      if (v.hotspot) hdr.appendChild(h('span', { class: 'badge badge-hotspot', text: '\u2605 ' + (v.hotspot_name || 'hotspot') }));
+      if (v.flag)    hdr.appendChild(h('span', { class: 'badge flag', text: '\u26A0 flagged' }));
       c._text = (v.title + ' ' + arr(v.values).join(' ')).toLowerCase();
       cards.push(c); list.appendChild(c);
     });

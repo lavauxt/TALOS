@@ -684,6 +684,11 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
 }
 
 # Genome-view data for one sample / gene (all calls; zero-length ones as markers).
+# BUG FIX (NA subtype / NA VAF): the previous version used `row$ALUSubtype %||%
+# "ALU"`, which passes NA through (only NULL triggers the fallback) and produced
+# "NA%"-style labels for zero-VAF calls. NA/length-0 values are now normalised
+# explicitly; hotspot/flag metadata is carried through so the details tab can
+# draw badges without re-querying.
 .panel_payload <- function(sub_df, gene_config, bam_path, cov, sample, gene, mode, pos_col, ids) {
   pd <- tryCatch(
     .variant_plot_data(sub_df, gene_config, bam_path, cov, include_ptd = TRUE, pos_col = pos_col),
@@ -698,18 +703,30 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
   has_cov <- any(!is.na(pd$cov_df$depth))
   variants <- lapply(seq_len(nrow(pd$itd_df)), function(i) {
     row <- pd$itd_df[i, , drop = FALSE]
-    vaf <- suppressWarnings(as.numeric(row$AlleleFrequency))
+    vaf_raw <- suppressWarnings(as.numeric(row$AlleleFrequency))
+    if (length(vaf_raw) != 1L || is.na(vaf_raw)) vaf_raw <- NA_real_
+    vaf <- vaf_raw
+    vaf_str <- if (is.na(vaf)) "N/A" else sprintf("%.1f%%", vaf * 100)
+    label <- if (mode == "alu") {
+      subtype <- if (is.null(row$ALUSubtype) || is.na(row$ALUSubtype)) "ALU" else as.character(row$ALUSubtype)
+      sprintf("%s %s", subtype, vaf_str)
+    } else {
+      len_label <- if (pd$len[i] > 0) sprintf("%d bp", as.integer(pd$len[i])) else "PTD (clip)"
+      extra <- if ("HGVS_cDNA" %in% names(row) && !is.na(row$HGVS_cDNA) && nzchar(row$HGVS_cDNA)) {
+        paste0("  ", row$HGVS_cDNA)
+      } else ""
+      paste0(len_label, "  VAF ", vaf_str, extra)
+    }
+    hover <- if (mode == "alu") {
+      f <- .variant_fields(row, mode = "alu")
+      paste(names(f), f, sep = ": ", collapse = "<br>")
+    } else {
+      .variant_hover(row, i, vaf_str)
+    }
     list(
       vid = ids[i], start = pd$pos[i], end = pd$dup_ends[i], len = pd$len[i],
       x0 = ax$transform_pos(pd$pos[i]), x1 = ax$transform_pos(pd$dup_ends[i]),
-      vaf = vaf,
-      label = if (mode == "alu") sprintf("%s %s", row$ALUSubtype %||% "ALU", sprintf("VAF %.1f%%", vaf * 100)) else
-        paste0(if (pd$len[i] > 0) sprintf("%d bp", as.integer(pd$len[i])) else "PTD (clip)",
-               sprintf("  VAF %.1f%%", vaf * 100),
-               if ("HGVS_cDNA" %in% names(row) && !is.na(row$HGVS_cDNA)) paste0("  ", row$HGVS_cDNA) else ""),
-      hover = if (mode == "alu") paste(names(.variant_fields(row, mode = "alu")),
-                                       .variant_fields(row, mode = "alu"), sep = ": ", collapse = "<br>")
-              else .variant_hover(row, i, sprintf("%.1f%%", vaf * 100))
+      vaf = vaf, label = label, hover = hover
     )
   })
   itd_cov <- lapply(split(pd$itd_cov, pd$itd_cov$variant), function(d) {
@@ -796,6 +813,12 @@ talos_html_report <- function(result_df,
       fields <- .variant_fields(row, gb, mode)
       seq_col <- if (mode == "alu") "ALU_Sequence" else "ITD_Sequence"
       sq <- if (seq_col %in% names(row)) as.character(row[[seq_col]]) else NA_character_
+      # Hotspot metadata carries through so the details tab can draw a badge
+      # without re-reading the CSV/DB.
+      hotspot_flag <- isTRUE(row$Hotspot)
+      hotspot_name <- if (hotspot_flag && "HotspotName" %in% names(row) && !is.na(row$HotspotName)) {
+        as.character(row$HotspotName)
+      } else NULL
       variants[[length(variants) + 1L]] <- list(
         id = rows[k], sample = sn, gene = gn, n_in_group = k,
         title = if (mode == "alu") sprintf("ALU insertion %d @ %s (%s)", k, fields[["Insertion site"]], fields[["ALU subtype"]])
@@ -803,7 +826,9 @@ talos_html_report <- function(result_df,
                   sprintf("%s bp @ %s", fields[["Length (bp)"]], fields[["Genomic Position"]])),
         keys = .arr(names(fields)), values = .arr(unname(fields)),
         sequence = if (!is.na(sq) && nzchar(sq)) sq else NULL,
-        flag = isTRUE(row$MergeFragmentWarning) || isTRUE(row$ArtifactSuspect)
+        flag = isTRUE(row$MergeFragmentWarning) || isTRUE(row$ArtifactSuspect),
+        hotspot = hotspot_flag,
+        hotspot_name = hotspot_name
       )
     }
     cfg <- gene_configs[[gn]]
