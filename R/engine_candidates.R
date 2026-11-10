@@ -611,6 +611,15 @@
   )
 }
 
+# Filter empty soft-clips while keeping per-read weights in lockstep.
+.filter_weighted_sequences <- function(seqs, weights) {
+  if (length(seqs) != length(weights)) {
+    stop("seqs and weights must have the same length.", call. = FALSE)
+  }
+  keep <- !is.na(seqs) & nzchar(seqs)
+  list(seqs = seqs[keep], weights = weights[keep])
+}
+
 #' Turn exon-graph PTD cycles into read-level candidates
 #'
 #' One candidate per supporting read present in \code{reads}, placed at the
@@ -639,10 +648,15 @@
       sc <- .get_softclips(rf$cigars[i], rf$seqs[i])
       paste(stats::na.omit(c(sc$lead, sc$trail)), collapse = "")
     }, character(1L))
-    sc_seqs <- sc_seqs[nzchar(sc_seqs)]
+    # Keep the same mask for the sequence and MAPQ vectors. Re-applying
+    # nzchar() after filtering returned an all-TRUE mask over the original
+    # read indices, causing a length mismatch and silently losing weights.
+    filtered_sc <- .filter_weighted_sequences(sc_seqs, rf$mapqs[idx])
+    sc_seqs <- filtered_sc$seqs
+    sc_weights <- filtered_sc$weights
     junction_seq <- if (length(sc_seqs)) .build_local_debruijn(sc_seqs) else NA_character_
     if (is.na(junction_seq) && length(sc_seqs)) {
-      junction_seq <- .assemble_weighted_consensus(sc_seqs, rf$mapqs[idx][nzchar(sc_seqs)])
+      junction_seq <- .assemble_weighted_consensus(sc_seqs, sc_weights)
     }
     local_bp <- cand$dup_start - genomic_start + 1L
     for (i in idx) {

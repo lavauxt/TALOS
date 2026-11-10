@@ -54,6 +54,43 @@
 # pairwise ref / orientation alignment) is attempted.
 .MAX_SEQUENCE_OPS_LEN <- 2000L
 
+# Keep one representative alignment row per read before calculating
+# row-count-based metrics (soft-clip counts, strand bias, MAPQ, sequence
+# consensus, etc.). Support is defined by distinct QNAMEs; duplicate
+# evidence rows from one read must not inflate those metrics.
+.deduplicate_support_rows <- function(support_rows, target_bp) {
+  if (is.null(support_rows) || !is.data.frame(support_rows) ||
+      !"read_name" %in% names(support_rows)) {
+    return(support_rows)
+  }
+  qname <- as.character(support_rows$read_name)
+  valid <- !is.na(qname) & nzchar(qname)
+  support_rows <- support_rows[valid, , drop = FALSE]
+  qname <- qname[valid]
+  if (nrow(support_rows) < 2L || !anyDuplicated(qname)) return(support_rows)
+
+  bp <- if ("breakpoint" %in% names(support_rows)) {
+    suppressWarnings(as.numeric(support_rows$breakpoint))
+  } else rep(NA_real_, nrow(support_rows))
+  distance <- abs(bp - as.numeric(target_bp)[1L])
+  distance[!is.finite(distance)] <- Inf
+
+  mapq <- if ("mapq" %in% names(support_rows)) {
+    suppressWarnings(as.numeric(support_rows$mapq))
+  } else rep(0, nrow(support_rows))
+  mapq[!is.finite(mapq)] <- -Inf
+
+  has_seq <- if ("itd_seq" %in% names(support_rows)) {
+    !is.na(support_rows$itd_seq) & nzchar(as.character(support_rows$itd_seq))
+  } else rep(FALSE, nrow(support_rows))
+
+  # Prefer the closest breakpoint, then highest MAPQ, then a row carrying
+  # an observed sequence. The final index makes ties deterministic.
+  ord <- order(distance, -mapq, !has_seq, seq_len(nrow(support_rows)))
+  chosen <- ord[!duplicated(qname[ord])]
+  support_rows[sort(chosen), , drop = FALSE]
+}
+
 .compute_variant_metrics <- function(
   cluster_bps,
   best_len,
@@ -130,6 +167,8 @@
   if (is.na(len_specific_bp) || is.infinite(len_specific_bp)) {
     return(NULL)
   }
+  support_rows <- .deduplicate_support_rows(support_rows, len_specific_bp)
+  if (is.null(support_rows) || nrow(support_rows) == 0L) return(NULL)
   support_qnames <- unique(support_rows$read_name)
   raw_support <- length(support_qnames)
   # Checked before any alignment work (it used to come after the pairwise

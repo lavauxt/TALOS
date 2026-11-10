@@ -124,9 +124,13 @@
 #' @param min_run  Minimum consecutive A/T to report (default 6).
 #' @keywords internal
 .detect_poly_a <- function(clip_seq, min_run = 6L) {
-  if (is.na(clip_seq) || !nzchar(clip_seq)) {
+  min_run <- suppressWarnings(as.integer(min_run))
+  if (length(min_run) != 1L || is.na(min_run) || min_run < 1L ||
+      length(clip_seq) != 1L || is.na(clip_seq) || !nzchar(clip_seq)) {
     return(0L)
   }
+
+  clip_seq <- toupper(as.character(clip_seq))
 
   # A poly-A/T tail is terminal, not merely an A/T-rich run somewhere
   # inside the soft clip. Searching the whole clip used to annotate internal

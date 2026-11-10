@@ -646,11 +646,29 @@ detect_itd <- function(
                           HotspotName = NA_character_, Region = NA_character_,
                           ExonNumber = NA_integer_)
 
+# GenomicRanges::reduce() merges only when the gap is strictly shorter than
+# min.gapwidth. Convert the user-facing inclusive maximum gap to that API.
+.ptd_merge_min_gapwidth <- function(merge_gap) {
+  gap <- suppressWarnings(as.numeric(merge_gap))
+  if (length(gap) != 1L || is.na(gap) || !is.finite(gap) || gap < 0 ||
+      gap != floor(gap) || gap >= .Machine$integer.max) {
+    stop("merge_gap must be a single non-negative integer below .Machine$integer.max.", call. = FALSE)
+  }
+  as.integer(gap + 1)
+}
+
 #' Merge overlapping / adjacent large duplication intervals into one call
 #' @keywords internal
 .merge_ptd_intervals <- function(final_df, min_ptd_length, merge_gap, max_plausible_fragments,
                                  thresholds, cov, chrom, coverage_window, log_msg = message) {
-  keep <- which(!is.na(final_df$Length) & final_df$Length >= min_ptd_length)
+  min_gapwidth <- .ptd_merge_min_gapwidth(merge_gap)
+  merge_gap <- min_gapwidth - 1L
+  if (length(chrom) != 1L || is.na(chrom) || !nzchar(as.character(chrom))) {
+    stop("chrom must be a single non-empty chromosome name.", call. = FALSE)
+  }
+  eligible <- !is.na(final_df$Length) & final_df$Length >= min_ptd_length &
+    is.finite(as.numeric(final_df$GenomicPosition))
+  keep <- which(eligible)
   skip <- setdiff(seq_len(nrow(final_df)), keep)
   if (length(keep) == 0L) {
     log_msg(sprintf("No duplications >= %d bp found; skipping merge.", min_ptd_length))
@@ -662,11 +680,13 @@ detect_itd <- function(
   }
   log_msg(sprintf("Merging %d large duplication intervals (gap <= %d bp)...", length(keep), merge_gap))
   gr <- GenomicRanges::GRanges(
-    seqnames = final_df$Genome[keep],
+    seqnames = rep(as.character(chrom), length(keep)),
     ranges = IRanges::IRanges(start = final_df$GenomicPosition[keep],
                               end = final_df$GenomicPosition[keep] + final_df$Length[keep] - 1L)
   )
-  merged_gr <- GenomicRanges::reduce(gr, min.gapwidth = merge_gap)
+  # GenomicRanges merges when the intervening gap is strictly shorter than
+  # min.gapwidth. Add one so a gap exactly equal to merge_gap is included.
+  merged_gr <- GenomicRanges::reduce(gr, min.gapwidth = min_gapwidth)
   if (length(merged_gr) == 0L) {
     log_msg("No intervals could be merged.")
     return(final_df)

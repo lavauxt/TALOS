@@ -146,7 +146,16 @@
     } else {
       character(0)
     }
-    path_w <- sum(forward$weight[edge_pair_key %in% path_pairs])
+    # Dijkstra relaxes duplicate edges using the cheapest edge for each
+    # transition. Sum that same minimum cost here; summing every evidence row
+    # for a path pair over-penalised transitions represented by multiple
+    # evidence classes (for example a canonical edge plus a split-read edge).
+    edge_min_weight <- tapply(forward$weight, edge_pair_key, min, na.rm = TRUE)
+    path_w <- if (length(path_pairs)) {
+      sum(unname(edge_min_weight[path_pairs]), na.rm = TRUE)
+    } else {
+      0
+    }
     back_w <- -log(back_edges$prob[i] + 1e-9)
     support <- back_edges$support_count[i]
     dup_start <- col_or_na(back_edges, "dup_start", i)
