@@ -300,6 +300,15 @@ details.colmenu > summary::-webkit-details-marker { display: none; }
 .kv.wide > div { display: grid; grid-template-columns: 48% 52%; gap: 8px; border-bottom: 1px dashed var(--grid); padding: 2px 0; }
 .kv.wide dt, .kv.wide dd { font-size: 12.5px; }
 .group-title { margin: 18px 0 8px; font-size: 15px; color: var(--text-2); }
+
+/* ---- Variant details table (matches Results table visual style) ---- */
+.detail-table-wrap { max-height: 560px; }
+table.tbl.detail-table { font-size: 12.5px; }
+.tbl.detail-table .field-name { color: var(--text-2); font-weight: 600; white-space: nowrap; width: 38%; }
+.tbl.detail-table .detail-value { white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
+.tbl.detail-table .seq-cell { padding: 4px 10px; }
+.tbl.detail-table .seq-cell details.seq summary { margin-top: 0; }
+.tbl.detail-table .seq-cell details.seq pre { max-height: 280px; }
 .vcard { scroll-margin-top: 12px; }
 .vcard.hl { outline: 2px solid var(--accent); outline-offset: 2px; }
 .vcard h3 { font-size: 14px; }
@@ -444,6 +453,13 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767']
   };
   var EXON = { light: '#1baf7a', dark: '#199e70' };
+  // Event track colours: orange for ITD/PTD, reddish for ALU insertions.
+  // Coverage (blue) and exon (green) tracks remain visually distinct.
+  var EVENT_COLOR = {
+    itd: { light: '#e67e22', dark: '#f97316' },  // orange
+    alu: { light: '#c0392b', dark: '#ef4444' }   // reddish
+  };
+  function eventColor(t) { return EVENT_COLOR[isAlu ? 'alu' : 'itd'][t]; }
   var FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif";
   var themePref = store('talos-theme') || 'auto';
   function resolved() {
@@ -545,6 +561,44 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
       else { dl.appendChild(h('dt', { text: k })); dl.appendChild(h('dd', { text: v })); }
     });
     return dl;
+  }
+  // Variant details table: matches the Results table visual style (.tbl with
+  // column-group header strips, sticky header, hover). Two columns: Field | Value.
+  // Long values wrap; the optional sequence is a collapsible row.
+  function variantDetailTable(v) {
+    var thead = h('thead', null, h('tr', null,
+      h('th', { scope: 'col', class: 'g-identity no-sort', text: 'Field' }),
+      h('th', { scope: 'col', class: 'g-call no-sort', text: 'Value' })));
+    var tbody = h('tbody');
+    var keys = arr(v.keys), values = arr(v.values);
+    keys.forEach(function (k, i) {
+      var val = values[i];
+      var valStr = (val === null || val === undefined || val === '') ? '' : String(val);
+      var td = h('td', { class: 'detail-value' });
+      if (!valStr) {
+        td.appendChild(h('span', { class: 'cell-muted', text: '\u2014' }));
+      } else if (valStr.length > 120) {
+        var span = h('span', { class: 'mono', text: valStr.slice(0, 117) + '\u2026' });
+        td.appendChild(span);
+        td.title = valStr;
+      } else {
+        td.textContent = valStr;
+      }
+      tbody.appendChild(h('tr', null,
+        h('td', { class: 'field-name', text: k }),
+        td));
+    });
+    if (v.sequence) {
+      var seqTd = h('td', { class: 'detail-value seq-cell' });
+      seqTd.appendChild(h('details', { class: 'seq' },
+        h('summary', { text: v.sequence.length + ' bp \u2014 click to expand' }),
+        h('pre', { text: v.sequence })));
+      tbody.appendChild(h('tr', null,
+        h('td', { class: 'field-name', text: isAlu ? 'ALU sequence' : 'ITD sequence' }),
+        seqTd));
+    }
+    return h('div', { class: 'tbl-wrap detail-table-wrap' },
+      h('table', { class: 'tbl detail-table', 'aria-label': 'Variant details' }, thead, tbody));
   }
 
   // ------------------------------------------------------------------ column docs & groups
@@ -1361,7 +1415,7 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
         var b = h('button', { type: 'button',
           'aria-pressed': hidden[v.vid] ? 'false' : 'true',
           onclick: function () { hidden[v.vid] = !hidden[v.vid]; draw(); } },
-          h('span', { class: 'swatch', style: { background: color(k, resolved()) } }),
+          h('span', { class: 'swatch', style: { background: eventColor(resolved()) } }),
           v.label);
         legend.appendChild(b);
       });
@@ -1386,15 +1440,15 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     if (arr(P.exons).length) data.push({ type: 'scatter', mode: 'markers', x: arr(P.exons).map(function (e) { return (e.x0 + e.x1) / 2; }), y: arr(P.exons).map(function () { return 0.5; }),
       text: arr(P.exons).map(function (e) { return '<b>' + e.label + '</b><br>' + P.chrom + ':' + e.start + '-' + e.end; }), marker: { size: 1, opacity: 0 }, yaxis: 'y2', hoverinfo: 'text', name: 'Exons' });
     arr(P.itd_cov).forEach(function (d) {
-      var k = indexOfVid(vs, d.vid);
       if (hidden[d.vid]) return;
-      data.push({ type: 'scatter', mode: 'lines', x: arr(d.x), y: arr(d.y), customdata: arr(d.pos), fill: 'tozeroy', yaxis: 'y3', name: 'ITD cov',
-        line: { color: color(k, t), width: 2 }, fillcolor: alpha(color(k, t), 0.18), hovertemplate: 'ITD pos %{customdata}<br>reads %{y}<extra></extra>' });
+      var ec = eventColor(t);
+      data.push({ type: 'scatter', mode: 'lines', x: arr(d.x), y: arr(d.y), customdata: arr(d.pos), fill: 'tozeroy', yaxis: 'y3', name: isAlu ? 'ALU cov' : 'ITD cov',
+        line: { color: ec, width: 2 }, fillcolor: alpha(ec, 0.18), hovertemplate: (isAlu ? 'ALU' : 'ITD') + ' pos %{customdata}<br>reads %{y}<extra></extra>' });
     });
     var step = Math.max(0.1, Math.min(0.18, 0.85 / n));
     vs.forEach(function (v, k) {
       if (hidden[v.vid]) return;
-      var y = 0.08 + k * step, col_ = color(k, t);
+      var y = 0.08 + k * step, col_ = eventColor(t);
       var point = v.len <= 0 || Math.abs(v.x1 - v.x0) < 0.5;
       data.push(point
         ? { type: 'scatter', mode: 'markers', x: [v.x0], y: [y], yaxis: 'y4', marker: { symbol: 'line-ns-open', size: 18, color: col_, line: { width: 3, color: col_ } }, text: [v.hover], hoverinfo: 'text', meta: { vid: v.vid }, name: v.label }
@@ -1408,7 +1462,7 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
         xaxis: axisStyle(t, { anchor: 'y4', range: [P.from, P.to], tickvals: arr(P.ticks), ticktext: arr(P.tick_labels), title: { text: P.chrom + ' (compressed, ' + P.build + (P.strand ? ', strand ' + P.strand : '') + ')' } }),
         yaxis: axisStyle(t, { domain: [0.56, 1], title: { text: 'Depth' }, rangemode: 'tozero' }),
         yaxis2: hide({ domain: [0.46, 0.53], range: [0, 1], anchor: 'x', title: { text: 'Exons' } }),
-        yaxis3: axisStyle(t, { domain: [0.32, 0.43], anchor: 'x', title: { text: isAlu ? '' : 'ITD cov' }, rangemode: 'tozero', fixedrange: true }),
+        yaxis3: axisStyle(t, { domain: [0.32, 0.43], anchor: 'x', title: { text: isAlu ? 'ALU cov' : 'ITD cov' }, rangemode: 'tozero', fixedrange: true }),
         yaxis4: hide({ domain: [0, 0.29], anchor: 'x', range: [0, Math.max(1, 0.16 + n * step)], title: { text: isAlu ? 'Insertions' : 'Calls' } })
       })
     };
@@ -1425,8 +1479,7 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     VARIANTS.forEach(function (v) {
       var g = v.sample + ' \u00b7 ' + v.gene;
       if (g !== lastGroup) { list.appendChild(h('h2', { class: 'group-title', text: 'Sample: ' + v.sample + ' \u00b7 ' + v.gene })); lastGroup = g; }
-      var body = h('div', null, kv(v.keys, v.values, true));
-      if (v.sequence) body.appendChild(h('details', { class: 'seq' }, h('summary', { text: (isAlu ? 'Matched ALU sequence' : 'ITD sequence') + ' (' + v.sequence.length + ' bp)' }), h('pre', { text: v.sequence })));
+      var body = h('div', null, variantDetailTable(v));
       var c = card(v.title, v.flag ? 'review flagged' : null, body, { id: 'v-' + v.id, class: 'card vcard' });
       var hdr = $('header', c);
       if (v.hotspot) hdr.appendChild(h('span', { class: 'badge badge-hotspot', text: '\u2605 ' + (v.hotspot_name || 'hotspot') }));
