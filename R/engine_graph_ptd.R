@@ -3,7 +3,11 @@
 .consensus_coord <- function(x, precise) {
   xp <- x[precise & !is.na(x)]
   if (length(xp)) return(as.integer(.mode(xp)))
-  as.integer(round(stats::median(x, na.rm = TRUE)))
+  # [FIX] Guard against all-NA input: stats::median(na.rm = TRUE) on an
+  # all-NA vector returns NA with a warning. Suppress and return NA cleanly.
+  xm <- x[!is.na(x)]
+  if (length(xm) == 0L) return(NA_integer_)
+  as.integer(round(stats::median(xm)))
 }
 
 #' Map tandem-duplication evidence onto annotated exon-graph edges
@@ -101,7 +105,7 @@
       mat <- matrix(adj[[u]], ncol = 2)
       for (r in seq_len(nrow(mat))) {
         v <- mat[r, 1]; w <- mat[r, 2]
-        if (dist[u] + w < dist[v]) { dist[v] <- dist[u] + w; prev[v] <- u }
+        if (dist[u] + w < dist[v]) { dist[v] <- dist[u] + w; prev[v] = u }
       }
     }
   }
@@ -193,6 +197,11 @@
                                         min_support = 2L) {
   ex <- .exons_df(exons)
   if (is.null(ex) || nrow(ex) < 1L || is.null(evidence) || nrow(evidence) == 0L) return(list())
+
+  # [FIX] Guard against NA values in max_exon_distance (can arise from YAML
+  # parsing). The %||% operator only catches NULL, not NA.
+  if (is.na(max_exon_distance)) max_exon_distance <- 5000L
+
   ptd_edges <- .map_evidence_to_exon_edges(evidence, ex, max_distance = max_exon_distance)
   if (nrow(ptd_edges) == 0L) return(list())
   exon_names <- paste0("Exon_", ex$exon_idx)
@@ -233,10 +242,19 @@ extract_graph_candidates <- function(bam_file, gene_config, max_exon_distance = 
                                      expected_isize_max = NULL) {
   gs <- gene_config$graph_settings
   if (is.null(gene_config$all_exons) || length(gene_config$all_exons) < 1L) return(list())
+
+  # [FIX] Guard against NA values from YAML: %||% only catches NULL.
   max_exon_distance <- max_exon_distance %||% gs$max_exon_distance %||% 5000L
+  if (is.na(max_exon_distance)) max_exon_distance <- 5000L
+
   buffer_bp <- buffer_bp %||% gs$buffer_bp %||% 15000L
+  if (is.na(buffer_bp)) buffer_bp <- 15000L
+
   min_support <- min_support %||% gs$min_support %||% 2L
+  if (is.na(min_support)) min_support <- 2L
+
   expected_isize_max <- expected_isize_max %||% gs$expected_isize_max %||% 1000L
+  if (is.na(expected_isize_max)) expected_isize_max <- 1000L
 
   bam_dt <- .get_evidence_dt(bam_file, gene_config, buffer_bp = buffer_bp)
   if (nrow(bam_dt) == 0L) return(list())

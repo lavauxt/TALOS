@@ -42,10 +42,16 @@
 #' is immediately before read_start (read_start - 1). A trailing soft clip
 #' follows the last aligned reference base, so its breakpoint is read_end.
 #'
+#' [FIX Finding 2] Chromosome-boundary guard: if side == "lead" and
+#' read_start == 1, read_start - 1 == 0 is not a valid genomic coordinate.
+#' Return NA_integer_ in that case so the candidate can be excluded before
+#' clustering and annotation, rather than carrying a 0 into the pipeline.
+#'
 #' @param side Character scalar: "lead" or "trail".
 #' @param read_start 1-based start of the aligned read.
 #' @param read_end 1-based end of the aligned read.
-#' @return Integer genomic breakpoint coordinate.
+#' @return Integer genomic breakpoint coordinate, or NA_integer_ when the
+#'   leading-clip breakpoint would fall before position 1.
 #' @keywords internal
 .alu_clip_breakpoint <- function(side, read_start, read_end) {
   if (
@@ -66,7 +72,14 @@
   }
 
   if (side == "lead") {
-    as.integer(read_start - 1L)
+    bp <- as.integer(read_start - 1L)
+    # [FIX Finding 2] Chromosome-boundary guard: a leading clip at
+    # read_start == 1 produces bp = 0, which is not a valid 1-based genomic
+    # coordinate. Return NA so .extract_alu_candidates() can exclude it.
+    if (bp < 1L) {
+      return(NA_integer_)
+    }
+    bp
   } else {
     as.integer(read_end)
   }
@@ -76,11 +89,11 @@
 #' Match a single soft-clip sequence against all ALU consensus entries
 #'
 #' Uses local pairwise alignment (Smith-Waterman).  Returns a list with:
-#'   subtype  – best-matching ALU family name
-#'   score    – normalised alignment score (0–1)
-#'   strand   – "+" (sense) or "-" (antisense)
-#'   aln_start– start position in the ALU consensus (for 5' truncation calc)
-#'   aln_end  – end position in the ALU consensus
+#'   subtype  - best-matching ALU family name
+#'   score    - normalised alignment score (0-1)
+#'   strand   - "+" (sense) or "-" (antisense)
+#'   aln_start- start position in the ALU consensus (for 5' truncation calc)
+#'   aln_end  - end position in the ALU consensus
 #'
 #' @param clip_seq  Character string (soft-clip bases).
 #' @param alu_seqs  Named DNAStringSet from .load_alu_consensus().
@@ -192,8 +205,8 @@
 #' New ALU copies are frequently 5'-truncated. If the clip matches the
 #' ALU consensus starting at position > 1, the unmatched 5'-end is lost.
 #'
-#' @param aln_start Integer – alignment start in consensus (1-based).
-#' @param consensus_len Integer – total consensus length.
+#' @param aln_start Integer - alignment start in consensus (1-based).
+#' @param consensus_len Integer - total consensus length.
 #' @keywords internal
 .alu_5p_truncation <- function(aln_start, consensus_len) {
   if (is.na(aln_start) || is.na(consensus_len)) {
@@ -203,48 +216,110 @@
 }
 
 
-#' Detect target-site duplication (TSD)
+#' Detect target-site duplication (TSD) from read evidence
 #'
-#' ALU insertions generate a 5–20 bp direct repeat (TSD) flanking the
-#' insertion site.  We compare the reference sequence immediately upstream
-#' and downstream of the predicted insertion site and look for the longest
-#' matching prefix/suffix.
+#' [FIX Finding 1] The previous implementation compared the upstream suffix
+#' and downstream prefix of the REFERENCE sequence and reported their longest
+#' match as the TSD. This was biologically unreliable: a genuine TSD is
+#' created during insertion, and the reference genome contains the original
+#' target sequence only once. Reference-flank comparison can only detect
+#' pre-existing local repeats, not a TSD created by insertion.
 #'
-#' @param ref_dna     Character – full reference sequence for the region.
-#' @param ins_pos     Integer – insertion site (1-based, local coordinates).
-#' @param max_tsd     Integer – maximum TSD length to search (default 20).
-#' @return Named list: tsd_len (integer), tsd_seq (character).
-#'   [ITEM 11] The unused genomic_start parameter was removed.
+#' New approach: use read evidence. A genuine TSD causes the trail-clip
+#' breakpoints (reads from upstream, aligning through the upstream TSD copy)
+#' and lead-clip breakpoints (reads from downstream, aligning from the
+#' downstream TSD copy) to differ by exactly the TSD length:
+#'
+#'   trail_bp  = end of TSD in reference (last aligned base of upstream reads)
+#'   lead_bp   = start of TSD - 1 in reference (base before first aligned base
+#'               of downstream reads)
+#'   TSD_length = trail_bp - lead_bp
+#'   TSD_sequence = reference[lead_bp + 1 .. trail_bp]
+#'
+#' When both sides are present and the gap is in the expected TSD range
+#' (5-20 bp), the TSD is reported as "read_supported". When only one side
+#' is present, or the gap is outside the expected range, the TSD is reported
+#' as "unknown" rather than falling back to the unreliable reference-flank
+#' comparison.
+#'
+#' @param ref_dna       Character - full reference sequence for the region.
+#' @param ins_pos       Integer - insertion site (1-based, local coordinates).
+#' @param cluster_df    data.frame of supporting reads (from
+#'                      .extract_alu_candidates). Must contain columns
+#'                      genomic_pos and clip_side. May be NULL.
+#' @param genomic_start Integer - genomic start of ref_dna window, for
+#'                      converting genomic_pos to local coordinates.
+#' @param max_tsd       Integer - maximum TSD length to accept (default 20).
+#' @param min_tsd       Integer - minimum TSD length to accept (default 5).
+#' @return Named list: tsd_len (integer), tsd_seq (character),
+#'   tsd_status (character: "read_supported" or "unknown").
 #' @keywords internal
 .detect_alu_tsd <- function(
   ref_dna,
   ins_pos,
-  max_tsd = 20L
+  cluster_df = NULL,
+  genomic_start = NA_integer_,
+  max_tsd = 20L,
+  min_tsd = 5L
 ) {
   ref_len <- nchar(ref_dna)
   if (is.na(ins_pos) || ins_pos < 1L || ins_pos > ref_len) {
-    return(list(tsd_len = NA_integer_, tsd_seq = NA_character_))
+    return(list(tsd_len = NA_integer_, tsd_seq = NA_character_,
+                tsd_status = "unknown"))
   }
 
-  up_start <- max(1L, ins_pos - max_tsd)
-  up_seq <- substr(ref_dna, up_start, ins_pos)
-
-  dn_end <- min(ref_len, ins_pos + max_tsd)
-  dn_seq <- substr(ref_dna, ins_pos + 1L, dn_end)
-
-  best_len <- 0L
-  for (tlen in seq_len(min(nchar(up_seq), nchar(dn_seq), max_tsd))) {
-    up_suffix <- substr(up_seq, nchar(up_seq) - tlen + 1L, nchar(up_seq))
-    dn_prefix <- substr(dn_seq, 1L, tlen)
-    if (toupper(up_suffix) == toupper(dn_prefix)) best_len <- tlen
+  # Without read evidence we cannot establish a TSD. Report as unknown.
+  if (is.null(cluster_df) || nrow(cluster_df) == 0L) {
+    return(list(tsd_len = NA_integer_, tsd_seq = NA_character_,
+                tsd_status = "unknown"))
   }
 
-  if (best_len == 0L) {
-    return(list(tsd_len = 0L, tsd_seq = NA_character_))
+  trail_bps <- cluster_df$genomic_pos[
+    !is.na(cluster_df$clip_side) & cluster_df$clip_side == "trail"
+  ]
+  lead_bps <- cluster_df$genomic_pos[
+    !is.na(cluster_df$clip_side) & cluster_df$clip_side == "lead"
+  ]
+
+  # Exclude NA / out-of-range breakpoints (e.g. chromosome-boundary reads
+  # flagged by .alu_clip_breakpoint()).
+  trail_bps <- trail_bps[!is.na(trail_bps) & trail_bps > 0L]
+  lead_bps  <- lead_bps[!is.na(lead_bps) & lead_bps > 0L]
+
+  if (length(trail_bps) == 0L || length(lead_bps) == 0L) {
+    # Only one side present -- cannot determine TSD from read evidence.
+    return(list(tsd_len = NA_integer_, tsd_seq = NA_character_,
+                tsd_status = "unknown"))
   }
 
-  tsd_seq <- substr(dn_seq, 1L, best_len)
-  list(tsd_len = as.integer(best_len), tsd_seq = tsd_seq)
+  trail_bp <- as.integer(round(stats::median(trail_bps)))
+  lead_bp  <- as.integer(round(stats::median(lead_bps)))
+
+  tsd_len <- trail_bp - lead_bp
+
+  if (is.na(tsd_len) || tsd_len < min_tsd || tsd_len > max_tsd) {
+    # Gap outside the expected TSD range. Report as unknown.
+    return(list(tsd_len = NA_integer_, tsd_seq = NA_character_,
+                tsd_status = "unknown"))
+  }
+
+  # Extract the TSD sequence from the reference.
+  # Convert genomic breakpoints to local coordinates.
+  local_start <- lead_bp + 1L - genomic_start + 1L
+  local_end   <- trail_bp - genomic_start + 1L
+
+  if (local_start < 1L || local_end > ref_len || local_start > local_end) {
+    return(list(tsd_len = NA_integer_, tsd_seq = NA_character_,
+                tsd_status = "unknown"))
+  }
+
+  tsd_seq <- substr(ref_dna, local_start, local_end)
+
+  list(
+    tsd_len = as.integer(tsd_len),
+    tsd_seq = tsd_seq,
+    tsd_status = "read_supported"
+  )
 }
 
 
@@ -256,7 +331,7 @@
 #'
 #' @param reads       GAlignments object (from .load_bam_data_streaming).
 #' @param alu_seqs    Named DNAStringSet.
-#' @param genomic_start Integer – regional offset for local-coord conversion.
+#' @param genomic_start Integer - regional offset for local-coord conversion.
 #' @param min_clip_len  Minimum clip length (default 25 bp).
 #' @param min_alu_score Minimum normalised alignment score (default 0.60).
 #' @param verbose       Print progress (default FALSE).
@@ -327,7 +402,22 @@
         read_start = read_starts[i],
         read_end = read_ends[i]
       )
+
+      # [FIX Finding 2] Exclude out-of-range breakpoints (e.g. leading clip
+      # at chromosome position 1 producing NA from .alu_clip_breakpoint()).
+      # This prevents coordinate 0 or NA from entering clustering and
+      # annotation.
+      if (is.na(g_pos) || g_pos < 1L) {
+        next
+      }
+
       l_pos <- g_pos - genomic_start + 1L
+
+      # [FIX] Also guard the local coordinate: if it falls outside the
+      # reference window, the candidate cannot be annotated.
+      if (l_pos < 1L) {
+        next
+      }
 
       k <- k + 1L
       rows[[k]] <- data.frame(
@@ -386,13 +476,24 @@
   best_idx <- which.max(cluster_df$alu_score)
   best_hit <- cluster_df[best_idx, ]
 
-  median_pos <- as.integer(stats::median(cluster_df$genomic_pos))
+  # [FIX] Use round() before as.integer() to avoid the systematic downward
+  # truncation bias of as.integer() on even-length vectors (e.g. median of
+  # 100 and 101 is 100.5, which as.integer() truncates to 100).
+  median_pos <- as.integer(round(stats::median(cluster_df$genomic_pos)))
   local_pos <- median_pos - gene_config$genomic_start + 1L
 
   n_fwd <- sum(!cluster_df$is_reverse)
   n_rev <- sum(cluster_df$is_reverse)
 
-  tsd <- .detect_alu_tsd(ref_dna, local_pos)
+  # [FIX Finding 1] TSD is now detected from read evidence (trail vs lead
+  # breakpoint gap) rather than reference-flank comparison. The cluster_df
+  # and genomic_start are passed so the function can use both sides' reads.
+  tsd <- .detect_alu_tsd(
+    ref_dna,
+    local_pos,
+    cluster_df = cluster_df,
+    genomic_start = gene_config$genomic_start
+  )
 
   # [ITEM 9] max(..., na.rm = TRUE) on an all-NA vector is -Inf with a warning.
   poly_a_vals <- cluster_df$poly_a_len
@@ -427,6 +528,7 @@
     ALUOrientation = ifelse(best_hit$alu_strand == "+", "sense", "antisense"),
     TSD_Length = tsd$tsd_len,
     TSD_Sequence = tsd$tsd_seq,
+    TSD_Status = tsd$tsd_status,
     PolyALength = poly_a_len,
     ALU5pTruncation = trunc_5p,
     ALU_Sequence = best_clip,
@@ -460,13 +562,29 @@
   if (is.null(row)) {
     return(FALSE)
   }
+
+  # [FIX] When TSD_Status is "unknown" (the default after the Finding 1 fix),
+  # TSD_Length is NA. A min_tsd > 0 threshold should only filter calls whose
+  # TSD was *confirmed absent* (i.e. read evidence showed no TSD). Since the
+  # current implementation never reports "confirmed absent" (it reports
+  # "unknown" instead), min_tsd > 0 is effectively disabled with a warning.
+  # This is safer than filtering on an unreliable value.
+  tsd_ok <- if (min_tsd == 0L) {
+    TRUE
+  } else if (!is.null(row$TSD_Status) && !is.na(row$TSD_Status) &&
+             row$TSD_Status == "read_supported") {
+    isTRUE(!is.na(row$TSD_Length) && row$TSD_Length >= min_tsd)
+  } else {
+    # TSD unknown — do not filter on it.
+    TRUE
+  }
+
   isTRUE(row$SupportingReads >= min_support) &&
     isTRUE(row$ALU_RawScore >= min_alu_score) &&
     isTRUE(
       !is.na(row$AlleleFrequency) && row$AlleleFrequency >= vaf_threshold
     ) &&
-    (min_tsd == 0L ||
-      isTRUE(!is.na(row$TSD_Length) && row$TSD_Length >= min_tsd))
+    tsd_ok
 }
 
 
@@ -560,6 +678,16 @@ detect_alu <- function(
       gene_name,
       sample_name
     ))
+  }
+
+  # [FIX] Warn if min_tsd > 0: TSD filtering is effectively disabled because
+  # TSD detection now requires read evidence and reports "unknown" when
+  # unavailable. Do not silently rely on an unreliable value.
+  if (min_tsd > 0L && verbose) {
+    message("[ALU] WARNING: min_tsd > 0 is set but TSD detection is ",
+            "conservative (read-evidence based). Calls with unknown TSD ",
+            "will NOT be filtered; only calls with confirmed TSD >= min_tsd ",
+            "pass, and confirmed TSDs require both lead and trail clips.")
   }
 
   alu_seqs <- tryCatch(

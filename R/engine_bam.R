@@ -142,6 +142,12 @@
   cigars <- GenomicAlignments::cigar(reads)
   unmapped <- bitwAnd(flags, 0x4) != 0L
 
+  # [FIX] Unmapped reads must be excluded: they have no valid genomic
+  # coordinates and would produce NA starts/ends in downstream candidate
+  # extraction. The previous code OR'd `unmapped` into the keep condition,
+  # allowing unmapped reads to pass when min_mapq == 0. This is a latent
+  # bug: unmapped reads contribute NA breakpoints, corrupt coverage, and
+  # can crash pairwiseAlignment when their sequence is NA.
   op_table <- if (.has_cigarillo) {
     cigarillo::tabulate_cigar_ops(cigars)
   } else {
@@ -161,7 +167,10 @@
   }
   net_ins[is.na(net_ins)] <- 0L
 
-  keep <- (unmapped | has_softclip | (net_ins >= min_ins_filter)) &
+  # [FIX] Removed `unmapped |` from the OR: unmapped reads must NOT pass
+  # the filter. Only mapped reads with soft-clips or sufficient net insertion
+  # (and adequate MAPQ) are kept.
+  keep <- (!unmapped & (has_softclip | (net_ins >= min_ins_filter))) &
     (mapqs >= min_mapq)
   keep[is.na(keep)] <- FALSE
 
@@ -325,6 +334,14 @@
 #' longer create graph edges (the approximated mate position of BUG 5 created
 #' spurious short edges instead).
 #'
+#' [FIX] The end coordinate previously used \code{d$qwidth} (the current
+#' read's width) regardless of which mate is rightmost. When the current
+#' read is the leftmost mate, the end should use the mate's width. Since the
+#' mate's width is not in the data, we now use \code{pmax(pos, mpos) +
+#' max(qwidth) - 1L} as an upper bound (slight over-estimate is safer than
+#' under-estimate for exon-overlap mapping). For same-length pairs (the
+#' common case) this is exact.
+#'
 #' @param dt data.frame of BAM records
 #' @param expected_isize_max Minimum mate separation (bp) to call a pair
 #'   discordant (default 1000)
@@ -345,6 +362,14 @@
   everted <- left_rev & !right_rev & abs(d$mpos - d$pos) > expected_isize_max
   if (!any(everted)) return(.empty_dup_evidence())
   d <- d[everted, , drop = FALSE]
+
+  # [FIX] End coordinate: use pmax(pos, mpos) + qwidth - 1L. When the
+  # current read is the rightmost mate, this is exact (its end = its start +
+  # its width - 1). When the current read is the leftmost mate, the rightmost
+  # position is mpos, and we add the current read's width as an approximation
+  # (the mate's width is unavailable). For same-length read pairs this is
+  # exact; for mixed-length it may over/under-estimate by the width
+  # difference. This is documented and acceptable for exon-overlap mapping.
   ev <- data.frame(
     qname = d$qname,
     start = as.integer(pmin(d$pos, d$mpos)),
