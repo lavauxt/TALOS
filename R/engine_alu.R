@@ -35,6 +35,44 @@
 }
 
 
+#' Map the soft-clip side to the reference breakpoint coordinate
+#'
+#' Coordinates returned by GAlignments are 1-based. A leading soft clip
+#' precedes the first aligned reference base, so its insertion breakpoint
+#' is immediately before read_start (read_start - 1). A trailing soft clip
+#' follows the last aligned reference base, so its breakpoint is read_end.
+#'
+#' @param side Character scalar: "lead" or "trail".
+#' @param read_start 1-based start of the aligned read.
+#' @param read_end 1-based end of the aligned read.
+#' @return Integer genomic breakpoint coordinate.
+#' @keywords internal
+.alu_clip_breakpoint <- function(side, read_start, read_end) {
+  if (
+    length(side) != 1L ||
+      is.na(side) ||
+      !side %in% c("lead", "trail")
+  ) {
+    stop("side must be 'lead' or 'trail'.", call. = FALSE)
+  }
+
+  if (
+    length(read_start) != 1L ||
+      is.na(read_start) ||
+      length(read_end) != 1L ||
+      is.na(read_end)
+  ) {
+    stop("read_start and read_end must be non-missing scalars.", call. = FALSE)
+  }
+
+  if (side == "lead") {
+    as.integer(read_start - 1L)
+  } else {
+    as.integer(read_end)
+  }
+}
+
+
 #' Match a single soft-clip sequence against all ALU consensus entries
 #'
 #' Uses local pairwise alignment (Smith-Waterman).  Returns a list with:
@@ -249,6 +287,7 @@
   all_flags <- S4Vectors::mcols(reads)$flag
   is_reverse <- bitwAnd(all_flags, 0x10L) != 0L
   read_starts <- BiocGenerics::start(reads)
+  read_ends <- BiocGenerics::end(reads)
   read_cigars <- GenomicAlignments::cigar(reads)
   read_seqs <- as.character(S4Vectors::mcols(reads)$seq)
 
@@ -283,11 +322,11 @@
 
       poly_a <- .detect_poly_a(clip_seq)
 
-      g_pos <- if (side == "lead") {
-        read_starts[i]
-      } else {
-        BiocGenerics::end(reads[i])
-      }
+      g_pos <- .alu_clip_breakpoint(
+        side = side,
+        read_start = read_starts[i],
+        read_end = read_ends[i]
+      )
       l_pos <- g_pos - genomic_start + 1L
 
       k <- k + 1L
