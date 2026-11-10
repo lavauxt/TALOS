@@ -128,17 +128,19 @@
     return(0L)
   }
 
-  count_run <- function(pattern, seq) {
-    m <- gregexpr(pattern, seq, perl = TRUE)[[1L]]
-    if (m[1L] == -1L) {
-      return(0L)
-    }
-    max(attr(m, "match.length"))
+  # A poly-A/T tail is terminal, not merely an A/T-rich run somewhere
+  # inside the soft clip. Searching the whole clip used to annotate internal
+  # ALU bases or unrelated low-complexity sequence as a tail.
+  terminal_run <- function(base, seq) {
+    pattern <- paste0(base, "{", min_run, ",}")
+    left <- regexpr(paste0("^", pattern), seq, perl = TRUE)
+    right <- regexpr(paste0(pattern, "$"), seq, perl = TRUE)
+    left_n <- if (left[1L] < 0L) 0L else attr(left, "match.length")[[1L]]
+    right_n <- if (right[1L] < 0L) 0L else attr(right, "match.length")[[1L]]
+    as.integer(max(left_n, right_n))
   }
 
-  run_a <- count_run(paste0("A{", min_run, ",}"), clip_seq)
-  run_t <- count_run(paste0("T{", min_run, ",}"), clip_seq)
-  best <- max(run_a, run_t)
+  best <- max(terminal_run("A", clip_seq), terminal_run("T", clip_seq))
   if (best < min_run) 0L else as.integer(best)
 }
 

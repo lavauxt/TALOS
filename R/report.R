@@ -636,6 +636,164 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
          stop("Unknown report asset: ", name, call. = FALSE))
 }
 
+
+# Browser-side coverage enhancement. Installed before the report app so it can
+# decorate each Plotly coverage trace at creation time without changing the
+# underlying coverage values or the variant-calling algorithm.
+.talos_coverage_enhancement_js <- function() {
+  r"---((function () {
+  'use strict';
+  if (!window.Plotly) return;
+  ['newPlot', 'react'].forEach(function (method) {
+    var original = window.Plotly[method];
+    if (typeof original !== 'function' || original.__talosCoverageWrapped) return;
+    var wrapped = function (gd, data, layout, config) {
+      if (Array.isArray(data)) {
+        var cov = data.find(function (trace) {
+          return trace && trace.name === 'Coverage' && Array.isArray(trace.y) &&
+            Array.isArray(trace.x) && trace.y.length === trace.x.length;
+        });
+        var already = data.some(function (trace) {
+          return trace && trace.meta && trace.meta.talosCoverageTrend;
+        });
+        if (cov && !already && cov.y.length >= 7) {
+          var ys = cov.y.map(function (v) {
+            return (typeof v === 'number' && Number.isFinite(v)) ? v : null;
+          });
+          var half = Math.max(3, Math.min(10, Math.floor(ys.length / 30)));
+          var smoothed = ys.map(function (_, i) {
+            var win = ys.slice(Math.max(0, i - half), Math.min(ys.length, i + half + 1))
+              .filter(function (v) { return v !== null; }).sort(function (a, b) { return a - b; });
+            if (!win.length) return null;
+            var mid = Math.floor(win.length / 2);
+            return win.length % 2 ? win[mid] : (win[mid - 1] + win[mid]) / 2;
+          });
+          data = data.concat([{
+            type: 'scatter', mode: 'lines', x: cov.x.slice(), y: smoothed,
+            name: 'Coverage trend (rolling median)', hoverinfo: 'skip',
+            line: { color: '#d97706', width: 2, dash: 'dot' },
+            connectgaps: false, showlegend: true, meta: { talosCoverageTrend: true },
+            yaxis: cov.yaxis || 'y'
+          }]);
+        }
+      }
+      return original.call(this, gd, data, layout, config);
+    };
+    wrapped.__talosCoverageWrapped = true;
+    window.Plotly[method] = wrapped;
+  });
+})();)---"
+}
+
+# Full-width raw values explorer: every column is available, including fields
+# hidden from the clinical-first table. It uses the already embedded JSON only.
+.talos_all_values_script <- function() {
+  r"---((function () {
+  'use strict';
+  function init() {
+    var source = document.getElementById('talos-data');
+    var main = document.querySelector('main#panels');
+    if (!source || !main || document.getElementById('talos-all-values')) return;
+    var payload;
+    try { payload = JSON.parse(source.textContent || '{}'); } catch (_) { return; }
+    var table = payload.table || {}, cols = Array.isArray(table.cols) ? table.cols : [];
+    var data = table.data || {}, n = Number(table.n || 0);
+    var section = document.createElement('section');
+    section.id = 'talos-all-values';
+    section.className = 'card';
+    section.style.margin = '18px 0 0';
+    var details = document.createElement('details');
+    details.open = false;
+    var summary = document.createElement('summary');
+    summary.textContent = 'Browse all embedded result values (' + n + ' rows, ' + cols.length + ' columns)';
+    summary.style.cssText = 'cursor:pointer;font-weight:600;font-size:15px;padding:4px 0';
+    details.appendChild(summary);
+    var intro = document.createElement('p');
+    intro.className = 'note';
+    intro.textContent = 'Complete source result table, including sequence and diagnostic metrics. Search across all columns; click a header to sort. This table is embedded in the HTML and works without a server.';
+    details.appendChild(intro);
+    var bar = document.createElement('div'); bar.className = 'tbl-bar';
+    var search = document.createElement('input'); search.type = 'search';
+    search.placeholder = 'Search all values…'; search.setAttribute('aria-label', 'Search all result values');
+    search.style.maxWidth = '420px';
+    var pageSize = document.createElement('select'); pageSize.setAttribute('aria-label', 'Rows per page');
+    [10, 25, 50, 100, 250].forEach(function (v) {
+      var o = document.createElement('option'); o.value = String(v); o.textContent = v + ' rows'; if (v === 25) o.selected = true; pageSize.appendChild(o);
+    });
+    var exportBtn = document.createElement('button'); exportBtn.className = 'btn'; exportBtn.type = 'button'; exportBtn.textContent = 'Export filtered CSV';
+    var count = document.createElement('span'); count.className = 'note';
+    bar.append(search, pageSize, exportBtn, count); details.appendChild(bar);
+    var wrap = document.createElement('div'); wrap.className = 'tbl-wrap'; wrap.style.maxHeight = '520px';
+    var t = document.createElement('table'); t.className = 'tbl';
+    var thead = document.createElement('thead'), tbody = document.createElement('tbody');
+    var hr = document.createElement('tr'), sortCol = -1, sortDir = 1, page = 0;
+    cols.forEach(function (c, j) {
+      var th = document.createElement('th'); th.textContent = c; th.tabIndex = 0;
+      th.title = 'Sort by ' + c;
+      function sort() { if (sortCol === j) sortDir *= -1; else { sortCol = j; sortDir = 1; } page = 0; render(); }
+      th.addEventListener('click', sort); th.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sort(); } });
+      hr.appendChild(th);
+    });
+    thead.appendChild(hr); t.append(thead, tbody); wrap.appendChild(t); details.appendChild(wrap);
+    var foot = document.createElement('div'); foot.className = 'tbl-bar';
+    var prev = document.createElement('button'); prev.className = 'btn'; prev.type = 'button'; prev.textContent = 'Previous';
+    var next = document.createElement('button'); next.className = 'btn'; next.type = 'button'; next.textContent = 'Next';
+    var pageLabel = document.createElement('span'); pageLabel.className = 'note';
+    prev.addEventListener('click', function () { page = Math.max(0, page - 1); render(); });
+    next.addEventListener('click', function () { page++; render(); });
+    foot.append(prev, pageLabel, next); details.appendChild(foot);
+    section.appendChild(details); main.parentNode.insertBefore(section, main.nextSibling);
+    function val(c, i) { var a = data[c]; var v = Array.isArray(a) ? a[i] : null; return v === null || v === undefined ? '' : String(v); }
+    function rows() {
+      var q = search.value.trim().toLowerCase(), out = [];
+      for (var i = 0; i < n; i++) {
+        var row = cols.map(function (c) { return val(c, i); });
+        if (!q || row.some(function (v) { return v.toLowerCase().indexOf(q) >= 0; })) out.push({ i: i, row: row });
+      }
+      if (sortCol >= 0) out.sort(function (a, b) {
+        var x = a.row[sortCol], y = b.row[sortCol], nx = Number(x), ny = Number(y);
+        var bothNumeric = x.trim() !== '' && y.trim() !== '' && Number.isFinite(nx) && Number.isFinite(ny);
+        var cmp = bothNumeric ? nx - ny : x.localeCompare(y, undefined, { numeric: true, sensitivity: 'base' });
+        return cmp * sortDir || a.i - b.i;
+      });
+      return out;
+    }
+    var filtered = [];
+    function render() {
+      filtered = rows();
+      var size = Number(pageSize.value || 25), pages = Math.max(1, Math.ceil(filtered.length / size));
+      page = Math.min(page, pages - 1);
+      var start = page * size, shown = filtered.slice(start, start + size);
+      while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+      shown.forEach(function (item) {
+        var tr = document.createElement('tr');
+        item.row.forEach(function (v) { var td = document.createElement('td'); td.textContent = v === '' ? '—' : v; if (/^-?(?:\d+\.?\d*|\.\d+)$/.test(v)) td.className = 'num'; tr.appendChild(td); });
+        tbody.appendChild(tr);
+      });
+      Array.prototype.forEach.call(hr.children, function (th, j) {
+        th.setAttribute('aria-sort', j !== sortCol ? 'none' : (sortDir === 1 ? 'ascending' : 'descending'));
+      });
+      count.textContent = 'Showing ' + (filtered.length ? start + 1 : 0) + '–' + Math.min(start + shown.length, filtered.length) + ' of ' + filtered.length;
+      pageLabel.textContent = 'Page ' + (page + 1) + ' of ' + pages;
+      prev.disabled = page <= 0; next.disabled = page >= pages - 1;
+    }
+    search.addEventListener('input', function () { page = 0; render(); });
+    pageSize.addEventListener('change', function () { page = 0; render(); });
+    exportBtn.addEventListener('click', function () {
+      function quote(v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }
+      var lines = [cols.map(quote).join(',')];
+      filtered.forEach(function (r) { lines.push(r.row.map(quote).join(',')); });
+      var blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+      var url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = 'TALOS_all_result_values.csv'; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    });
+    render();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+})();)---"
+}
+
 # Local plotly.js: options(TALOS.plotly_js = "<file>"), else the copy shipped
 # with the R 'plotly' package (htmlwidgets library).
 .local_plotly_js <- function() {
@@ -907,7 +1065,9 @@ talos_html_report <- function(result_df,
     "</div></header>\n<main id=\"panels\"></main>\n",
     "<noscript><p style=\"padding:16px\">This report needs JavaScript enabled.</p></noscript>\n",
     "<script id=\"talos-data\" type=\"application/json\">", json, "</script>\n",
-    "<script>\n", .report_asset("talos_report.js"), "\n</script>\n</body>\n</html>\n"
+    "<script>\n", .talos_coverage_enhancement_js(), "\n</script>\n",
+    "<script>\n", .report_asset("talos_report.js"), "\n</script>\n",
+    "<script>\n", .talos_all_values_script(), "\n</script>\n</body>\n</html>\n"
   )
   con <- file(output_file, open = "wb")
   on.exit(close(con), add = TRUE)

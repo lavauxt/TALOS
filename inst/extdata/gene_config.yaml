@@ -3,81 +3,49 @@
 # ============================================================================
 #
 # Required fields per gene
-# ────────────────────────
 #   transcript:      RefSeq NM_ accession (or Ensembl ENST).
-#                    Drives the fetch path (refGene TxDb → biomaRt fallback).
-#   targeted_exons:  1-based exon indices in *transcript* order (5′ → 3′).
-#                    Used to restrict the detection/reporting window.
+#   targeted_exons:  1-based exon indices in transcript order (5' -> 3').
 #
 # Optional fields
-# ───────────────
-#   gene_symbol:     Gene name used in outputs / hotspot matching (default: the YAML key).
-#   cds_offset:      Integer override.  If omitted, auto-computed from the CDS.
-#   build:           Informative only: the build used is the `build` argument of talos().
-#   gene_settings:   Per-gene parameter overrides (any detect_itd() argument,
-#                    plus padding / exon_padding for the analysis window).
-#                    Any key in this block overrides the package default and
-#                    is itself overridable by an explicit caller argument.
-#   graph_settings:  Exon-graph PTD detection (use_exon_graph = TRUE; on by
-#                    default for KMT2A): max_exon_distance, buffer_bp,
-#                    min_support, expected_isize_max.
+#   gene_symbol:     Gene name used in outputs (defaults to YAML key).
+#   cds_offset:      Integer override; otherwise computed from CDS.
+#   build:           Informative only; the build argument passed to talos()
+#                    or talos_alu() controls the reference build.
+#   gene_settings:   Per-gene detect_itd() overrides.
+#   graph_settings:  Exon-graph PTD detection parameters.
+#   alu_settings:    ALU detection parameters used by talos_alu().
 #
-# ALU detection settings  (used by detect_alu() / talos_alu())
-# ─────────────────────────────────────────────────────────────
-# Add an `alu_settings:` block with one or more of:
-#   min_support:       Minimum supporting reads to report an insertion.
-#   min_alu_score:     Minimum normalised Smith-Waterman score (0–1).
-#   min_clip_len:      Minimum soft-clip length to attempt ALU alignment (bp).
-#   cluster_tolerance: Clustering radius for insertion sites (bp).
-#   min_tsd:           Minimum target-site duplication length (0 = disabled).
-#   vaf_threshold:     Minimum allele frequency.
-#
-# Offline / manual mode  (use_db = FALSE)
-# ──────────────────────────────────────
-# Add a build-specific sub-block with pre-fetched coordinates, e.g.:
-#
-#   GENE:
-#     transcript: NM_XXXXXX
-#     targeted_exons: [1, 2]
-#     chrom: chr7
-#     strand: "+"
-#     hg19:
-#       start: 117120017
-#       end:   117382285
-#       exons:
-#         - [117120017, 117120201]
-#         - [117227832, 117228028]
-#
+# IMPORTANT:
+#   - KMT2A exon-graph detection is explicitly enabled below.
+#   - Use gene = "FLT3_ALU" / "KMT2A_ALU" with talos_alu().
+#   - targeted_exons are transcript-order indices, not genomic-order indices.
 # ============================================================================
 
 # ── ITD / PTD genes ──────────────────────────────────────────────────────────
 
 FLT3:
-  transcript: NM_004119         # FLT3 ITD / TKD region
+  transcript: NM_004119
   targeted_exons: [14, 15]
   build: hg19
   cds_offset: 93
 
-
 KMT2A:
   transcript: NM_005933
-  targeted_exons: [2,3,4,5,6,7,8,9,10,11,12]
+  targeted_exons: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
   build: hg19
   gene_settings:
-    # Analysis window = targeted exons +/- padding. PTD breakpoints are
-    # intronic (often upstream of exon 2): with the default 500 bp the S side
-    # of the duplication falls outside the window, its coverage reads 0 and
-    # min_local_coverage rejects the call. 5000 matches max_exon_distance.
+    # Wider window is needed for intronic PTD breakpoints.
     padding: 5000
-    ptd_mode: FALSE
+    ptd_mode: false
+    use_exon_graph: true
     min_support: 3
     min_size: 15
     max_itd_length: 30000
-    convert_long_to_ptd: TRUE
+    convert_long_to_ptd: true
     min_coverage_drop: 0
     max_missing_kmers: 0.8
     min_length: 1000
-    merge_ptd_intervals: TRUE
+    merge_ptd_intervals: true
     merge_gap: 9000
     min_ptd_length: 200
     min_wt_reads: 20
@@ -87,50 +55,47 @@ KMT2A:
     require_unique_anchor: true
     search_window: 15000
   graph_settings:
-    max_exon_distance: 5000     # breakpoints further than this from any exon are ignored
-    buffer_bp: 15000            # BAM scan flank for split reads / everted pairs
-    min_support: 2              # distinct reads per PTD cycle (pre-filter; min_support above applies after)
-    expected_isize_max: 1000    # mate separation above which an everted (RF) pair counts as DUP evidence
-
+    max_exon_distance: 5000
+    buffer_bp: 15000
+    min_support: 2
+    expected_isize_max: 1000
 
 BCOR:
-  transcript: NM_001123385      # BCOR internal tandem duplication, exon 15
+  transcript: NM_001123385
   targeted_exons: [15]
   build: hg19
 
-
 UBTF:
-  transcript: NM_014233         # UBTF tandem duplication, exon 13
+  transcript: NM_014233
   targeted_exons: [13]
   build: hg19
 
-# ── ALU insertion target regions (whole-gene or regulatory) ──────────────────
-# These entries are used exclusively with detect_alu() / talos_alu().
-# They define wider windows (all exons) because ALU insertions can fall
-# anywhere in the gene body, not just in the previously targeted exons.
+# ── ALU insertion target regions ─────────────────────────────────────────────
+# Confirm the exon lists span the complete transcript if whole-gene screening
+# is intended.
 
 FLT3_ALU:
   gene_symbol: FLT3
   transcript: NM_004119
-  targeted_exons: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]
+  targeted_exons: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
   build: hg19
   cds_offset: 93
   alu_settings:
-    min_support:       3
-    min_alu_score:     0.60
-    min_clip_len:      25
+    min_support: 3
+    min_alu_score: 0.60
+    min_clip_len: 25
     cluster_tolerance: 15
-    min_tsd:           3
+    min_tsd: 3
 
 KMT2A_ALU:
   gene_symbol: KMT2A
   transcript: NM_005933
-  targeted_exons: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30]
+  targeted_exons: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
   build: hg19
   alu_settings:
-    min_support:       3
-    min_alu_score:     0.58       # slightly relaxed for large intronic regions
-    min_clip_len:      25
+    min_support: 3
+    min_alu_score: 0.58
+    min_clip_len: 25
     cluster_tolerance: 25
-    min_tsd:           3
-    vaf_threshold:     0.005
+    min_tsd: 3
+    vaf_threshold: 0.005

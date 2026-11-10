@@ -1,0 +1,8 @@
+test_that("ALU poly-A/T annotation requires a terminal run", {
+  expect_equal(.detect_poly_a("CCAAAAAAGG"), 0L)
+  expect_equal(.detect_poly_a("CCGGAAAAAA"), 6L)
+  expect_equal(.detect_poly_a("TTTTTTCCGG"), 6L)
+  expect_equal(.detect_poly_a("CCGGTTTTTT"), 6L)
+  expect_equal(.detect_poly_a("CCGGAAATTT"), 0L)
+  expect_equal(.detect_poly_a(NA_character_), 0L)
+})
