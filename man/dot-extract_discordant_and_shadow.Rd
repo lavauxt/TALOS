@@ -26,4 +26,21 @@ rightmost mate by definition) and ignored orientation and chromosome.
 Shadow reads (mate unmapped) carry no partner coordinate, so they no
 longer create graph edges (the approximated mate position of BUG 5 created
 spurious short edges instead).
+
+[FIX] The end coordinate previously used \code{d$qwidth} (the current
+read's width) regardless of which mate is rightmost. When the current
+read is the leftmost mate, the end should use the mate's width. Since the
+mate's width is not in the data, we now use \code{pmax(pos, mpos) +
+max(qwidth) - 1L} as an upper bound (slight over-estimate is safer than
+under-estimate for exon-overlap mapping). For same-length pairs (the
+common case) this is exact.
+
+[ITEM 5] For mixed-length read pairs the upper bound above is off by the
+width difference. We now look up the mate's qwidth from the same data
+frame: each pair typically contributes two rows (one per mate) to \code{dt},
+so a hash from \code{paste(qname, pos)} to \code{qwidth} lets us recover
+the mate's actual width by keying on \code{paste(qname, mpos)}. When the
+mate's record is missing from the scanned region (only one mate in
+\code{dt}), we fall back to the current read's qwidth, which is exact for
+same-length pairs and the original approximation otherwise.
 }

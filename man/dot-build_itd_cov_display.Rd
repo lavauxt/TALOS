@@ -2,14 +2,15 @@
 % Please edit documentation in R/report.R
 \name{.build_itd_cov_display}
 \alias{.build_itd_cov_display}
-\title{[ITEM 13] Build per-variant ITD-coverage display rows from ITDCoverageRLE.}
+\title{Build per-variant ITD-coverage display rows from stored per-base coverage.
+Missing combined RLEs fall back to source-specific RLEs when available.}
 \usage{
 .build_itd_cov_display(itd_df, dup_ends, axis_ctx)
 }
 \arguments{
-\item{itd_df}{Data frame with columns GenomicPosition and ITDCoverageRLE.}
+\item{itd_df}{Data frame with GenomicPosition and coverage RLE columns.}
 
-\item{dup_ends}{Integer vector of duplication end positions (same length as nrow(itd_df)).}
+\item{dup_ends}{Integer vector of duplication end positions.}
 
 \item{axis_ctx}{Compressed axis context from .build_compressed_axis().}
 }
@@ -17,8 +18,6 @@
 data.frame(variant, disp_pos, count, raw_idx); possibly empty.
 }
 \description{
-Variants whose ITDCoverageRLE is NA or empty are silently skipped, so the
-returned data.frame may contain fewer distinct `variant` ids than
-nrow(itd_df). Callers must not assume one row-block per input variant
-(every caller iterates over the rows that exist).
+Build per-variant ITD-coverage display rows from stored per-base coverage.
+Missing combined RLEs fall back to source-specific RLEs when available.
 }

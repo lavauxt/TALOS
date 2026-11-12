@@ -2,25 +2,61 @@
 % Please edit documentation in R/engine_alu.R
 \name{.detect_alu_tsd}
 \alias{.detect_alu_tsd}
-\title{Detect target-site duplication (TSD)}
+\title{Detect target-site duplication (TSD) from read evidence}
 \usage{
-.detect_alu_tsd(ref_dna, ins_pos, max_tsd = 20L)
+.detect_alu_tsd(
+  ref_dna,
+  ins_pos,
+  cluster_df = NULL,
+  genomic_start = NA_integer_,
+  max_tsd = 20L,
+  min_tsd = 5L
+)
 }
 \arguments{
-\item{ref_dna}{Character – full reference sequence for the region.}
+\item{ref_dna}{Character - full reference sequence for the region.}
 
-\item{ins_pos}{Integer – insertion site (1-based, local coordinates).}
+\item{ins_pos}{Integer - insertion site (1-based, local coordinates).}
 
-\item{max_tsd}{Integer – maximum TSD length to search (default 20).}
+\item{cluster_df}{data.frame of supporting reads (from
+.extract_alu_candidates). Must contain columns
+genomic_pos and clip_side. May be NULL.}
+
+\item{genomic_start}{Integer - genomic start of ref_dna window, for
+converting genomic_pos to local coordinates.}
+
+\item{max_tsd}{Integer - maximum TSD length to accept (default 20).}
+
+\item{min_tsd}{Integer - minimum TSD length to accept (default 5).}
 }
 \value{
-Named list: tsd_len (integer), tsd_seq (character).
-  [ITEM 11] The unused genomic_start parameter was removed.
+Named list: tsd_len (integer), tsd_seq (character),
+  tsd_status (character: "read_supported" or "unknown").
 }
 \description{
-ALU insertions generate a 5–20 bp direct repeat (TSD) flanking the
-insertion site.  We compare the reference sequence immediately upstream
-and downstream of the predicted insertion site and look for the longest
-matching prefix/suffix.
+[FIX Finding 1] The previous implementation compared the upstream suffix
+and downstream prefix of the REFERENCE sequence and reported their longest
+match as the TSD. This was biologically unreliable: a genuine TSD is
+created during insertion, and the reference genome contains the original
+target sequence only once. Reference-flank comparison can only detect
+pre-existing local repeats, not a TSD created by insertion.
+}
+\details{
+New approach: use read evidence. A genuine TSD causes the trail-clip
+breakpoints (reads from upstream, aligning through the upstream TSD copy)
+and lead-clip breakpoints (reads from downstream, aligning from the
+downstream TSD copy) to differ by exactly the TSD length:
+
+  trail_bp  = end of TSD in reference (last aligned base of upstream reads)
+  lead_bp   = start of TSD - 1 in reference (base before first aligned base
+              of downstream reads)
+  TSD_length = trail_bp - lead_bp
+  TSD_sequence = reference[lead_bp + 1 .. trail_bp]
+
+When both sides are present and the gap is in the expected TSD range
+(5-20 bp), the TSD is reported as "read_supported". When only one side
+is present, or the gap is outside the expected range, the TSD is reported
+as "unknown" rather than falling back to the unreliable reference-flank
+comparison.
 }
 \keyword{internal}

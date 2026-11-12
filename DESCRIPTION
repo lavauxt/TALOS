@@ -1,61 +1,68 @@
 Package: TALOS
 Type: Package
-Title: Tandem duplication detection via Alignment-free Lookup Of Skipped k-mers
-Version: 0.1.0
-Authors@R: person(given = "Firstname", family = "Lavauxt",
-             role = c("aut", "cre"), email = "lavauxt@example.com")
-Description: TALOS detects internal tandem duplications (ITDs) and partial tandem
-    duplications (PTDs) in genes like FLT3 and KMT2A directly from BAM files using
-    a fast, alignment-free k-mer breakpoint algorithm with sequence collapse
-    optimization. It outputs HGVS-compliant cDNA and protein annotations, VCF/TSV
-    reports, and PDF visualizations. A bundled static hotspot CSV (built from
-    Ensembl/UCSC coordinates) allows annotation against known coding variant
-    regions; users may optionally build an up-to-date SQLite database from Ensembl
-    via update_hotspot_db(). This version includes memory-optimized vectorized
-    sequence extraction, BSgenome caching, and raw-byte k-matching for
-    significantly improved speed and RAM usage.
+Title: Detection of ITD / PTD / ALU Insertions from BAM Files
+Version: 0.4.17
+Date: 2026-11-12
+Authors@R: c(
+  person("TALOS", "Maintainer", email = "talos-maintainer@example.org",
+         role = c("aut", "cre")))
+Description: TALOS detects internal tandem duplications (ITDs), partial
+    tandem duplications (PTDs) and ALU / SINE mobile-element insertions
+    from short-read BAM files. ITDs are found by k-mer walking against the
+    target-region reference; PTDs by an exon-graph search over split-read
+    and discordant-pair evidence; ALU insertions by aligning soft-clipped
+    read tails to a bundled ALU consensus. Reports are produced as TSV,
+    VCF and self-contained HTML.
 License: GPL-3
+URL: https://github.com/lavauxt/TALOS
+BugReports: https://github.com/lavauxt/TALOS/issues
+biocViews: Sequencing, SNP, StructuralVariation, Coverage
 Encoding: UTF-8
-LazyData: false
-Depends: R (>= 4.1.0)
+LazyData: true
+Depends:
+    R (>= 4.3.0)
 Imports:
-    AnnotationDbi,
-    AnnotationFilter,
-    BiocGenerics,
+    methods,
+    stats,
+    utils,
     Biostrings,
-    BSgenome,
     GenomicAlignments,
-    GenomicFeatures,
     GenomicRanges,
     GenomeInfoDb,
     IRanges,
-    methods,
     Rsamtools,
     S4Vectors,
+    BiocGenerics,
+    pwalign,
     yaml,
-    GenomeInfoDbData,
-    Gviz
+    DBI,
+    RSQLite,
+    ggplot2,
+    scales,
+    htmltools
 Suggests:
+    testthat (>= 3.0.0),
+    AnnotationDbi,
     AnnotationFilter,
     BiocManager,
-    biomaRt,
+    BSgenome,
     BSgenome.Hsapiens.UCSC.hg19,
     BSgenome.Hsapiens.UCSC.hg38,
+    biomaRt,
     cigarillo,
-    data.table,
-    DBI,
-    DT,
-    EnsDb.Hsapiens.v75,
-    EnsDb.Hsapiens.v86,
+    covr,
     ensembldb,
     fastmatch,
+    GenomicFeatures,
+    Gviz,
     gridExtra,
-    htmlwidgets,
+    jsonlite,
     knitr,
     plotly,
-    pwalign,
     rmarkdown,
-    RSQLite,
-    testthat,
+    rtracklayer,
     txdbmaker
+VignetteBuilder: knitr
+Config/testthat/edition: 3
+SystemRequirements: samtools (>= 1.10), tabix
 Config/roxygen2/version: 8.1.1

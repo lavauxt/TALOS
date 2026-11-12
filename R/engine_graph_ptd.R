@@ -20,6 +20,27 @@
 #' k/k+1 can be either exon) and dropped single-exon duplications as
 #' self-loops.
 #'
+#' [ITEM 4] The two \code{near()} calls and the per-row \code{lapply()} over
+#' evidence rows previously ran \code{vapply()} per position, an O(n_reads x
+#' n_exons) scan that becomes a bottleneck for genes with many exons (KMT2A
+#' has 36+ exons; a single BAM scan can yield thousands of evidence rows).
+#' The current implementation replaces them with:
+#'
+#'   1. \code{GenomicRanges::distanceToNearest()} -- O((n_reads + n_exons) *
+#'      log(n_exons)) to filter evidence whose start or end is too far from
+#'      any exon. Falls back to the original O(n_reads * n_exons) vapply()
+#'      only when GenomicRanges is unavailable.
+#'
+#'   2. \code{GenomicRanges::findOverlaps(ev_gr, exon_gr, type = "within")}
+#'      with expanded evidence ranges to discover, for each surviving event,
+#'      which exons lie inside [S - exon_tol, E + exon_tol]. This is a single
+#'      interval-tree query rather than a per-row scan, and it returns both
+#'      the evidence index and the matched exon index in one shot.
+#'
+#' The fallback path preserves the original numerical behaviour when
+#' GenomicRanges is unavailable, so the function still works in a base-R
+#' environment (e.g. minimal test runs without S4 infrastructure).
+#'
 #' @param evidence_dt data.frame(qname, start, end, prob, evidence_type, precise)
 #' @param exon_granges Exons (GRanges with exon_idx, or data.frame start/end/exon_idx)
 #' @param max_distance Maximum distance (bp) between each breakpoint and the
@@ -33,16 +54,10 @@
   ex <- .exons_df(exon_granges)
   if (is.null(evidence_dt) || nrow(evidence_dt) == 0L || is.null(ex)) return(data.frame())
 
-  near <- function(p) vapply(p, function(v) {
-    min(pmax(0L, ex$start - v, v - ex$end))
-  }, numeric(1L))
-  ev <- evidence_dt[near(evidence_dt$start) <= max_distance &
-                      near(evidence_dt$end) <= max_distance, , drop = FALSE]
+  ev <- .filter_evidence_near_exons(evidence_dt, ex, max_distance)
   if (nrow(ev) == 0L) return(data.frame())
 
-  inside <- lapply(seq_len(nrow(ev)), function(i) {
-    ex$exon_idx[ex$start >= ev$start[i] - exon_tol & ex$end <= ev$end[i] + exon_tol]
-  })
+  inside <- .find_exons_inside_evidence(ev, ex, exon_tol)
   has_exon <- lengths(inside) > 0L
   if (!any(has_exon)) return(data.frame())
   ev <- ev[has_exon, , drop = FALSE]
@@ -71,6 +86,117 @@
   out <- do.call(rbind, agg)
   rownames(out) <- NULL
   out
+}
+
+#' Filter evidence rows whose start AND end are within max_distance of an exon
+#'
+#' [ITEM 4] Vectorised distance filter: uses
+#' \code{GenomicRanges::distanceToNearest()} to compute, in a single
+#' interval-tree query, the distance from each breakpoint to the nearest
+#' exon. Evidence rows whose start OR end exceeds \code{max_distance} from
+#' every exon are dropped.
+#'
+#' Falls back to the original \code{vapply()}-per-position scan when
+#' GenomicRanges is unavailable, preserving numerical equivalence with the
+#' previous implementation.
+#'
+#' @param evidence_dt data.frame with $start and $end columns.
+#' @param ex data.frame with $start and $end columns (one row per exon).
+#' @param max_distance Distance threshold (bp).
+#' @return Filtered evidence data.frame (rows with both endpoints within
+#'   max_distance of some exon).
+#' @keywords internal
+.filter_evidence_near_exons <- function(evidence_dt, ex, max_distance) {
+  if (nrow(evidence_dt) == 0L) return(evidence_dt)
+
+  if (requireNamespace("GenomicRanges", quietly = TRUE) &&
+      requireNamespace("IRanges", quietly = TRUE)) {
+    # [ITEM 4] Vectorised path: build a single IRanges for all exons and
+    # query the distance from each breakpoint to its nearest exon. This is
+    # a single interval-tree traversal, not a per-row scan.
+    #
+    # We use width-1 queries (start = pos, width = 1L) rather than zero-width
+    # queries because IRanges' distanceToNearest semantics for zero-width
+    # ranges can vary across versions; width-1 is unambiguous: a query at
+    # position v covers [v, v], and its distance to an exon [s, e] is 0 if
+    # v in [s, e], else the gap. This matches the original vapply():
+    #   min(pmax(0L, ex$start - v, v - ex$end))
+    # which returns 0 when v is inside any exon, else the gap to the
+    # nearest exon edge.
+    exon_ir <- IRanges::IRanges(start = ex$start, end = ex$end)
+    near_start <- IRanges::distanceToNearest(
+      IRanges::IRanges(start = evidence_dt$start, width = 1L),
+      exon_ir
+    )
+    near_end <- IRanges::distanceToNearest(
+      IRanges::IRanges(start = evidence_dt$end, width = 1L),
+      exon_ir
+    )
+    # Build per-row distance vectors. Initialise to .Machine$integer.max so
+    # rows with no nearest exon (impossible here since ex is non-empty, but
+    # defensive) are treated as infinitely far and filtered out.
+    d_start <- rep(.Machine$integer.max, nrow(evidence_dt))
+    d_end   <- rep(.Machine$integer.max, nrow(evidence_dt))
+    d_start[IRanges::queryHits(near_start)] <- IRanges::mcols(near_start)$distance
+    d_end[IRanges::queryHits(near_end)]     <- IRanges::mcols(near_end)$distance
+    keep <- d_start <= max_distance & d_end <= max_distance
+    return(evidence_dt[keep, , drop = FALSE])
+  }
+
+  # Fallback: original O(n_reads x n_exons) vapply. Numerically equivalent
+  # to the vectorised path; kept so the function still works without S4.
+  near <- function(p) vapply(p, function(v) {
+    min(pmax(0L, ex$start - v, v - ex$end))
+  }, numeric(1L))
+  evidence_dt[near(evidence_dt$start) <= max_distance &
+              near(evidence_dt$end) <= max_distance, , drop = FALSE]
+}
+
+#' Find, for each evidence row, the indices of exons lying inside [S, E]
+#'
+#' [ITEM 4] Vectorised "exon in interval" query: uses
+#' \code{IRanges::findOverlaps()} with \code{type = "within"} to discover in
+#' a single interval-tree traversal which exons fall inside each evidence
+#' interval (expanded by \code{exon_tol} on each side).
+#'
+#' Falls back to the original per-row \code{lapply()} when IRanges is
+#' unavailable.
+#'
+#' @param ev data.frame of evidence rows (must have $start and $end).
+#' @param ex data.frame of exons (must have $start, $end, $exon_idx).
+#' @param exon_tol Slack (bp) added to each evidence interval before testing.
+#' @return List of integer vectors; element i holds the exon_idx values of
+#'   exons lying inside the expanded i-th evidence interval.
+#' @keywords internal
+.find_exons_inside_evidence <- function(ev, ex, exon_tol) {
+  if (nrow(ev) == 0L) return(list())
+
+  if (requireNamespace("IRanges", quietly = TRUE)) {
+    # [ITEM 4] Single interval-tree query: which exons lie "within" each
+    # (expanded) evidence interval? findOverlaps(subject, query, type="within")
+    # would mean "subject within query"; we want "exon within evidence", so
+    # exon is the query and evidence is the subject. IRanges' signature is
+    # findOverlaps(query, subject, type=...), so:
+    #   query  = exon ranges (we want to know which exons are inside)
+    #   subject = evidence ranges (the "container")
+    #   type = "within" -> query (exon) within subject (evidence)
+    exon_ir <- IRanges::IRanges(start = ex$start, end = ex$end)
+    ev_ir   <- IRanges::IRanges(
+      start = pmax(1L, ev$start - exon_tol),
+      end   = ev$end + exon_tol
+    )
+    hits <- IRanges::findOverlaps(query = exon_ir, subject = ev_ir, type = "within")
+    # Split exon_idx by evidence row (subjectHits).
+    by_row <- split(ex$exon_idx[IRanges::queryHits(hits)],
+                    factor(IRanges::subjectHits(hits), levels = seq_len(nrow(ev))))
+    # Ensure every evidence row has an entry (empty integer(0) if no exon).
+    lapply(seq_len(nrow(ev)), function(i) as.integer(by_row[[i]] %||% integer(0)))
+  } else {
+    # Fallback: per-row lapply (original behaviour).
+    lapply(seq_len(nrow(ev)), function(i) {
+      ex$exon_idx[ex$start >= ev$start[i] - exon_tol & ex$end <= ev$end[i] + exon_tol]
+    })
+  }
 }
 
 #' Minimal Dijkstra shortest path over a small named-node edge list
@@ -234,12 +360,13 @@
 #'   gene_config$graph_settings$min_support, else 2.
 #' @param expected_isize_max Minimum mate separation for a discordant pair.
 #'   Default gene_config$graph_settings$expected_isize_max, else 1000.
+#' @param min_mapq Minimum mapping quality passed to evidence extraction (default 20).
 #' @return list of PTD cycles (possibly empty). Each carries the duplicated
 #'   exons, the consensus duplicated interval (dup_start, dup_end,
 #'   dup_length) and the supporting read names.
 extract_graph_candidates <- function(bam_file, gene_config, max_exon_distance = NULL,
                                      buffer_bp = NULL, min_support = NULL,
-                                     expected_isize_max = NULL) {
+                                     expected_isize_max = NULL, min_mapq = 20L) {
   gs <- gene_config$graph_settings
   if (is.null(gene_config$all_exons) || length(gene_config$all_exons) < 1L) return(list())
 
@@ -256,7 +383,8 @@ extract_graph_candidates <- function(bam_file, gene_config, max_exon_distance = 
   expected_isize_max <- expected_isize_max %||% gs$expected_isize_max %||% 1000L
   if (is.na(expected_isize_max)) expected_isize_max <- 1000L
 
-  bam_dt <- .get_evidence_dt(bam_file, gene_config, buffer_bp = buffer_bp)
+  bam_dt <- .get_evidence_dt(bam_file, gene_config, buffer_bp = buffer_bp,
+                             min_mapq = min_mapq)
   if (nrow(bam_dt) == 0L) return(list())
   evidence <- rbind(
     .parse_sa_tags(bam_dt),

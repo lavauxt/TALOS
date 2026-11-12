@@ -9,11 +9,17 @@ detect_itd(
   bam_path,
   gene_config,
   genomic_ref_seq = NULL,
-  k = 11,
+  k = 12,
   min_support = 10,
   min_size = 15,
   max_missing_kmers = 0.5,
   cluster_tolerance = 10,
+  min_base_quality = 20,
+  adapter_sequences = c("AGATCGGAAGAGCACACGTCTGAACTCCAGTCA",
+    "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT", "CTGTCTCTTATACACATCT", "TGGAATTCTCGGGTGCCAAGG"),
+  adapter_min_overlap = 10L,
+  cluster_length_scale = 0.1,
+  max_cluster_tolerance = 50,
   prefilter = TRUE,
   search_window = 5000L,
   require_unique_anchor = FALSE,
@@ -24,7 +30,7 @@ detect_itd(
   verbose = TRUE,
   debug = FALSE,
   nominal_read_len = 150,
-  max_correction = 2,
+  max_correction = 1,
   plot = FALSE,
   sample_name = NULL,
   filter_intronic = FALSE,
@@ -55,7 +61,7 @@ detect_itd(
   hotspot_db_path = NULL,
   compute_alignment_score = TRUE,
   compute_support_bases = TRUE,
-  compute_consistency = FALSE,
+  compute_consistency = TRUE,
   compute_itd_coverage = TRUE,
   compute_coverage_drop = TRUE,
   compute_microhomology = TRUE,
@@ -114,6 +120,11 @@ talos(
   min_mapq = NULL,
   min_wt_reads = NULL,
   cluster_tolerance = NULL,
+  min_base_quality = NULL,
+  adapter_sequences = NULL,
+  adapter_min_overlap = NULL,
+  cluster_length_scale = NULL,
+  max_cluster_tolerance = NULL,
   search_window = NULL,
   require_unique_anchor = NULL,
   vaf_threshold = NULL,
@@ -200,6 +211,28 @@ talos(
 
 \item{cluster_tolerance}{Radius (bp) to cluster breakpoints.}
 
+\item{min_base_quality}{Minimum mean Phred base quality for a read to enter
+the analysis population (candidate discovery, wild-type support and
+coverage-derived metrics). Reads without quality strings are retained.
+Default 20; set 0 to disable.}
+
+\item{adapter_sequences}{Character vector of adapter sequences screened as
+read-through contamination. Defaults to the standard Illumina TruSeq /
+Nextera / small-RNA adapter set. Screening is a report, not a filter:
+affected QNAMEs are counted region-wide and per variant. NULL or
+character(0) disables screening.}
+
+\item{adapter_min_overlap}{Minimum contiguous adapter bases (exact prefix
+match) that flag a read (default 10).}
+
+\item{cluster_length_scale}{Length-scaled breakpoint clustering: the
+effective tolerance for a breakpoint with duplication length L is
+max(cluster_tolerance, cluster_length_scale * L), capped by
+max_cluster_tolerance. Default 0.1; set 0 for the legacy scalar tolerance.}
+
+\item{max_cluster_tolerance}{Upper bound of the length-scaled clustering
+tolerance (default 50).}
+
 \item{prefilter}{Enable fast prefiltering of alignments.}
 
 \item{search_window}{Max distance (bp) the split-read anchor search
@@ -237,7 +270,7 @@ results, the way every other threshold in this pipeline was tuned.}
 
 \item{nominal_read_len}{Assumed read length.}
 
-\item{max_correction}{Size-bias correction cap.}
+\item{max_correction}{Exploratory size-bias correction cap (default 1 = no inflation). Primary AF and support remain raw regardless of this setting.}
 
 \item{plot}{Output PDF.}
 
@@ -296,7 +329,7 @@ reads from elsewhere pooling into one locus), not a duplication.}
 
 \item{min_entropy}{Sequence repeat complexity baseline.}
 
-\item{min_alignment_score}{Minimum sequence identity (0–1) between read-derived ITD sequence and the corresponding reference segment. Bypassed automatically for imputed sequences (default 0.2).}
+\item{min_alignment_score}{Minimum sequence identity (0-1) between read-derived ITD sequence and the corresponding reference segment. Bypassed automatically for imputed sequences (default 0.2).}
 
 \item{detect_orientation}{Check inverse loops.}
 
@@ -306,12 +339,14 @@ reads from elsewhere pooling into one locus), not a duplication.}
 
 \item{compute_support_bases}{Metric toggle.}
 
-\item{compute_consistency}{Metric toggle. Default FALSE: SupportConsistency
-never gates .apply_filters() (purely informational) and is circular for
-imputed/ref-derived PTD sequence (checking reads against a sequence
-assembled from a subset of those same reads, or filled from reference).
-AlignmentScore/RefMatch_Observed/ITDReadCoverage already cover this
-ground without the circularity. Set TRUE to restore it for debugging.}
+\item{compute_consistency}{Metric toggle (default TRUE). Calculates the
+percentage of supporting read-end sequences that align to a fully
+read-derived full-length ITD template at >=90% identity over >=20 bases.
+This is informational only and never gates .apply_filters(). It is not
+calculated against reference-imputed or reference-only coverage templates,
+because those templates cannot independently validate the read sequence.
+Use ITDCoverageDirectAlignmentRatePct for the read-to-template rate when
+only a reference coordinate template is available.}
 
 \item{compute_itd_coverage}{Metric toggle.}
 
@@ -335,7 +370,7 @@ ground without the circularity. Set TRUE to restore it for debugging.}
 
 \item{add_config_to_report}{Render configs in results.}
 
-\item{max_pairwise_alignments}{Max limit for computationally heavy sub-alignments.}
+\item{max_pairwise_alignments}{Maximum number of supporting reads aligned per chunk for ITD metrics (default 30). All distinct supporting reads are processed; this is not a read-sampling cap.}
 
 \item{include_sample}{Include sample name in output filenames (default TRUE).}
 
@@ -347,17 +382,17 @@ ground without the circularity. Set TRUE to restore it for debugging.}
 
 \item{global_log}{Write all logs (config, compute time, errors) to a single file (default TRUE).}
 
-\item{min_side_softclip_reads}{Minimum number of reads with soft‑clip on each side (default 0, i.e. disabled).}
+\item{min_side_softclip_reads}{Minimum number of reads with soft-clip on each side (default 0, i.e. disabled).}
 
-\item{max_side_ratio}{Maximum ratio of left/right soft‑clip counts before filtering (default 10).}
+\item{max_side_ratio}{Maximum ratio of left/right soft-clip counts before filtering (default 10).}
 
-\item{min_softclip_pct_side}{Minimum percentage of supporting reads that must have a soft‑clip on each side (default 0, i.e. disabled).}
+\item{min_softclip_pct_side}{Minimum percentage of supporting reads that must have a soft-clip on each side (default 0, i.e. disabled).}
 
-\item{min_left_softclip_pct_wt}{Minimum percentage of wildtype reads with left soft‑clip (default 0, i.e. disabled).}
+\item{min_left_softclip_pct_wt}{Minimum percentage of wildtype reads with left soft-clip (default 0, i.e. disabled).}
 
-\item{min_right_softclip_pct_wt}{Minimum percentage of wildtype reads with right soft‑clip (default 0, i.e. disabled).}
+\item{min_right_softclip_pct_wt}{Minimum percentage of wildtype reads with right soft-clip (default 0, i.e. disabled).}
 
-\item{min_abs_side_softclip}{Minimum absolute soft‑clip count on each side (default 0, i.e. disabled).}
+\item{min_abs_side_softclip}{Minimum absolute soft-clip count on each side (default 0, i.e. disabled).}
 
 \item{max_itd_length}{Maximum duplication length to consider as ITD; longer duplications are automatically converted to PTD (zero length) if \code{convert_long_to_ptd} is TRUE (default 1000).}
 

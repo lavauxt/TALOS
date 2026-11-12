@@ -26,7 +26,9 @@ plot_talos_interactive(
 
 \item{show_config}{Add a config annotation string.}
 
-\item{precomputed_cov}{Optional precomputed coverage Rle (to avoid re-reading BAM).}
+\item{precomputed_cov}{Optional precomputed coverage Rle indexed by genomic
+coordinate (index 1 is genomic position 1) and long enough to include the
+full plotted interval, including flanking exons.}
 
 \item{include_ptd}{If TRUE, include zero-length (PTD) events (default FALSE).}
 }

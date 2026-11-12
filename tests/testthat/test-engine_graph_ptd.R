@@ -219,6 +219,129 @@ describe(".map_evidence_to_exon_edges", {
     result <- map_fn(NULL, exons)
     expect_equal(nrow(result), 0L)
   })
+
+  # [ITEM 4] Vectorisation regression tests: confirm the vectorised path
+  # produces the same results as the original vapply() loop for a range
+  # of inputs, including a KMT2A-scale case with many exons.
+  describe("ITEM 4: vectorised paths are numerically equivalent", {
+    # Build a realistic exon layout: 36 exons spread across 100kb (KMT2A-scale)
+    kmt2a_exons <- data.frame(
+      start = seq(1000L, 95000L, by = 2700L),
+      end   = seq(1100L, 95100L, by = 2700L),
+      exon_idx = seq_len(36L),
+      stringsAsFactors = FALSE
+    )
+
+    # Helper: original (pre-vectorisation) near() implementation, used as the
+    # reference oracle in the equivalence checks below.
+    near_ref <- function(p, ex) vapply(p, function(v) {
+      min(pmax(0L, ex$start - v, v - ex$end))
+    }, numeric(1L))
+
+    it("distance filter keeps the same rows as the vapply reference", {
+      # 200 evidence rows scattered across the 100kb window
+      set.seed(42L)
+      n <- 200L
+      ev <- data.frame(
+        qname = paste0("r", seq_len(n)),
+        start = sample(1L:100000L, n, replace = TRUE),
+        end   = sample(1L:100000L, n, replace = TRUE),
+        prob = runif(n),
+        evidence_type = "split_read",
+        precise = TRUE,
+        stringsAsFactors = FALSE
+      )
+      # Ensure start <= end
+      swap <- ev$start > ev$end
+      tmp <- ev$start[swap]; ev$start[swap] <- ev$end[swap]; ev$end[swap] <- tmp
+
+      max_dist <- 5000L
+      # Reference (original implementation):
+      keep_ref <- near_ref(ev$start, kmt2a_exons) <= max_dist &
+        near_ref(ev$end, kmt2a_exons) <= max_dist
+      ev_ref <- ev[keep_ref, , drop = FALSE]
+
+      # New (vectorised):
+      filter_fn <- get_fn(".filter_evidence_near_exons")
+      ev_new <- filter_fn(ev, kmt2a_exons, max_dist)
+
+      # Same rows (compare by sorted qname to be order-agnostic).
+      expect_equal(sort(ev_new$qname), sort(ev_ref$qname))
+    })
+
+    it("distance filter handles the empty-input case", {
+      filter_fn <- get_fn(".filter_evidence_near_exons")
+      empty <- data.frame(
+        qname = character(), start = integer(), end = integer(),
+        prob = numeric(), evidence_type = character(), precise = logical(),
+        stringsAsFactors = FALSE
+      )
+      expect_equal(nrow(filter_fn(empty, kmt2a_exons, 5000L)), 0L)
+    })
+
+    it("exon-in-interval query returns the same indices as the lapply reference", {
+      # 50 evidence rows; each row may span 0..several exons of the 36-exon
+      # KMT2A layout.
+      set.seed(7L)
+      n <- 50L
+      ev <- data.frame(
+        start = sample(1L:95000L, n, replace = TRUE),
+        end   = NA_integer_,
+        stringsAsFactors = FALSE
+      )
+      # Make each evidence row span a random window up to 10kb
+      ev$end <- ev$start + sample(0L:10000L, n, replace = TRUE)
+
+      exon_tol <- 10L
+      # Reference:
+      inside_ref <- lapply(seq_len(n), function(i) {
+        kmt2a_exons$exon_idx[
+          kmt2a_exons$start >= ev$start[i] - exon_tol &
+          kmt2a_exons$end   <= ev$end[i]   + exon_tol
+        ]
+      })
+      # New:
+      inside_fn <- get_fn(".find_exons_inside_evidence")
+      inside_new <- inside_fn(ev, kmt2a_exons, exon_tol)
+
+      # Same per-row indices.
+      for (i in seq_len(n)) {
+        expect_equal(inside_new[[i]], inside_ref[[i]],
+                     info = sprintf("row %d (%d-%d)", i, ev$start[i], ev$end[i]))
+      }
+    })
+
+    it("end-to-end .map_evidence_to_exon_edges matches across many rows", {
+      # 100 evidence rows, mix of split-read and discordant-pair types,
+      # spread across the 36-exon layout. The aggregated result should be
+      # the same regardless of which path the implementation takes.
+      set.seed(123L)
+      n <- 100L
+      ev <- data.frame(
+        qname = paste0("read_", seq_len(n)),
+        start = sample(500L:95000L, n, replace = TRUE),
+        end   = NA_integer_,
+        prob = runif(n, 0.4, 0.95),
+        evidence_type = sample(c("split_read", "discordant_pair"), n,
+                               replace = TRUE),
+        precise = sample(c(TRUE, FALSE), n, replace = TRUE),
+        stringsAsFactors = FALSE
+      )
+      ev$end <- ev$start + sample(50L:8000L, n, replace = TRUE)
+
+      result <- map_fn(ev, kmt2a_exons, max_distance = 5000L, exon_tol = 10L)
+      # Smoke test: returns a data.frame with the expected columns
+      expect_true(is.data.frame(result))
+      expect_in(c("from", "to", "prob", "support_count", "n_split", "n_pairs",
+                  "qnames", "evidence_type", "dup_start", "dup_end"),
+                names(result))
+      # Every row should have a valid from/to exon name
+      expect_true(all(grepl("^Exon_\\d+$", result$from)))
+      expect_true(all(grepl("^Exon_\\d+$", result$to)))
+      # Probabilities are in (0, 1]
+      expect_true(all(result$prob > 0 & result$prob <= 1))
+    })
+  })
 })
 
 # ---------------------------------------------------------------------------

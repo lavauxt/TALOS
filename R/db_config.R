@@ -272,6 +272,10 @@
       db, columns = c("exon_id", "exon_idx"),
       filter = AnnotationFilter::TxIdFilter(transcript_id)
     )
+    if (length(exons_gr) == 0L) {
+      .err("Transcript '%s' has no exons in %s. Check the accession or use a RefSeq NM_ accession.",
+           transcript_id, if (build == "hg19") "EnsDb.Hsapiens.v75" else "EnsDb.Hsapiens.v86")
+    }
     exons_gr  <- exons_gr[order(exons_gr$exon_idx)]
     # EnsDb uses "11"; BSgenome.UCSC and the rest of TALOS use "chr11".
     exons_gr <- tryCatch({
@@ -331,14 +335,25 @@
     tx_id <- tx_map$TXID[1]
     .dbg("Internal TXID = %s", tx_id)
 
-    exons_all <- GenomicFeatures::exonsBy(db, by = "tx", use.names = FALSE)
-    exons_gr  <- exons_all[[as.character(tx_id)]]
+    # Query only the requested transcript. exonsBy() materialises every
+    # transcript in the TxDb before subsetting, which is wasteful for the
+    # RefSeq fallback database.
+    exons_gr <- GenomicFeatures::exons(
+      db, columns = c("exon_id", "tx_id", "exon_rank"),
+      filter = list(tx_id = tx_id)
+    )
+    exons_gr <- exons_gr[order(S4Vectors::mcols(exons_gr)$exon_rank)]
 
     strand_val <- as.character(unique(BiocGenerics::strand(exons_gr)))
     chrom      <- as.character(GenomeInfoDb::seqnames(exons_gr)[1])
 
-    cds_all <- GenomicFeatures::cdsBy(db, by = "tx", use.names = FALSE)
-    cds_gr  <- cds_all[[as.character(tx_id)]]
+    cds_gr <- GenomicFeatures::cds(
+      db, columns = c("cds_id", "tx_id", "cds_rank"),
+      filter = list(tx_id = tx_id)
+    )
+    if (length(cds_gr) > 0L && "cds_rank" %in% names(S4Vectors::mcols(cds_gr))) {
+      cds_gr <- cds_gr[order(S4Vectors::mcols(cds_gr)$cds_rank)]
+    }
 
     list(exons_gr = exons_gr, cds_gr = cds_gr,
          chrom = chrom, strand = strand_val, source = "refGene_TxDb")
@@ -364,6 +379,12 @@
 .finalize_transcript <- function(transcript_id, exons_gr, cds_gr,
                                  chrom, strand_val, cache_key,
                                  source = "unknown") {
+  if (is.null(exons_gr) || length(exons_gr) == 0L) {
+    .err("No exons resolved for transcript '%s' (source=%s).", transcript_id, source)
+  }
+  if (length(strand_val) != 1L || is.na(strand_val) || !strand_val %in% c("+", "-")) {
+    .err("Ambiguous strand for transcript '%s' (source=%s).", transcript_id, source)
+  }
 
   exons_gr <- if (strand_val == "-") {
     exons_gr[order(BiocGenerics::start(exons_gr), decreasing = TRUE)]
@@ -413,7 +434,7 @@
     if (!inherits(bsgenome, "BSgenome"))
       bsgenome <- if (is.character(bsgenome)) BSgenome::getBSgenome(bsgenome) else
         stop("'bsgenome' must be a BSgenome object or package-name string")
-    .set_cache(.bs_cache, bs_pkg, bsgenome)
+    # Caller-supplied genomes must not poison the stock build cache.
     return(bsgenome)
   }
 
@@ -550,18 +571,19 @@ get_gene_config <- function(
   )
   genomic_ref_seq <- as.character(BSgenome::getSeq(bs_obj, gene_region))
 
+  # BSgenome::getSeq() is strand-aware for GRanges subjects: exons that carry
+  # strand "-" (minus-strand genes such as FLT3 / BCOR / UBTF) are returned
+  # already reverse-complemented, i.e. in mRNA sense. The manual
+  # reverseComplement() that used to sit here applied a SECOND flip and made
+  # rnaseq / full_cdna antisense, which silently corrupted the HGVS protein
+  # frame (p. residues were read from a nonsense antisense frame) and left
+  # rnaseq / full_cdna unusable for any sense-oriented consumer.
+  # (Verified against BSgenome getSeq-methods.R: .starfreeStrand() keeps "-",
+  #  and extraction goes through loadSubseqsFromStrandedSequence().)
   target_seqs <- as.character(BSgenome::getSeq(bs_obj, target_exons_gr))
-  if (strand == "-")
-    target_seqs <- as.character(
-      Biostrings::reverseComplement(Biostrings::DNAStringSet(target_seqs))
-    )
   rnaseq <- paste(target_seqs, collapse = "")
 
   all_exon_seqs <- as.character(BSgenome::getSeq(bs_obj, all_exons_gr))
-  if (strand == "-")
-    all_exon_seqs <- as.character(
-      Biostrings::reverseComplement(Biostrings::DNAStringSet(all_exon_seqs))
-    )
   full_cdna <- paste(all_exon_seqs, collapse = "")
 
   list(
@@ -607,7 +629,7 @@ save_offline_config <- function(gene, build = "hg19",
     c(GenomicRanges::start(config$all_exons)[i], GenomicRanges::end(config$all_exons)[i])
   )
 
-  key <- paste0(gene, "_OFFLINE")
+  key <- gene
   out <- list()
   out[[key]] <- list(
     gene_symbol    = config$gene,
@@ -628,4 +650,5 @@ save_offline_config <- function(gene, build = "hg19",
 
   yaml::write_yaml(out, file = output_file)
   message("Offline config saved to: ", output_file)
+  invisible(output_file)
 }

@@ -50,14 +50,18 @@
 # One constructor for every candidate record (DRY: the record shape was
 # spelled out by hand in nine places). read_start / read_end are the read's
 # aligned genomic span; the anchor search needs them (see
-# .estimate_itd_from_anchors()).
+# .estimate_itd_from_anchors()). read_mean_bq carries the read's mean Phred
+# base quality (v0.4.20) so base-quality metrics report real measurements
+# instead of a hard-coded "unavailable" status.
 .new_candidate <- function(read_name, local_breakpoint, length, type, mapq,
                            is_reverse, cigar, read_seq, itd_seq = NA_character_,
-                           read_start = NA_integer_, read_end = NA_integer_) {
+                           read_start = NA_integer_, read_end = NA_integer_,
+                           read_mean_bq = NA_real_) {
   list(read_name = read_name, local_breakpoint = as.integer(local_breakpoint),
        length = length, type = type, mapq = mapq, is_reverse = is_reverse,
        cigar = cigar, read_seq = read_seq, itd_seq = itd_seq,
-       read_start = as.integer(read_start), read_end = as.integer(read_end))
+       read_start = as.integer(read_start), read_end = as.integer(read_end),
+       read_mean_bq = as.numeric(read_mean_bq))
 }
 
 # Per-read vectors used by every candidate extractor (DRY).
@@ -65,6 +69,10 @@
   mapqs <- S4Vectors::mcols(reads)$mapq
   mapqs[is.na(mapqs)] <- 0L
   cigars <- GenomicAlignments::cigar(reads)
+  # Mean Phred base quality per read; NA when the BAM QUAL column was not
+  # loaded (e.g. precomputed candidate frames) so downstream status fields
+  # can distinguish "unavailable" from "computed".
+  mean_bqs <- .mean_base_quality(S4Vectors::mcols(reads)$qual)
   list(
     qnames = .safe_qnames(reads),
     mapqs = mapqs,
@@ -74,6 +82,7 @@
     ends = BiocGenerics::end(reads),
     cigars = cigars,
     seqs = as.character(S4Vectors::mcols(reads)$seq),
+    mean_bqs = mean_bqs,
     clips = lapply(cigars, .get_softclip_lengths)
   )
 }
@@ -89,7 +98,8 @@
     if (local_bp < 1L || local_bp > ref_len) next
     out[[length(out) + 1L]] <- .new_candidate(
       rf$qnames[i], local_bp, 0L, "ptd_clip", rf$mapqs[i], rf$is_reverse[i],
-      rf$cigars[i], rf$seqs[i], read_start = rf$starts[i], read_end = rf$ends[i]
+      rf$cigars[i], rf$seqs[i], read_start = rf$starts[i], read_end = rf$ends[i],
+      read_mean_bq = rf$mean_bqs[i]
     )
   }
   out
@@ -160,12 +170,13 @@
   for (i in seq_len(n_reads)) {
     if (has_ins[i]) {
       insertions <- .parse_cigar_insertions(rf$cigars[i], rf$starts[i], genomic_start,
-                                            ref_len, min_size = 1L)
+                                            ref_len, min_size = min_size)
       for (j in seq_len(nrow(insertions))) {
         candidates[[length(candidates) + 1L]] <- .new_candidate(
           rf$qnames[i], insertions$local_breakpoint[j], insertions$length[j], "cigar_ins",
           rf$mapqs[i], rf$is_reverse[i], rf$cigars[i], rf$seqs[i],
-          read_start = rf$starts[i], read_end = rf$ends[i]
+          read_start = rf$starts[i], read_end = rf$ends[i],
+          read_mean_bq = rf$mean_bqs[i]
         )
       }
     }
@@ -335,7 +346,8 @@
     sc <- .get_softclips(rf$cigars[i], read_seq)
     mk <- function(local_bp, len, type, itd_seq = NA_character_) {
       .new_candidate(rf$qnames[i], local_bp, len, type, rf$mapqs[i], rf$is_reverse[i],
-                     rf$cigars[i], read_seq, itd_seq, read_start, read_end)
+                     rf$cigars[i], read_seq, itd_seq, read_start, read_end,
+                     read_mean_bq = rf$mean_bqs[i])
     }
 
     # Shared by both k-mer strategies: anchor refinement, ITD length limit,
@@ -455,14 +467,14 @@
 
 # Typed field extraction from a list of records, NULL/NA safe (DRY helper for
 # the data.frame builders below).
-.pluck <- function(records, field, type = c("integer", "character", "logical")) {
+.pluck <- function(records, field, type = c("integer", "character", "logical", "numeric")) {
   type <- match.arg(type)
-  na <- switch(type, integer = NA_integer_, character = NA_character_, logical = NA)
-  cast <- switch(type, integer = as.integer, character = as.character, logical = as.logical)
+  na <- switch(type, integer = NA_integer_, character = NA_character_, logical = NA, numeric = NA_real_)
+  cast <- switch(type, integer = as.integer, character = as.character, logical = as.logical, numeric = as.numeric)
   vapply(records, function(x) {
     v <- x[[field]]
     if (is.null(v) || length(v) == 0L || is.na(v[1L])) na else cast(v[1L])
-  }, switch(type, integer = integer(1L), character = character(1L), logical = logical(1L)),
+  }, switch(type, integer = integer(1L), character = character(1L), logical = logical(1L), numeric = numeric(1L)),
   USE.NAMES = FALSE)
 }
 
@@ -481,31 +493,157 @@
     read_start = .pluck(candidates, "read_start"),
     read_end = .pluck(candidates, "read_end"),
     dup_exons = .pluck(candidates, "dup_exons", "character"),
+    read_mean_bq = .pluck(candidates, "read_mean_bq", "numeric"),
     stringsAsFactors = FALSE
   )
 }
 
-.cluster_breakpoints <- function(bp_values, cluster_tolerance) {
-  if (length(bp_values) == 0L) {
-    return(list())
+# Breakpoint clustering.
+#
+# v0.4.20 adds length-scaled tolerance: breakpoint placement uncertainty
+# grows with the duplication length, so the effective tolerance for a
+# breakpoint with duplication length L is
+#   max(cluster_tolerance, length_scale * L)
+# capped at max_scaled_tolerance. The anti-chaining rule below still bounds
+# the TOTAL cluster width: every member must lie within the (scaled)
+# tolerance of the distance from the cluster seed, so nearby distinct
+# events can no longer chain into one arbitrarily wide cluster.
+#
+# length_scale = 0 (or lengths = NULL) restores the legacy scalar tolerance.
+.cluster_breakpoints <- function(bp_values, cluster_tolerance, lengths = NULL,
+                                 length_scale = 0, max_scaled_tolerance = Inf) {
+  tolerance <- suppressWarnings(as.numeric(cluster_tolerance))
+  if (length(tolerance) != 1L || is.na(tolerance) || !is.finite(tolerance) || tolerance < 0) {
+    stop("cluster_tolerance must be a single finite non-negative number.", call. = FALSE)
   }
-  bp_sorted <- sort(bp_values)
-  if (length(bp_sorted) == 1L) {
-    return(list(bp_sorted))
+  length_scale <- suppressWarnings(as.numeric(length_scale))
+  if (length(length_scale) != 1L || is.na(length_scale) || length_scale < 0 || length_scale > 1) {
+    stop("length_scale must be a single number between 0 and 1.", call. = FALSE)
+  }
+  max_scaled_tolerance <- suppressWarnings(as.numeric(max_scaled_tolerance))
+  if (length(max_scaled_tolerance) != 1L || is.na(max_scaled_tolerance) ||
+      (is.finite(max_scaled_tolerance) && max_scaled_tolerance < tolerance)) {
+    stop("max_scaled_tolerance must be a single number (>= cluster_tolerance, or Inf for no cap).", call. = FALSE)
+  }
+  bp_values <- suppressWarnings(as.numeric(bp_values))
+  keep <- is.finite(bp_values)
+  bp_values <- bp_values[keep]
+  if (!is.null(lengths) && length(lengths) == length(keep)) {
+    lengths <- suppressWarnings(as.numeric(lengths[keep]))
+  } else {
+    lengths <- NULL
+  }
+  if (length(bp_values) == 0L) return(list())
+  ord <- order(bp_values)
+  bp_sorted <- bp_values[ord]
+  lengths_sorted <- if (!is.null(lengths) && length_scale > 0) {
+    ls <- lengths[ord]
+    ls[is.na(ls)] <- 0 # NA length (unknown size) keeps the base tolerance
+    ls
+  } else NULL
+  if (length(bp_sorted) == 1L) return(list(bp_sorted))
+
+  # Per-breakpoint effective tolerance (length-scaled, capped).
+  tol_sorted <- if (!is.null(lengths_sorted)) {
+    pmin(max_scaled_tolerance, pmax(tolerance, length_scale * lengths_sorted))
+  } else {
+    rep(tolerance, length(bp_sorted))
   }
 
+  # Bound the TOTAL cluster width, not merely each adjacent gap. The old
+  # single-link rule chained a run of nearby breakpoints into one arbitrarily
+  # wide cluster (e.g. 100,108,116 with tolerance=10). That can pool separate
+  # nearby events and inflate their support.
   clusters <- list()
   cluster_start_idx <- 1L
-  for (j in seq(2L, length(bp_sorted))) {
-    if (bp_sorted[j] - bp_sorted[j - 1L] > cluster_tolerance) {
+  for (j in seq.int(2L, length(bp_sorted))) {
+    # Width bound uses the wider of the seed's and the candidate member's
+    # effective tolerance: a long duplication anywhere in the cluster widens
+    # its own tolerance without un-bounding the cluster.
+    tol_pair <- max(tol_sorted[cluster_start_idx], tol_sorted[j])
+    if (bp_sorted[j] - bp_sorted[cluster_start_idx] > tol_pair) {
       clusters[[length(clusters) + 1L]] <- bp_sorted[cluster_start_idx:(j - 1L)]
       cluster_start_idx <- j
     }
   }
-  clusters[[length(clusters) + 1L]] <- bp_sorted[
-    cluster_start_idx:length(bp_sorted)
-  ]
+  clusters[[length(clusters) + 1L]] <- bp_sorted[cluster_start_idx:length(bp_sorted)]
   clusters
+}
+
+# Select a length mode without allowing input row order to resolve ties.
+# Anchor-backed estimates take precedence over k-mer fallbacks; if several
+# modal sizes remain at the same evidence tier, choose the smaller observed
+# mode and retain the disagreement for the PE concordance diagnostic.
+.mode_extension_length <- function(x, source = NULL) {
+  x <- suppressWarnings(as.numeric(x))
+  keep <- is.finite(x) & x > 0
+  if (!any(keep)) return(NA_integer_)
+  x <- as.integer(x[keep])
+  tab <- table(x)
+  modal_sizes <- as.integer(names(tab)[tab == max(tab)])
+  if (!is.null(source) && length(source) == length(keep)) {
+    source <- as.character(source[keep])
+    anchored <- unique(x[source == "anchor" & !is.na(source)])
+    anchored <- anchored[anchored %in% modal_sizes]
+    if (length(anchored)) return(as.integer(min(anchored)))
+  }
+  as.integer(min(modal_sizes))
+}
+
+# Reduce multiple candidate rows from one QNAME to one extension hypothesis.
+# A paired fragment or a read with several CIGAR/k-mer candidates must not
+# cast multiple votes for the same event length.
+.collapse_extension_candidates_by_read <- function(ext_df) {
+  empty <- data.frame(
+    read_name = character(), breakpoint_refined = numeric(),
+    itdsize = integer(), itdsize_source = character(),
+    stringsAsFactors = FALSE
+  )
+  if (is.null(ext_df) || nrow(ext_df) == 0L ||
+      !all(c("read_name", "breakpoint_refined", "itdsize") %in% names(ext_df))) {
+    return(empty)
+  }
+  keep <- !is.na(ext_df$read_name) & nzchar(as.character(ext_df$read_name)) &
+    !is.na(ext_df$breakpoint_refined) & is.finite(ext_df$breakpoint_refined) &
+    !is.na(ext_df$itdsize) & is.finite(ext_df$itdsize) & ext_df$itdsize > 0L
+  ext_df <- ext_df[keep, , drop = FALSE]
+  if (nrow(ext_df) == 0L) return(empty)
+
+  groups <- split(seq_len(nrow(ext_df)), as.character(ext_df$read_name))
+  rows <- lapply(names(groups), function(read_name) {
+    idx <- groups[[read_name]]
+    sizes <- as.integer(ext_df$itdsize[idx])
+    tab <- table(sizes)
+    modal_sizes <- as.integer(names(tab)[tab == max(tab)])
+    # Prefer a modal size backed by an explicit sequence anchor when there
+    # is a tie; otherwise choose the smaller observed size. Never invent an
+    # unobserved midpoint between competing length hypotheses.
+    anchor_sizes <- integer(0)
+    if ("itdsize_source" %in% names(ext_df)) {
+      is_anchor <- !is.na(ext_df$itdsize_source[idx]) &
+        ext_df$itdsize_source[idx] == "anchor"
+      anchor_sizes <- unique(sizes[sizes %in% modal_sizes & is_anchor])
+      anchor_sizes <- anchor_sizes[!is.na(anchor_sizes)]
+    }
+    selected_size <- if (length(anchor_sizes)) min(anchor_sizes) else min(modal_sizes)
+    selected <- idx[sizes == selected_size]
+    source <- if ("itdsize_source" %in% names(ext_df) &&
+                  any(ext_df$itdsize_source[selected] == "anchor", na.rm = TRUE)) {
+      "anchor"
+    } else if ("itdsize_source" %in% names(ext_df)) {
+      as.character(ext_df$itdsize_source[selected[1L]])
+    } else {
+      NA_character_
+    }
+    data.frame(
+      read_name = read_name,
+      breakpoint_refined = stats::median(ext_df$breakpoint_refined[selected], na.rm = TRUE),
+      itdsize = selected_size,
+      itdsize_source = source,
+      stringsAsFactors = FALSE
+    )
+  })
+  do.call(rbind, rows)
 }
 
 
@@ -634,7 +772,7 @@
 #'   no clip and would be lost).
 #' @param genomic_start Window start.
 #' @return list(candidates, cycles_used)
-.graph_cycles_to_candidates <- function(cycles, reads, genomic_start) {
+.graph_cycles_to_candidates <- function(cycles, reads, genomic_start, ref_len = NA_integer_) {
   if (!length(cycles) || length(reads) == 0L) return(list(candidates = list(), cycles_used = 0L))
   rf <- .read_fields(reads)
   out <- list()
@@ -659,8 +797,14 @@
       junction_seq <- .assemble_weighted_consensus(sc_seqs, sc_weights)
     }
     local_bp <- cand$dup_start - genomic_start + 1L
+    dup_len <- as.integer(cand$dup_length)
+    if (!is.na(ref_len) && (local_bp < 1L || local_bp > ref_len)) next
+    if (!is.na(ref_len)) dup_len <- min(dup_len, ref_len - local_bp + 1L)
+    if (is.na(dup_len) || dup_len < 1L) next
+    n_split <- if (!is.null(cand$n_split)) cand$n_split else NA_integer_
+    cand_type <- if (!is.na(n_split) && n_split > 0L) "ptd_graph" else "ptd_graph_imprecise"
     for (i in idx) {
-      c1 <- .new_candidate(rf$qnames[i], local_bp, as.integer(cand$dup_length), "ptd_graph",
+      c1 <- .new_candidate(rf$qnames[i], local_bp, dup_len, cand_type,
                            rf$mapqs[i], rf$is_reverse[i], rf$cigars[i], rf$seqs[i],
                            itd_seq = junction_seq, read_start = rf$starts[i], read_end = rf$ends[i])
       c1$dup_exons <- paste0(sub("Exon_", "", cand$dup_start_exon), "-", sub("Exon_", "", cand$dup_end_exon))

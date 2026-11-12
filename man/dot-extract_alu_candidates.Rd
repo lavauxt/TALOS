@@ -18,7 +18,7 @@
 
 \item{alu_seqs}{Named DNAStringSet.}
 
-\item{genomic_start}{Integer – regional offset for local-coord conversion.}
+\item{genomic_start}{Integer - regional offset for local-coord conversion.}
 
 \item{min_clip_len}{Minimum clip length (default 25 bp).}
 
@@ -30,7 +30,7 @@
 data.frame with columns:
   read_name, genomic_pos, local_pos, clip_side, clip_seq,
   alu_subtype, alu_score, alu_strand, aln_start, aln_end,
-  poly_a_len, mapq, is_reverse
+  pattern_start, pattern_end, boundary_bases, poly_a_len, mapq, is_reverse
 }
 \description{
 For each read, both the leading and trailing soft-clips are checked

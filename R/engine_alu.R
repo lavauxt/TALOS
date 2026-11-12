@@ -89,80 +89,139 @@
 #' Match a single soft-clip sequence against all ALU consensus entries
 #'
 #' Uses local pairwise alignment (Smith-Waterman).  Returns a list with:
-#'   subtype  - best-matching ALU family name
-#'   score    - normalised alignment score (0-1)
-#'   strand   - "+" (sense) or "-" (antisense)
-#'   aln_start- start position in the ALU consensus (for 5' truncation calc)
-#'   aln_end  - end position in the ALU consensus
+#'   subtype       - best-matching ALU family name
+#'   score         - normalised alignment score (0-1)
+#'   strand        - "+" (sense) or "-" (antisense)
+#'   aln_start     - start position in the ALU consensus (for 5' truncation calc)
+#'   aln_end       - end position in the ALU consensus
+#'   pattern_start - start position of the local alignment in the *clip*
+#'                   sequence (1-based). Bases before this position in the clip
+#'                   are not aligned to ALU and may be target-site sequence.
+#'   pattern_end   - end position of the local alignment in the *clip*
+#'                   sequence. Bases after this position in the clip are not
+#'                   aligned to ALU and may be target-site sequence or poly-A.
+#'
+#' [ITEM 2] Pattern alignment positions are now stored alongside subject
+#' (consensus) positions. The non-ALU bases at clip boundaries
+#' (clip[1 .. pattern_start-1] for trail clips, clip[pattern_end+1 .. end]
+#' for lead clips) frequently correspond to the target-site duplication
+#' (TSD) created at insertion time. Storing these positions enables more
+#' precise TSD detection without re-running the alignment. See
+#' .extract_alu_boundary_bases() for the helper that recovers them.
 #'
 #' @param clip_seq  Character string (soft-clip bases).
 #' @param alu_seqs  Named DNAStringSet from .load_alu_consensus().
 #' @param min_clip_len Minimum clip length to attempt alignment (default 25).
 #' @param min_score    Minimum normalised score to accept a match (default 0.6).
+#' @param min_aligned_bases Minimum aligned clip width required (default 20).
 #' @keywords internal
 .match_clip_to_alu <- function(
-  clip_seq,
-  alu_seqs,
-  min_clip_len = 25L,
-  min_score = 0.60
+  clip_seq, alu_seqs, min_clip_len = 25L, min_score = 0.60,
+  min_aligned_bases = 20L
 ) {
-  if (is.na(clip_seq) || nchar(clip_seq) < min_clip_len) {
-    return(NULL)
-  }
-  if (!requireNamespace("Biostrings", quietly = TRUE)) {
-    return(NULL)
-  }
-  if (!requireNamespace("pwalign", quietly = TRUE)) {
-    return(NULL)
-  }
-
+  if (length(clip_seq) != 1L || is.na(clip_seq) || nchar(clip_seq) < min_clip_len ||
+      !requireNamespace("Biostrings", quietly = TRUE) ||
+      !requireNamespace("pwalign", quietly = TRUE)) return(NULL)
+  clip_seq <- toupper(as.character(clip_seq))
+  n <- nchar(clip_seq)
   clip_dna <- Biostrings::DNAString(clip_seq)
   clip_rc <- Biostrings::reverseComplement(clip_dna)
-
-  best <- list(
-    subtype = NA_character_,
-    score = 0,
-    strand = NA_character_,
-    aln_start = NA_integer_,
-    aln_end = NA_integer_
-  )
+  best <- NULL; best_score <- -Inf
   orientations <- list(`+` = clip_dna, `-` = clip_rc)
-
   for (nm in names(alu_seqs)) {
     ref <- alu_seqs[[nm]]
-    for (i in seq_along(orientations)) {
-      strand <- names(orientations)[i]
-      aln <- tryCatch(
-        pwalign::pairwiseAlignment(
-          orientations[[i]],
-          ref,
-          type = "local",
-          gapOpening = -10,
-          gapExtension = -0.5
-        ),
-        error = function(e) NULL
-      )
-      if (is.null(aln)) {
-        next
+    for (strand in names(orientations)) {
+      aln <- tryCatch(pwalign::pairwiseAlignment(
+        orientations[[strand]], ref, type = "local", gapOpening = -10, gapExtension = -0.5
+      ), error = function(e) NULL)
+      if (is.null(aln)) next
+      pat <- pwalign::pattern(aln); subj <- pwalign::subject(aln)
+      ps <- as.integer(pwalign::start(pat)); pe <- as.integer(pwalign::end(pat))
+      ss <- as.integer(pwalign::start(subj)); se <- as.integer(pwalign::end(subj))
+      if (anyNA(c(ps, pe, ss, se)) || pe < ps) next
+      aligned_bases <- pe - ps + 1L
+      if (aligned_bases < min_aligned_bases) next
+      norm_score <- as.numeric(pwalign::score(aln)) / aligned_bases
+      if (!is.finite(norm_score) || norm_score <= best_score) next
+      if (strand == "-") {
+        ps_fwd <- n - pe + 1L; pe_fwd <- n - ps + 1L
+      } else {
+        ps_fwd <- ps; pe_fwd <- pe
       }
-
-      norm_score <- pwalign::score(aln) / nchar(clip_seq)
-      if (norm_score > best$score) {
-        best <- list(
-          subtype = nm,
-          score = norm_score,
-          strand = strand,
-          aln_start = pwalign::start(pwalign::subject(aln)),
-          aln_end = pwalign::end(pwalign::subject(aln))
-        )
-      }
+      best_score <- norm_score
+      best <- list(subtype = nm, score = norm_score, strand = strand,
+                   aln_start = ss, aln_end = se, pattern_start = ps_fwd,
+                   pattern_end = pe_fwd, aligned_bases = aligned_bases,
+                   clip_fraction = aligned_bases / n)
     }
   }
-
-  if (best$score < min_score) {
-    return(NULL)
-  }
+  if (is.null(best) || best$score < min_score) return(NULL)
   best
+}
+
+
+#' Extract the non-ALU boundary bases from a soft-clip sequence
+#'
+#' [ITEM 2] Helper that uses pattern_start / pattern_end stored by
+#' .match_clip_to_alu() to recover the bases at the clip boundary that did
+#' NOT align to the ALU consensus. For a freshly inserted ALU with a TSD
+#' (inserted material layout: upstream_TSD + ALU + downstream_TSD, in the
+#' donor genome between two reference positions):
+#'
+#'   - Trail clip (read crosses the UPSTREAM junction; aligned portion is
+#'     the upstream reference, 3' end of the read is the inserted material):
+#'       clip = upstream_TSD + ALU_start
+#'       The ALU pattern alignment starts at pattern_start, so the bases
+#'       clip[1 .. pattern_start-1] are candidate upstream TSD.
+#'
+#'   - Lead clip (read crosses the DOWNSTREAM junction; aligned portion is
+#'     the downstream reference, 5' end of the read is the inserted material):
+#'       clip = ALU_end + downstream_TSD
+#'       The ALU pattern alignment ends at pattern_end, so the bases
+#'       clip[pattern_end+1 .. nchar(clip)] are candidate downstream TSD.
+#'
+#' poly-A tails appended to ALU 3' ends also land in the lead-clip suffix;
+#' callers can strip a terminal poly-A first via .detect_poly_a() if the
+#' read orientation makes this ambiguous.
+#'
+#' .match_clip_to_alu() maps reverse-orientation alignment coordinates back
+#' to the original forward clip, so these boundary coordinates are always
+#' interpreted in the original clip sequence.
+#'
+#' @param clip_seq     Character - the soft-clip sequence.
+#' @param pattern_start Integer - start of ALU alignment in clip (1-based).
+#' @param pattern_end   Integer - end of ALU alignment in clip (1-based).
+#' @param clip_side    Character - "lead" or "trail".
+#' @return Character scalar with the boundary bases ("" if none), or
+#'   NA_character_ if inputs are missing / invalid.
+#' @keywords internal
+.extract_alu_boundary_bases <- function(
+  clip_seq,
+  pattern_start,
+  pattern_end,
+  clip_side
+) {
+  if (
+    is.na(clip_seq) || !nzchar(clip_seq) ||
+      is.na(pattern_start) || is.na(pattern_end) ||
+      !clip_side %in% c("lead", "trail")
+  ) {
+    return(NA_character_)
+  }
+  n <- nchar(clip_seq)
+  if (pattern_start < 1L || pattern_end > n || pattern_start > pattern_end) {
+    return(NA_character_)
+  }
+
+  if (clip_side == "trail") {
+    # Trail clip = upstream_TSD + ALU_start. TSD is the PREFIX.
+    if (pattern_start <= 1L) return("")
+    substr(clip_seq, 1L, pattern_start - 1L)
+  } else {
+    # Lead clip = ALU_end + downstream_TSD. TSD is the SUFFIX.
+    if (pattern_end >= n) return("")
+    substr(clip_seq, pattern_end + 1L, n)
+  }
 }
 
 
@@ -338,7 +397,7 @@
 #' @return data.frame with columns:
 #'   read_name, genomic_pos, local_pos, clip_side, clip_seq,
 #'   alu_subtype, alu_score, alu_strand, aln_start, aln_end,
-#'   poly_a_len, mapq, is_reverse
+#'   pattern_start, pattern_end, boundary_bases, poly_a_len, mapq, is_reverse
 #' @keywords internal
 .extract_alu_candidates <- function(
   reads,
@@ -419,6 +478,17 @@
         next
       }
 
+      # [ITEM 2] Extract the non-ALU boundary bases from the clip using the
+      # stored pattern alignment positions. For a lead clip these are the
+      # bases before pattern_start; for a trail clip, the bases after
+      # pattern_end. They often contain the TSD copy carried on the read.
+      boundary_bases <- .extract_alu_boundary_bases(
+        clip_seq = clip_seq,
+        pattern_start = hit$pattern_start,
+        pattern_end = hit$pattern_end,
+        clip_side = side
+      )
+
       k <- k + 1L
       rows[[k]] <- data.frame(
         read_name = all_qnames[i],
@@ -431,6 +501,11 @@
         alu_strand = hit$strand,
         aln_start = hit$aln_start,
         aln_end = hit$aln_end,
+        pattern_start = hit$pattern_start,
+        pattern_end = hit$pattern_end,
+        aln_bases = hit$aligned_bases,
+        clip_fraction = hit$clip_fraction,
+        boundary_bases = boundary_bases,
         poly_a_len = poly_a,
         mapq = all_mapqs[i],
         is_reverse = is_reverse[i],
@@ -461,13 +536,17 @@
   gene_config,
   wt_info,
   alu_seqs,
-  min_support = 3L
+  min_support = 3L,
+  min_tsd = 0L
 ) {
   cluster_df <- cluster_df[
     order(cluster_df$alu_score, decreasing = TRUE),
     ,
     drop = FALSE
   ]
+  # Preserve both clip sides for TSD reconstruction before collapsing QNAMEs
+  # for independent support counts and per-read summary metrics.
+  cluster_all <- cluster_df
   cluster_df <- cluster_df[!duplicated(cluster_df$read_name), , drop = FALSE]
   if (nrow(cluster_df) < min_support) {
     return(NULL)
@@ -491,8 +570,9 @@
   tsd <- .detect_alu_tsd(
     ref_dna,
     local_pos,
-    cluster_df = cluster_df,
-    genomic_start = gene_config$genomic_start
+    cluster_df = cluster_all,
+    genomic_start = gene_config$genomic_start,
+    min_tsd = if (isTRUE(min_tsd > 0L)) as.integer(min_tsd) else 5L
   )
 
   # [ITEM 9] max(..., na.rm = TRUE) on an all-NA vector is -Inf with a warning.
@@ -519,8 +599,8 @@
   depth <- n_support + wt_at_site
   vaf <- if (depth > 0L) n_support / depth else NA_real_
 
-  clip_lengths <- nchar(cluster_df$clip_seq)
-  best_clip <- cluster_df$clip_seq[which.max(clip_lengths)]
+  # Sequence, subtype, strand and truncation must all refer to the same hit.
+  best_clip <- as.character(best_hit$clip_seq)
 
   data.frame(
     InsertionSite = median_pos,
@@ -563,20 +643,15 @@
     return(FALSE)
   }
 
-  # [FIX] When TSD_Status is "unknown" (the default after the Finding 1 fix),
-  # TSD_Length is NA. A min_tsd > 0 threshold should only filter calls whose
-  # TSD was *confirmed absent* (i.e. read evidence showed no TSD). Since the
-  # current implementation never reports "confirmed absent" (it reports
-  # "unknown" instead), min_tsd > 0 is effectively disabled with a warning.
-  # This is safer than filtering on an unreliable value.
+  # Explicit min_tsd requires a read-supported TSD; unknown evidence fails.
   tsd_ok <- if (min_tsd == 0L) {
     TRUE
-  } else if (!is.null(row$TSD_Status) && !is.na(row$TSD_Status) &&
-             row$TSD_Status == "read_supported") {
-    isTRUE(!is.na(row$TSD_Length) && row$TSD_Length >= min_tsd)
   } else {
-    # TSD unknown — do not filter on it.
-    TRUE
+    # An explicit minimum is a real filter: unknown/unresolved TSD evidence
+    # cannot satisfy a requested minimum and must not silently pass.
+    isTRUE(!is.null(row$TSD_Status) && length(row$TSD_Status) == 1L &&
+           !is.na(row$TSD_Status) && row$TSD_Status == "read_supported" &&
+           !is.na(row$TSD_Length) && row$TSD_Length >= min_tsd)
   }
 
   isTRUE(row$SupportingReads >= min_support) &&
@@ -667,7 +742,14 @@ detect_alu <- function(
   verbose = TRUE
 ) {
   start_time <- Sys.time()
+  if (length(min_tsd) != 1L || is.na(min_tsd) || min_tsd < 0L) {
+    stop("min_tsd must be one non-negative integer (0 disables the filter).", call. = FALSE)
+  }
+  if (length(min_mapq) != 1L || is.na(min_mapq) || min_mapq < 0L) {
+    stop("min_mapq must be one non-negative integer.", call. = FALSE)
+  }
   gene_name <- gene_config$gene %||% "UNKNOWN"
+  gene_config$min_mapq <- as.integer(min_mapq)
   if (is.null(sample_name)) {
     sample_name <- .sample_from_bam(bam_path)
   }
@@ -680,14 +762,9 @@ detect_alu <- function(
     ))
   }
 
-  # [FIX] Warn if min_tsd > 0: TSD filtering is effectively disabled because
-  # TSD detection now requires read evidence and reports "unknown" when
-  # unavailable. Do not silently rely on an unreliable value.
   if (min_tsd > 0L && verbose) {
-    message("[ALU] WARNING: min_tsd > 0 is set but TSD detection is ",
-            "conservative (read-evidence based). Calls with unknown TSD ",
-            "will NOT be filtered; only calls with confirmed TSD >= min_tsd ",
-            "pass, and confirmed TSDs require both lead and trail clips.")
+    message("[ALU] min_tsd is active: calls without a read-supported TSD >= ",
+            min_tsd, " bp (including unknown TSD status) will be rejected.")
   }
 
   alu_seqs <- tryCatch(
@@ -773,7 +850,8 @@ detect_alu <- function(
       gene_config = gene_config,
       wt_info = wt_info,
       alu_seqs = alu_seqs,
-      min_support = min_support
+      min_support = min_support,
+      min_tsd = min_tsd
     )
     if (
       .filter_alu_call(row, min_support, min_alu_score, vaf_threshold, min_tsd)
@@ -882,8 +960,12 @@ talos_alu <- function(
   verbose = TRUE,
   ...
 ) {
-  # Named arguments: the positional call mapped padding -> config_path,
-  # yaml_path -> bsgenome, bsgenome -> padding and exon_padding -> use_db.
+  # Match talos(): explicit arguments override gene_settings, which override defaults.
+  yaml_gs <- tryCatch(yaml::read_yaml(yaml_path)[[gene]]$gene_settings,
+                      error = function(e) NULL)
+  if (missing(padding) && !is.null(yaml_gs$padding)) padding <- as.integer(yaml_gs$padding)
+  if (missing(exon_padding) && !is.null(yaml_gs$exon_padding)) exon_padding <- as.integer(yaml_gs$exon_padding)
+
   config <- get_gene_config(
     gene = gene,
     build = build,

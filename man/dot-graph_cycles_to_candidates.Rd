@@ -4,7 +4,12 @@
 \alias{.graph_cycles_to_candidates}
 \title{Turn exon-graph PTD cycles into read-level candidates}
 \usage{
-.graph_cycles_to_candidates(cycles, reads, genomic_start)
+.graph_cycles_to_candidates(
+  cycles,
+  reads,
+  genomic_start,
+  ref_len = NA_integer_
+)
 }
 \arguments{
 \item{cycles}{Output of extract_graph_candidates().}

@@ -405,13 +405,10 @@ compute_hgvs_annotations <- function(
       strand <- gene_config$strand
       bs_obj <- gene_config$bsgenome_obj
       exon_seq_list <- lapply(seq_along(exons_gr), function(i) {
-        seq <- as.character(BSgenome::getSeq(bs_obj, exons_gr[i]))
-        if (strand == "-") {
-          seq <- as.character(Biostrings::reverseComplement(Biostrings::DNAString(
-            seq
-          )))
-        }
-        seq
+        # getSeq() already reverse-complements minus-strand exons, so no
+        # manual reverseComplement() here (it used to double-flip the
+        # rebuilt full_cdna into antisense and corrupt the protein frame).
+        as.character(BSgenome::getSeq(bs_obj, exons_gr[i]))
       })
       full_cdna <- paste(unlist(exon_seq_list), collapse = "")
       if (nchar(full_cdna) == 0) {
@@ -903,17 +900,72 @@ compute_span_depth_fold_change <- function(
 #' @param min_mapq Minimum MAPQ for both mates.
 #' @return list of per-pair vectors, or NULL when there are no pairs.
 #' @keywords internal
+.normalize_read_qname <- function(x) {
+  x <- as.character(x)
+  x <- sub("[[:space:]].*$", "", x)
+  x <- sub("/[12]$", "", x)
+  x[is.na(x) | !nzchar(x) | x == "*"] <- NA_character_
+  x
+}
+
+# Combine QNAME candidates without losing non-missing values from a later
+# source. readGAlignmentPairs(use.names=TRUE) normally stores QNAMEs in names,
+# while other constructors keep them in mate metadata columns.
+.select_pair_qnames <- function(n, candidates) {
+  n <- as.integer(n)[1L]
+  if (is.na(n) || n < 0L) return(character(0))
+  out <- rep(NA_character_, n)
+  for (candidate in candidates) {
+    if (is.null(candidate)) next
+    candidate <- as.character(candidate)
+    if (length(candidate) != n) next
+    candidate <- .normalize_read_qname(candidate)
+    fill <- is.na(out) & !is.na(candidate)
+    if (any(fill)) out[fill] <- candidate[fill]
+  }
+  out
+}
+
+# PE support matching is explicit: lack of QNAME linkage is unavailable data,
+# not a measured zero-coverage result.
+.match_support_qnames <- function(pair_qnames, support_qnames) {
+  pair_norm <- .normalize_read_qname(pair_qnames)
+  support_norm <- unique(stats::na.omit(.normalize_read_qname(support_qnames)))
+  usable <- !is.na(pair_norm)
+  matched <- usable & pair_norm %in% support_norm
+  matched[is.na(matched)] <- FALSE
+  n_matched <- as.integer(length(unique(pair_norm[matched])))
+  status <- if (!length(pair_norm) || !any(usable)) {
+    "unavailable_no_pair_qnames"
+  } else if (n_matched == 0L) {
+    "unavailable_no_support_qname_matches"
+  } else {
+    "computed"
+  }
+  list(pair_qname = pair_norm, matched = matched,
+       usable_pairs = as.integer(sum(usable)), matched_pairs = n_matched,
+       status = status)
+}
+
 .pair_info <- function(all_pairs, min_mapq = 20L) {
   if (is.null(all_pairs) || length(all_pairs) == 0L) return(NULL)
   r1 <- GenomicAlignments::first(all_pairs)
   r2 <- GenomicAlignments::last(all_pairs)
   n <- length(r1)
-  mq1 <- .mcol_or(r1, "mapq", 0L); mq2 <- .mcol_or(r2, "mapq", 0L)
-  f1 <- .mcol_or(r1, "flag", 0L);  f2 <- .mcol_or(r2, "flag", 0L)
-  primary <- bitwAnd(f1, 0x100L) == 0L & bitwAnd(f1, 0x800L) == 0L &
+  mq1 <- .mcol_or(r1, "mapq", 0L)
+  mq2 <- .mcol_or(r2, "mapq", 0L)
+  f1 <- .mcol_or(r1, "flag", 0L)
+  f2 <- .mcol_or(r2, "flag", 0L)
+  mapped <- bitwAnd(f1, 0x4L) == 0L & bitwAnd(f2, 0x4L) == 0L
+  primary <- mapped &
+    bitwAnd(f1, 0x100L) == 0L & bitwAnd(f1, 0x800L) == 0L &
     bitwAnd(f2, 0x100L) == 0L & bitwAnd(f2, 0x800L) == 0L
   s1 <- GenomicRanges::start(r1); e1 <- GenomicRanges::end(r1)
   s2 <- GenomicRanges::start(r2); e2 <- GenomicRanges::end(r2)
+  chr1 <- as.character(GenomicRanges::seqnames(r1))
+  chr2 <- as.character(GenomicRanges::seqnames(r2))
+  same_chromosome <- !is.na(chr1) & !is.na(chr2) &
+    chr1 != "*" & chr2 != "*" & chr1 == chr2
   rev1 <- bitwAnd(f1, 0x10L) != 0L
   rev2 <- bitwAnd(f2, 0x10L) != 0L
   left_is_1 <- s1 <= s2
@@ -922,17 +974,20 @@ compute_span_depth_fold_change <- function(
   orientation <- ifelse(!left_rev & right_rev, "FR",
                  ifelse(left_rev & !right_rev, "RF",
                  ifelse(!left_rev & !right_rev, "FF", "RR")))
-  qn <- names(all_pairs)
-  if (is.null(qn) || length(qn) != n || all(is.na(qn))) {
-    qn <- as.character(S4Vectors::mcols(r1)$qname)
-  }
+  qn <- .select_pair_qnames(n, list(
+    S4Vectors::mcols(all_pairs)$qname,
+    S4Vectors::mcols(r1)$qname,
+    S4Vectors::mcols(r2)$qname,
+    names(all_pairs), names(r1), names(r2)
+  ))
   pair_start <- pmin(s1, s2)
   pair_end <- pmax(e1, e2)
   list(
     n = n, qname = qn, s1 = s1, e1 = e1, s2 = s2, e2 = e2,
     rev1 = rev1, rev2 = rev2, left_rev = left_rev, right_rev = right_rev,
     orientation = orientation, primary = primary,
-    valid = primary & mq1 >= min_mapq & mq2 >= min_mapq,
+    same_chromosome = same_chromosome,
+    valid = primary & same_chromosome & mq1 >= min_mapq & mq2 >= min_mapq,
     pair_start = pair_start, pair_end = pair_end,
     outer_insert = pair_end - pair_start + 1L
   )
@@ -986,13 +1041,13 @@ compute_discordant_ratio <- function(
 #'   ITD is likely larger than a single read (default 150).
 #' @param flank Flanking window (bp) for collecting background pairs (default 5000).
 #' @param min_mapq Minimum MAPQ for both reads of a pair (default 20).
-#' @param min_spanning Minimum spanning pairs required for a valid estimate
-#'   (default 5).
+#' @param min_spanning Minimum spanning pairs required for a valid estimate (default 5).
 #' @param max_insert Maximum plausible outer insert size to include (default 5000).
-#' @return Named list with elements \code{length_pe} (estimated length,
-#'   \code{NA_real_} if insufficient data), \code{n_spanning} (number of
-#'   spanning pairs used), and \code{n_background} (number of background
-#'   pairs used).
+#' @param support_qnames Optional normalized QNAME set used to restrict spanning
+#'   pairs. The background insert-size baseline remains the same all-pair
+#'   non-spanning population, so this estimate is directly comparable with the
+#'   unfiltered all-pair estimate.
+#' @return Named list with estimated length, pair counts, insert medians, and status.
 #' @export
 compute_pe_itd_length <- function(
   all_pairs,
@@ -1001,94 +1056,132 @@ compute_pe_itd_length <- function(
   flank = 5000L,
   min_mapq = 20L,
   min_spanning = 5L,
-  max_insert = 5000L
+  max_insert = 5000L,
+  support_qnames = NULL
 ) {
-  empty <- list(length_pe = NA_real_, n_spanning = 0L, n_background = 0L)
+  empty <- list(
+    length_pe = NA_real_, n_spanning = 0L, n_spanning_all = 0L,
+    n_background = 0L, n_valid = 0L, n_support_qname_matched = NA_integer_,
+    median_spanning = NA_real_, median_background = NA_real_,
+    status = "no_pair_data"
+  )
   pi <- .pair_info(all_pairs, min_mapq)
-  if (is.null(pi)) return(empty)
+  if (is.null(pi) || !length(pi$valid)) return(empty)
+
+  n_valid <- as.integer(sum(pi$valid, na.rm = TRUE))
+  if (n_valid == 0L) {
+    empty$status <- "no_valid_pairs"
+    return(empty)
+  }
+
   isize <- pi$outer_insert
-  size_mask <- isize > 0L & isize <= max_insert
+  size_mask <- is.finite(isize) & isize > 0L & isize <= max_insert
   bg_mask <- pi$valid & size_mask &
     pi$pair_start >= (breakpoint - flank) & pi$pair_end <= (breakpoint + flank) &
     !(pi$pair_start < breakpoint & pi$pair_end > breakpoint)
-  span_mask <- pi$valid & size_mask &
+  span_mask_all <- pi$valid & size_mask &
     pi$pair_start <= (breakpoint - nominal_read_len) &
     pi$pair_end >= (breakpoint + nominal_read_len)
-  n_span <- sum(span_mask, na.rm = TRUE)
-  n_bg <- sum(bg_mask, na.rm = TRUE)
-  if (n_span < min_spanning || n_bg < 10L) return(empty)
-  est <- round(stats::median(isize[span_mask], na.rm = TRUE) -
-                 stats::median(isize[bg_mask], na.rm = TRUE))
-  if (is.na(est) || est <= 0L) return(empty)
-  list(length_pe = est, n_spanning = n_span, n_background = n_bg)
+  span_mask <- span_mask_all
+  # Support-specific insert distribution: retain valid support-QNAME pairs
+  # whose outer fragment spans the breakpoint, without demanding an extra
+  # nominal-read-length margin on both sides. This is a diagnostic estimate,
+  # not a replacement for the stricter all-pair spanning estimator.
+  support_insert_mask <- rep(FALSE, length(pi$valid))
+  n_support_qname_matched <- NA_integer_
+  if (!is.null(support_qnames)) {
+    support_qnames <- unique(stats::na.omit(.normalize_read_qname(support_qnames)))
+    qname_usable <- !is.na(pi$qname)
+    support_pair <- qname_usable & pi$qname %in% support_qnames
+    support_pair[is.na(support_pair)] <- FALSE
+    n_support_qname_matched <- as.integer(sum(pi$valid & support_pair, na.rm = TRUE))
+    if (!any(qname_usable)) {
+      result <- empty
+      result$n_valid <- n_valid
+      result$n_background <- as.integer(sum(bg_mask, na.rm = TRUE))
+      result$status <- "unavailable_no_pair_qnames"
+      return(result)
+    }
+    span_mask <- span_mask_all & support_pair
+    support_insert_mask <- pi$valid & size_mask & support_pair &
+      pi$pair_start <= breakpoint & pi$pair_end >= breakpoint
+    support_insert_mask[is.na(support_insert_mask)] <- FALSE
+  }
+  n_span <- as.integer(sum(span_mask, na.rm = TRUE))
+  n_span_all <- as.integer(sum(span_mask_all, na.rm = TRUE))
+  n_bg <- as.integer(sum(bg_mask, na.rm = TRUE))
+  median_span <- if (n_span) stats::median(isize[span_mask], na.rm = TRUE) else NA_real_
+  median_bg <- if (n_bg) stats::median(isize[bg_mask], na.rm = TRUE) else NA_real_
+
+  n_support_insert <- if (!is.null(support_qnames)) as.integer(sum(support_insert_mask)) else NA_integer_
+  median_support_insert <- if (!is.null(support_qnames) && n_support_insert > 0L) {
+    as.numeric(stats::median(isize[support_insert_mask], na.rm = TRUE))
+  } else NA_real_
+  support_length_estimate <- if (is.finite(median_support_insert) && is.finite(median_bg)) {
+    as.numeric(round(median_support_insert - median_bg))
+  } else NA_real_
+  result <- list(
+    length_pe = NA_real_, n_spanning = n_span, n_spanning_all = n_span_all,
+    n_background = n_bg, n_valid = n_valid,
+    n_support_qname_matched = n_support_qname_matched,
+    median_spanning = as.numeric(median_span),
+    median_background = as.numeric(median_bg), status = "not_estimable",
+    n_support_insert_pairs = n_support_insert,
+    median_support_insert = median_support_insert,
+    length_pe_support_insert = support_length_estimate,
+    support_insert_status = if (is.null(support_qnames)) "not_requested" else if (n_support_insert < min_spanning) "insufficient_support_insert_pairs" else if (!is.finite(support_length_estimate) || support_length_estimate <= 0) "invalid_support_insert_estimate" else "computed"
+  )
+  if (n_span < min_spanning) {
+    result$status <- "insufficient_spanning_pairs"
+    return(result)
+  }
+  if (n_bg < 10L) {
+    result$status <- "insufficient_background_pairs"
+    return(result)
+  }
+  estimate <- round(median_span - median_bg)
+  if (!is.finite(estimate) || estimate <= 0L) {
+    result$status <- "nonpositive_or_invalid_estimate"
+    return(result)
+  }
+  result$length_pe <- as.numeric(estimate)
+  result$status <- "computed"
+  result
 }
 
 compute_microhomology <- function(
-  support_rows,
-  ref_dna,
-  breakpoint,
-  genomic_start,
-  debug = FALSE
+  support_rows, ref_dna, breakpoint, genomic_start, debug = FALSE
 ) {
-  if (nrow(support_rows) == 0) {
-    return(NA_integer_)
+  if (is.null(support_rows) || nrow(support_rows) == 0L) return(NA_integer_)
+  ref_len <- nchar(ref_dna)
+  lcp <- function(a, b) {
+    n <- min(nchar(a), nchar(b)); if (n < 1L) return(0L)
+    aa <- strsplit(a, "", fixed = TRUE)[[1L]]; bb <- strsplit(b, "", fixed = TRUE)[[1L]]
+    z <- which(aa[seq_len(n)] != bb[seq_len(n)]); if (length(z)) z[1L]-1L else n
   }
-  mh_lengths <- integer()
-  local_bp <- breakpoint - genomic_start + 1L
-  ref_len_total <- nchar(ref_dna)
-
-  has_biostrings <- .has_biostrings
-
+  lcs <- function(a, b) {
+    ra <- paste(rev(strsplit(a, "", fixed = TRUE)[[1L]]), collapse = "")
+    rb <- paste(rev(strsplit(b, "", fixed = TRUE)[[1L]]), collapse = "")
+    lcp(ra, rb)
+  }
+  has_read_span <- all(c("read_start", "read_end") %in% names(support_rows))
+  mh <- integer()
   for (i in seq_len(nrow(support_rows))) {
-    cig <- support_rows$cigar[i]
-    read_seq <- support_rows$read_seq[i]
-
-    sc <- .get_softclips(cig, read_seq)
-
-    if (!is.na(sc$lead)) {
-      len <- nchar(sc$lead)
-      ref_start <- local_bp + 1L
-      ref_end <- min(ref_len_total, local_bp + len)
-      ref_down <- substr(ref_dna, ref_start, ref_end)
-      if (nchar(ref_down) >= len) {
-        mm <- if (has_biostrings) {
-          Biostrings::lcprefix(sc$lead, ref_down)
-        } else {
-          min_len <- min(nchar(sc$lead), nchar(ref_down))
-          if (substr(sc$lead, 1, min_len) == substr(ref_down, 1, min_len)) {
-            min_len
-          } else {
-            0
-          }
-        }
-        if (mm > 0) mh_lengths <- c(mh_lengths, mm)
-      }
+    sc <- .get_softclips(support_rows$cigar[i], support_rows$read_seq[i])
+    lead_bp <- if (has_read_span && !is.na(support_rows$read_start[i]))
+      as.integer(support_rows$read_start[i]) - genomic_start + 1L else breakpoint - genomic_start + 1L
+    trail_bp <- if (has_read_span && !is.na(support_rows$read_end[i]))
+      as.integer(support_rows$read_end[i]) - genomic_start + 1L else breakpoint - genomic_start + 1L
+    if (!is.na(sc$lead) && lead_bp > 1L) {
+      n <- nchar(sc$lead); flank <- substr(ref_dna, max(1L, lead_bp-n), lead_bp-1L)
+      if (nzchar(flank)) { z <- lcs(sc$lead, flank); if (z > 0L) mh <- c(mh, z) }
     }
-
-    if (!is.na(sc$trail)) {
-      len <- nchar(sc$trail)
-      ref_start <- max(1L, local_bp - len)
-      ref_end <- local_bp - 1L
-      ref_up <- substr(ref_dna, ref_start, ref_end)
-      if (nchar(ref_up) >= len) {
-        mm <- if (has_biostrings) {
-          Biostrings::lcprefix(sc$trail, ref_up)
-        } else {
-          min_len <- min(nchar(sc$trail), nchar(ref_up))
-          if (substr(sc$trail, 1, min_len) == substr(ref_up, 1, min_len)) {
-            min_len
-          } else {
-            0
-          }
-        }
-        if (mm > 0) mh_lengths <- c(mh_lengths, mm)
-      }
+    if (!is.na(sc$trail) && trail_bp < ref_len) {
+      n <- nchar(sc$trail); flank <- substr(ref_dna, trail_bp+1L, min(ref_len, trail_bp+n))
+      if (nzchar(flank)) { z <- lcp(sc$trail, flank); if (z > 0L) mh <- c(mh, z) }
     }
   }
-  if (length(mh_lengths) == 0) {
-    return(NA_integer_)
-  }
-  as.integer(median(mh_lengths))
+  if (!length(mh)) NA_integer_ else as.integer(stats::median(mh))
 }
 
 compute_repeat_entropy <- function(
@@ -1202,13 +1295,21 @@ detect_orientation <- function(itd_seq, ref_seq, min_pid = 0.90) {
   list("RefMatch_Observed", "REFMATCH_OBS", "%.1f", as.numeric),
   list("RefMatch_Total", "REFMATCH_TOT", "%.1f", as.numeric),
   list("ITDReadCoverage", "ITDCOV", "%.1f", as.numeric),
+  list("ITDReadCoverage_Combined", "ITDCOVANY", "%.1f", as.numeric),
+  list("ITDUncoveredBases_Direct", "ITDUNCOVD", "%d", as.integer),
+  list("ITDUncoveredBases_Combined", "ITDUNCOV", "%d", as.integer),
+  list("ITDUncoveredIntervals_Combined", "ITDGAPS", "%s", .vcf_safe),
+  list("LengthPE_Delta", "LPEDELTA", "%+.0f", as.numeric),
+  list("LengthPE_Concordant", "LPEOK", "%d", function(v) as.integer(isTRUE(v))),
   list("HotspotName", "HOTSPOT", "%s", function(v) .vcf_safe(gsub(";[[:space:]]*", ",", v))),
   list("AlignmentScore", "ALNSCORE", "%.4f", as.numeric),
   list("TotalSupportBases", "SUPBASES", "%d", as.integer),
   list("LeftSoftclipCount", "LSC", "%d", as.integer),
   list("RightSoftclipCount", "RSC", "%d", as.integer),
   list("LeftSoftclipPctSupport", "LSCPCT", "%.1f", as.numeric),
-  list("RightSoftclipPctSupport", "RSCPCT", "%.1f", as.numeric)
+  list("RightSoftclipPctSupport", "RSCPCT", "%.1f", as.numeric),
+  list("ITDMeanBaseQuality", "MBQ", "%.1f", as.numeric),
+  list("ITDAdapterPositiveSupportReads", "ADPTR", "%d", as.integer)
 )
 
 .format_info <- function(row) {
@@ -1229,6 +1330,7 @@ detect_orientation <- function(itd_seq, ref_seq, min_pid = 0.90) {
     col <- spec[[1L]]
     v <- row[[col]]
     if (is.null(v) || length(v) == 0L || is.na(v)) next
+    if (is.character(v) && !nzchar(v)) next
     if (col == "HotspotName" && !isTRUE(row$Hotspot)) next
     info <- paste0(info, ";", spec[[2L]], "=", sprintf(spec[[3L]], spec[[4L]](v)))
   }
@@ -1266,7 +1368,9 @@ build_vcf_header <- function(
         paste0("##contig=<ID=", chrom, ",length=", contig_length, ">")
       )
     } else {
-      lines <- c(lines, paste0("##contig=<ID=", chrom, ",length=?>"))
+      # VCF 4.2 does not define '?' as a valid contig length. Omit the
+      # optional length attribute when it is unavailable.
+      lines <- c(lines, paste0("##contig=<ID=", chrom, ">"))
     }
   }
 
@@ -1279,13 +1383,19 @@ build_vcf_header <- function(
     '##INFO=<ID=GENE,Number=1,Type=String,Description="Gene name">',
     '##INFO=<ID=CDS,Number=1,Type=String,Description="HGVS cDNA notation">',
     '##INFO=<ID=AA,Number=1,Type=String,Description="HGVS protein notation">',
-    '##INFO=<ID=AF,Number=1,Type=Float,Description="Mutant allele frequency">',
-    '##INFO=<ID=DP,Number=1,Type=Integer,Description="Total depth at breakpoint">',
-    '##INFO=<ID=SUPPORT,Number=1,Type=Integer,Description="Bias-corrected fragment count">',
-    '##INFO=<ID=WT,Number=1,Type=Integer,Description="Wildtype fragment count">',
+    '##INFO=<ID=AF,Number=1,Type=Float,Description="Raw allele fraction: unadjusted supporting QNAMEs / (supporting QNAMEs + wild-type QNAMEs)">',
+    '##INFO=<ID=DP,Number=1,Type=Integer,Description="Raw supporting + wild-type QNAME depth at breakpoint">',
+    '##INFO=<ID=SUPPORT,Number=1,Type=Integer,Description="Raw distinct supporting QNAME count">',
+    '##INFO=<ID=WT,Number=1,Type=Integer,Description="Distinct wild-type QNAME count">',
     '##INFO=<ID=REFMATCH_OBS,Number=1,Type=Float,Description="% identity between observed ITD sequence and reference segment (0-100)">',
     '##INFO=<ID=REFMATCH_TOT,Number=1,Type=Float,Description="% identity between full reconstructed ITD sequence (observed+imputed) and reference segment (0-100)">',
-    '##INFO=<ID=ITDCOV,Number=1,Type=Float,Description="% of ITD sequence positions covered by actual reads (0-100)">',
+    '##INFO=<ID=ITDCOV,Number=1,Type=Float,Description="% of ITD sequence positions covered by direct read alignment (0-100)">',
+    '##INFO=<ID=ITDCOVANY,Number=1,Type=Float,Description="% of ITD positions covered by direct read-sequence alignment or position-resolved sequence-anchored k-mer evidence; PE coordinate projection excluded">',
+    '##INFO=<ID=ITDUNCOVD,Number=1,Type=Integer,Description="Number of ITD bases without direct read alignment">',
+    '##INFO=<ID=ITDUNCOV,Number=1,Type=Integer,Description="Number of ITD bases unsupported by all enabled evidence sources">',
+    '##INFO=<ID=ITDGAPS,Number=1,Type=String,Description="1-based inclusive ITD-relative intervals unsupported by all enabled evidence sources; pipe-delimited">',
+    '##INFO=<ID=LPEDELTA,Number=1,Type=Float,Description="PE length estimate minus primary length estimate (bp)">',
+    '##INFO=<ID=LPEOK,Number=1,Type=Integer,Description="1 when PE and primary length estimates are concordant; 0 otherwise">',
     '##INFO=<ID=CD,Number=1,Type=Float,Description="Coverage drop fold-change across breakpoint">',
     '##INFO=<ID=DRATIO,Number=1,Type=Float,Description="Discordant pair ratio spanning breakpoint">',
     '##INFO=<ID=MH,Number=1,Type=Integer,Description="Median microhomology length (bp)">',
@@ -1734,6 +1844,23 @@ compute_pe_softclip_metrics <- function(
 }
 
 
+# Return every reference position for each query k-mer. Unlike match(), this
+# preserves repeat multiplicity and allows callers/QC to distinguish a unique
+# breakpoint-spanning k-mer from a repetitive seed. Positions are 1-based.
+.kmer_match_positions <- function(query, table) {
+  if (is.null(query) || !length(query) || is.null(table) || !length(table)) {
+    return(vector("list", length(query)))
+  }
+  idx <- split(seq_along(table), factor(table, levels = unique(table)))
+  lapply(as.character(query), function(q) {
+    hit <- idx[[q]]
+    if (is.null(hit)) integer(0) else as.integer(hit)
+  })
+}
+
+# Compatibility wrapper: candidate walking still needs one deterministic
+# coordinate. Keep the first hit for the legacy walk, while making the full
+# hit set available through .kmer_match_positions() for ambiguity/QC logic.
 .kmer_match <- function(query, table) {
   if (.has_fastmatch) fastmatch::fmatch(query, table) else match(query, table)
 }

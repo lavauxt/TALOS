@@ -7,9 +7,9 @@
 .alu_5p_truncation(aln_start, consensus_len)
 }
 \arguments{
-\item{aln_start}{Integer – alignment start in consensus (1-based).}
+\item{aln_start}{Integer - alignment start in consensus (1-based).}
 
-\item{consensus_len}{Integer – total consensus length.}
+\item{consensus_len}{Integer - total consensus length.}
 }
 \description{
 New ALU copies are frequently 5'-truncated. If the clip matches the

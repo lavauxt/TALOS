@@ -122,7 +122,8 @@
   )
 }
 
-.sample_compressed_coverage <- function(cov, axis_ctx, max_gap_points = 30L) {
+.sample_compressed_coverage <- function(cov, axis_ctx, max_gap_points = 30L,
+                                        coverage_start = 1L) {
   seg <- axis_ctx$segments
   out <- lapply(seq_len(nrow(seg)), function(i) {
     raw_n <- as.integer(seg$raw_end[i] - seg$raw_start[i] + 1L)
@@ -132,9 +133,13 @@
       as.integer(unique(round(seq(seg$raw_start[i], seg$raw_end[i], length.out = max_gap_points))))
     }
     depth <- if (is.null(cov)) rep(NA_real_, length(raw_pos)) else {
-      inr <- raw_pos >= 1L & raw_pos <= length(cov)
+      # Coverage queried for a report window is stored window-relative to
+      # avoid constructing a chromosome-length Rle. Legacy caller-supplied
+      # precomputed Rles retain genomic-coordinate indexing via start=1.
+      idx <- as.integer(raw_pos - as.numeric(coverage_start) + 1L)
+      inr <- !is.na(idx) & idx >= 1L & idx <= length(cov)
       d <- rep(0, length(raw_pos))
-      d[inr] <- as.numeric(cov[raw_pos[inr]])
+      d[inr] <- as.numeric(cov[idx[inr]])
       d
     }
     data.frame(raw_pos = raw_pos, disp_pos = axis_ctx$transform_pos(raw_pos), depth = depth,
@@ -143,24 +148,60 @@
   do.call(rbind, out)
 }
 
-#' [ITEM 13] Build per-variant ITD-coverage display rows from ITDCoverageRLE.
+#' Resolve the per-base ITD coverage vector used by report tracks.
 #'
-#' Variants whose ITDCoverageRLE is NA or empty are silently skipped, so the
-#' returned data.frame may contain fewer distinct `variant` ids than
-#' nrow(itd_df). Callers must not assume one row-block per input variant
-#' (every caller iterates over the rows that exist).
+#' Prefer the already folded allele-specific display RLE. Older / merged result
+#' rows can have that field unset while retaining source-specific RLE columns;
+#' reconstruct from direct read-sequence and k-mer evidence only. PE coordinate
+#' projection is diagnostic and must never fill an ITD allele coverage gap.
+.itd_coverage_vector_for_row <- function(row) {
+  read_col <- function(nm) {
+    if (!nm %in% names(row)) return(integer(0))
+    .parse_itd_coverage_rle(row[[nm]][1L])
+  }
+  combined <- read_col("ITDCoverageRLE")
+  if (length(combined)) return(as.integer(combined))
+
+  direct <- read_col("ITDCoverageRLE_Direct")
+  kmer <- read_col("ITDCoverageRLE_Kmer")
+  lens <- c(length(direct), length(kmer))
+  n <- max(lens)
+  if (n == 0L) return(integer(0))
+  # Do not align vectors of different lengths by stretching them: only
+  # same-coordinate vectors can be safely combined. Keep the best available
+  # complete allele-specific vector when an older result is inconsistent.
+  direct_ok <- length(direct) == n
+  kmer_ok <- length(kmer) == n
+  if (length(unique(lens[lens > 0L])) > 1L) {
+    if (direct_ok) return(as.integer(direct))
+    return(as.integer(kmer))
+  }
+  .fold_display_coverage(
+    if (direct_ok) direct else integer(0),
+    integer(0),
+    if (kmer_ok) kmer else integer(0)
+  )
+}
+
+#' Build per-variant ITD-coverage display rows from stored per-base coverage.
+#' Missing combined RLEs fall back to source-specific RLEs when available.
 #'
-#' @param itd_df  Data frame with columns GenomicPosition and ITDCoverageRLE.
-#' @param dup_ends Integer vector of duplication end positions (same length as nrow(itd_df)).
+#' @param itd_df Data frame with GenomicPosition and coverage RLE columns.
+#' @param dup_ends Integer vector of duplication end positions.
 #' @param axis_ctx Compressed axis context from .build_compressed_axis().
 #' @return data.frame(variant, disp_pos, count, raw_idx); possibly empty.
 .build_itd_cov_display <- function(itd_df, dup_ends, axis_ctx) {
-  if (!"ITDCoverageRLE" %in% names(itd_df)) return(data.frame())
+  if (is.null(itd_df) || nrow(itd_df) == 0L || !"GenomicPosition" %in% names(itd_df)) {
+    return(data.frame())
+  }
+  coverage_cols <- c("ITDCoverageRLE", "ITDCoverageRLE_Direct",
+                     "ITDCoverageRLE_PE", "ITDCoverageRLE_Kmer")
+  if (!any(coverage_cols %in% names(itd_df))) return(data.frame())
   rows <- lapply(seq_len(nrow(itd_df)), function(i) {
-    cov_vec <- .parse_itd_coverage_rle(itd_df$ITDCoverageRLE[i])
+    cov_vec <- .itd_coverage_vector_for_row(itd_df[i, , drop = FALSE])
     if (length(cov_vec) == 0L) return(NULL)
-    x0 <- axis_ctx$transform_pos(itd_df$GenomicPosition[i])
-    x1 <- axis_ctx$transform_pos(dup_ends[i])
+    x0 <- axis_ctx$transform_pos(as.numeric(itd_df$GenomicPosition[i]))
+    x1 <- axis_ctx$transform_pos(as.numeric(dup_ends[i]))
     data.frame(variant = i,
                disp_pos = if (length(cov_vec) == 1L) x0 else seq(x0, x1, length.out = length(cov_vec)),
                count = as.numeric(cov_vec), raw_idx = seq_along(cov_vec))
@@ -169,19 +210,94 @@
   if (!length(rows)) data.frame() else do.call(rbind, rows)
 }
 
-# Coverage over [from, to]: precomputed Rle if given, else read from the BAM
-# (contig name resolved against the BAM header). Shared by all plot paths.
-.plot_coverage <- function(bam_path, gene_config, from, to, precomputed_cov = NULL) {
-  if (!is.null(precomputed_cov)) return(precomputed_cov)
-  if (is.null(bam_path) || !file.exists(bam_path)) return(NULL)
-  bam_chrom <- .resolve_bam_seqname(bam_path, gene_config$chrom)
-  param <- Rsamtools::ScanBamParam(
-    which = GenomicRanges::GRanges(bam_chrom, IRanges::IRanges(from, to)),
-    flag = Rsamtools::scanBamFlag(isSecondaryAlignment = FALSE, isSupplementaryAlignment = FALSE)
+# Convert genomic alignment blocks into a coverage Rle whose index 1
+# represents `from`. This is deliberately window-relative: report windows can
+# include distal exons (e.g. FLT3 E16) that are several Mb from the detection
+# interval, and indexing a short target-only Rle by genomic coordinates silently
+# rendered those exons as zero.
+.coverage_window_from_ranges <- function(gr, bam_chrom, from, to) {
+  from <- suppressWarnings(as.integer(from)[1L])
+  to <- suppressWarnings(as.integer(to)[1L])
+  if (is.na(from) || is.na(to) || from < 1L || to < from) {
+    stop("Invalid genomic coverage window.", call. = FALSE)
+  }
+  width <- as.integer(to - from + 1L)
+  if (is.null(gr) || length(gr) == 0L) {
+    return(IRanges::coverage(IRanges::IRanges(), width = width))
+  }
+  if (methods::is(gr, "GRangesList")) gr <- unlist(gr, use.names = FALSE)
+  if (!methods::is(gr, "GRanges")) {
+    stop("'gr' must be a GRanges or GRangesList object.", call. = FALSE)
+  }
+  keep_seq <- as.character(GenomicRanges::seqnames(gr)) == as.character(bam_chrom)
+  gr <- gr[keep_seq]
+  if (length(gr) == 0L) {
+    return(IRanges::coverage(IRanges::IRanges(), width = width))
+  }
+  local_start <- as.integer(GenomicRanges::start(gr)) - from + 1L
+  local_end <- as.integer(GenomicRanges::end(gr)) - from + 1L
+  keep <- !is.na(local_start) & !is.na(local_end) &
+    local_end >= 1L & local_start <= width & local_end >= local_start
+  if (!any(keep)) {
+    return(IRanges::coverage(IRanges::IRanges(), width = width))
+  }
+  local_ranges <- IRanges::IRanges(
+    start = pmax(1L, local_start[keep]),
+    end = pmin(width, local_end[keep])
   )
-  gal <- GenomicAlignments::readGAlignments(bam_path, param = param)
-  cv <- GenomicAlignments::coverage(gal)
-  if (bam_chrom %in% names(cv)) cv[[bam_chrom]] else NULL
+  IRanges::coverage(local_ranges, width = width)
+}
+
+# Coverage over [from, to]: precomputed genomic-coordinate-indexed Rle if
+# supplied, otherwise query the BAM and construct an explicitly window-relative
+# Rle. The latter avoids relying on the output width/coordinate origin chosen
+# by coverage(GAlignments) for a region-restricted read set.
+.plot_coverage <- function(bam_path, gene_config, from, to, precomputed_cov = NULL) {
+  if (!is.null(precomputed_cov)) {
+    finite_precomputed <- tryCatch({
+      if (methods::is(precomputed_cov, "Rle")) {
+        any(is.finite(S4Vectors::runValue(precomputed_cov)))
+      } else {
+        any(is.finite(as.numeric(precomputed_cov)))
+      }
+    }, error = function(e) FALSE)
+    # Public precomputed coverage vectors are genomic-coordinate indexed
+    # (index 1 = genomic position 1). A shorter vector cannot cover this window.
+    covers_window <- length(precomputed_cov) >= as.numeric(to)
+    if (isTRUE(finite_precomputed) && isTRUE(covers_window)) {
+      return(list(cov = precomputed_cov, start = 1L))
+    }
+    message("[HTML report] Precomputed genomic coverage is empty, non-finite, or does not span the plotted window; falling back to BAM coverage.")
+  }
+  if (is.null(bam_path) || length(bam_path) != 1L || is.na(bam_path) ||
+      !nzchar(bam_path) || !file.exists(bam_path)) {
+    message("[HTML report] Coverage unavailable: no readable BAM path and no usable precomputed coverage.")
+    return(list(cov = NULL, start = from))
+  }
+
+  tryCatch({
+    bam_chrom <- .resolve_bam_seqname(bam_path, gene_config$chrom)
+    param <- Rsamtools::ScanBamParam(
+      which = GenomicRanges::GRanges(bam_chrom, IRanges::IRanges(from, to)),
+      flag = Rsamtools::scanBamFlag(
+        isSecondaryAlignment = FALSE,
+        isSupplementaryAlignment = FALSE,
+        isDuplicate = FALSE,
+        isNotPassingQualityControls = FALSE
+      ),
+      mapqFilter = as.integer(gene_config$min_mapq %||% 20L)
+    )
+    gal <- GenomicAlignments::readGAlignments(bam_path, param = param)
+    gr <- GenomicAlignments::grglist(gal, drop.D.ranges = FALSE)
+    list(cov = .coverage_window_from_ranges(gr, bam_chrom, from, to), start = from)
+  }, error = function(e) {
+    warning(
+      "Could not calculate coverage across plotted interval ", from, "-", to,
+      " in ", basename(bam_path), ": ", conditionMessage(e),
+      call. = FALSE
+    )
+    list(cov = NULL, start = from)
+  })
 }
 
 .genome_build_label <- function(gene_config) {
@@ -208,12 +324,16 @@
   dup_ends <- pos + pmax(len, 1) - 1
   ctx <- .build_plot_exon_context(gene_config, flank_exons = 1L, flank_bp = 50L,
                                   span = c(min(pos), max(dup_ends)))
-  cov <- .plot_coverage(bam_path, gene_config, ctx$plot_start, ctx$plot_end, precomputed_cov)
+  cov_res <- .plot_coverage(bam_path, gene_config, ctx$plot_start, ctx$plot_end, precomputed_cov)
+  cov <- cov_res$cov
+  cov_start <- cov_res$start
+  if (length(cov_start) != 1L || !is.finite(cov_start)) cov_start <- ctx$plot_start
   axis <- .build_compressed_axis(ctx$exons_plot, ctx$plot_start, ctx$plot_end,
                                  intron_display = 40L, flank_display = 30L, outer_margin = 20L)
   list(
     itd_df = itd_df, pos = pos, len = len, dup_ends = dup_ends, axis = axis,
-    cov_df = .sample_compressed_coverage(cov, axis, max_gap_points = 30L),
+    cov_df = .sample_compressed_coverage(cov, axis, max_gap_points = 30L,
+                                        coverage_start = cov_start),
     exons = ctx$exons_plot,
     itd_cov = .build_itd_cov_display(itd_df, dup_ends, axis)
   )
@@ -254,6 +374,11 @@
   pe_len <- if (!is.null(g("LengthPE")) && !is.na(g("LengthPE"))) {
     sprintf("%d bp (%d pairs)", as.integer(g("LengthPE")), as.integer(g("LengthPE_NSpanning") %||% 0L))
   } else "N/A"
+  pe_support_len <- if (!is.null(g("LengthPE_SupportQNAME")) &&
+                        !is.na(g("LengthPE_SupportQNAME"))) {
+    sprintf("%d bp (%d pairs)", as.integer(g("LengthPE_SupportQNAME")),
+            as.integer(g("LengthPE_SupportQNAME_NSpanning") %||% 0L))
+  } else "N/A"
   n_merged <- suppressWarnings(as.integer(g("MergedFromN") %||% 1L))
   if (is.na(n_merged)) n_merged <- 1L
   merged <- if (n_merged <= 1L) "1 (not merged)" else
@@ -264,32 +389,182 @@
   c(
     "Sample" = .fmt_na(g("Sample")), "Gene" = .fmt_na(g("Gene")), "Genome Build" = genome_build,
     "Genomic Position" = .fmt_na(g("GenomicPosition")), "Length (bp)" = .fmt_na(g("Length")),
-    "Duplicated exons" = .fmt_na(g("DupExons")), "Length PE (bp)" = pe_len,
-    "Length Ext (bp)" = .fmt_na(g("LengthExt")), "VAF (%)" = .fmt_na(vaf * 100, "%.1f"),
-    "Supporting Reads" = .fmt_na(g("SupportingReads")),
+    "Duplicated exons" = .fmt_na(g("DupExons")),
+    "Length PE (all pairs) (bp)" = pe_len,
+    "Length PE (support QNAME pairs) (bp)" = pe_support_len,
+    "PE all-pair spanning pairs" = .fmt_na(g("LengthPE_AllPairs_NSpanning")),
+    "PE support-QNAME spanning pairs" = .fmt_na(g("LengthPE_SupportQNAME_NSpanning")),
+    "PE all-pair median spanning insert (bp)" = .fmt_na(g("LengthPE_AllPairs_MedianSpanningInsert")),
+    "PE background median insert (bp)" = .fmt_na(g("LengthPE_AllPairs_MedianBackgroundInsert")),
+    "PE support-QNAME matched pairs" = .fmt_na(g("LengthPE_SupportQNAME_NMatched")),
+    "PE support-QNAME median spanning insert (bp)" = .fmt_na(g("LengthPE_SupportQNAME_MedianSpanningInsert")),
+    "PE support-insert estimate (bp; relaxed span)" = .fmt_na(g("LengthPE_SupportInsert")),
+    "PE support-insert candidate pairs" = .fmt_na(g("LengthPE_SupportInsert_NPairs")),
+    "PE support-insert median insert (bp)" = .fmt_na(g("LengthPE_SupportInsert_MedianInsert")),
+    "PE support-insert status" = .fmt_na(g("LengthPE_SupportInsert_Status")),
+    "PE support-QNAME estimate status" = .fmt_na(g("LengthPE_SupportQNAME_Status")),
+    "PE all-pair estimate status" = .fmt_na(g("LengthPE_AllPairs_Status")),
+    "PE all-pair eligibility" = .fmt_na(g("LengthPE_AllPairs_Eligibility")),
+    "PE support-QNAME eligibility" = .fmt_na(g("LengthPE_SupportQNAME_Eligibility")),
+    "PE support-insert eligibility" = .fmt_na(g("LengthPE_SupportInsert_Eligibility")),
+    "PE support-QNAME unavailability reason" = .fmt_na(g("LengthPE_SupportQNAME_Status")),
+    "Length Ext (bp)" = .fmt_na(g("LengthExt")),
+    "PE Length Delta (PE - call)" = .fmt_na(g("LengthPE_Delta"), "%+.0f", " bp"),
+    "PE Length Concordant" = .fmt_na(g("LengthPE_Concordant")),
+    "VAF (%) - raw" = .fmt_na(vaf * 100, "%.1f"),
+    "VAF (%) - size-corrected diagnostic" = .fmt_na(suppressWarnings(as.numeric(g("CorrectedAlleleFrequency"))) * 100, "%.1f"),
+    "In frame (diagnostic)" = .fmt_na(g("InFrame")),
+    "Supporting Reads - raw" = .fmt_na(g("SupportingReads")),
+    "Supporting Reads - size-corrected diagnostic" = .fmt_na(g("AdjustedSupportingReads")),
+    "Size Correction Factor" = .fmt_na(g("SizeCorrectionFactor"), "%.3f"),
+    "Independent Supporting QNAMEs" = .fmt_na(g("IndependentSupportQNAMEs")),
+    "Anchor-confirmed Supporting QNAMEs" = .fmt_na(g("AnchorConfirmedQNAMEs")),
+    "Anchor-confirmation status" = .fmt_na(g("AnchorConfirmedQNAMEsStatus")),
     "Wildtype Reads" = .fmt_na(if (is.null(g("WildtypeReads"))) NULL else round(g("WildtypeReads"))),
-    "Depth at Breakpoint" = .fmt_na(g("DepthAtBreakpoint")), "Local Coverage" = .fmt_na(g("LocalCoverage")),
-    "Span Min Coverage (bp)" = .fmt_na(g("SpanMinCoverage")),
+    "Depth at Breakpoint - raw" = .fmt_na(g("DepthAtBreakpoint")),
+    "Depth at Breakpoint - corrected diagnostic" = .fmt_na(g("CorrectedDepthAtBreakpoint")),
+    "Local Coverage" = .fmt_na(g("LocalCoverage")),
+    "Span Min Coverage" = .fmt_na(g("SpanMinCoverage")),
+    "Span Mean Coverage" = .fmt_na(g("SpanMeanCoverage")),
     "Span Depth Fold Change" = .fmt_na(g("SpanDepthFoldChange"), "%.2f", "x"),
     "HGVS cDNA" = .fmt_na(g("HGVS_cDNA")), "HGVS Protein" = .fmt_na(g("HGVS_Protein")),
     "Region" = .fmt_na(g("Region")), "Exon Number" = .fmt_na(g("ExonNumber")),
-    "Orientation" = .fmt_na(g("Orientation")), "Hotspot" = hotspot,
-    "Strand Bias" = .fmt_na(g("StrandBias"), "%.3f"), "Mean MAPQ" = .fmt_na(g("MeanSupportMAPQ"), "%.1f"),
-    "RefMatch (%)" = .fmt_na(if (is.null(g("RefMatch_Observed"))) NULL else round(g("RefMatch_Observed"), 1), suffix = "%"),
-    "ITD Read Coverage (%)" = .fmt_na(if (is.null(g("ITDReadCoverage"))) NULL else round(g("ITDReadCoverage"), 1), suffix = "%"),
-    "Sequence Source" = .fmt_na(g("SequenceSource")), "Evidence" = .fmt_na(g("CandidateTypes")),
+    "Orientation" = .fmt_na(g("Orientation")),
+    "Observed Fragment Orientation" = .fmt_na(g("ITDObservedFragmentOrientation")),
+    "Observed Fragment Identity (%)" = .fmt_na(g("ITDObservedFragmentPID"), "%.1f", "%"),
+    "Observed Fragment Query Coverage (%)" = .fmt_na(g("ITDObservedFragmentQueryCoveragePct"), "%.1f", "%"),
+    "Observed Fragment Aligned Bases" = .fmt_na(g("ITDObservedFragmentAlignedBases")),
+    "Observed Fragment Template Start" = .fmt_na(g("ITDObservedFragmentTemplateStart")),
+    "Observed Fragment Template End" = .fmt_na(g("ITDObservedFragmentTemplateEnd")),
+    "Observed Fragment Supporting Reads" = .fmt_na(g("ITDObservedFragmentSupportReads")),
+    "Observed Fragment Unique Sequences" = .fmt_na(g("ITDObservedFragmentUniqueSequences")),
+    "Observed Fragment Status" = .fmt_na(g("ITDObservedFragmentStatus")),
+    "RefMatch Observed (%)" = .fmt_na(g("RefMatch_Observed"), "%.1f", "%"),
+    "RefMatch Total (%)" = .fmt_na(g("RefMatch_Total"), "%.1f", "%"),
+    "Alignment Score" = .fmt_na(g("AlignmentScore"), "%.3f"),
+    "Sequence Source" = .fmt_na(g("SequenceSource")),
+    "Sequence-dependent Metrics Status" = .fmt_na(g("SequenceDependentMetricsStatus")),
+    "Coverage Template Source" = .fmt_na(g("CoverageTemplateSource")),
+    "Coverage Template Length" = .fmt_na(g("CoverageTemplateLength")),
+    "Adapter Screening Status" = .fmt_na(g("ITDAdapterScreeningStatus")),
+    "Adapter-Positive Support Reads" = .fmt_na(g("ITDAdapterPositiveSupportReads")),
+    "Adapter-Positive Reads (region)" = .fmt_na(g("ITDAdapterPositiveReads")),
+    "Base Quality Status" = .fmt_na(g("ITDBaseQualityStatus")),
+    "Mean Base Quality (support reads)" = .fmt_na(g("ITDMeanBaseQuality"), "%.1f"),
+    "Min Base Quality (support reads)" = .fmt_na(g("ITDMinBaseQuality"), "%.1f"),
+    "Terminal-Window Base Quality" = .fmt_na(g("ITDTerminalMeanBaseQuality"), "%.1f"),
+    "ITD Direct Coverage (%)" = .fmt_na(g("ITDReadCoverage_Direct"), "%.1f", "%"),
+    "ITD PE Coordinate Projection (%) - diagnostic only" = .fmt_na(g("ITDReadCoverage_PE"), "%.1f", "%"),
+    "ITD K-mer Coverage (%)" = .fmt_na(g("ITDReadCoverage_Kmer"), "%.1f", "%"),
+    "ITD Combined Coverage (%) - direct + k-mer" = .fmt_na(g("ITDReadCoverage_Combined"), "%.1f", "%"),
+    "ITD Combined Depth Method" = .fmt_na(g("ITDCoverageCombinedDepthMethod")),
+    "Direct Certain Coverage (%)" = .fmt_na(g("ITDReadCoverage_DirectCertain"), "%.1f", "%"),
+    "Direct Possible Coverage (%)" = .fmt_na(g("ITDReadCoverage_DirectPossible"), "%.1f", "%"),
+    "Combined Certain Coverage (%)" = .fmt_na(g("ITDReadCoverage_CombinedCertain"), "%.1f", "%"),
+    "Combined Possible Coverage (%)" = .fmt_na(g("ITDReadCoverage_CombinedPossible"), "%.1f", "%"),
+    "Direct Ambiguous Coverage (%)" = .fmt_na(g("ITDReadCoverage_DirectAmbiguous"), "%.1f", "%"),
+    "Direct Covered Bases" = .fmt_na(g("ITDCoverageDirectCoveredBases")),
+    "PE Projected Bases (diagnostic only)" = .fmt_na(g("ITDCoveragePECoveredBases")),
+    "K-mer Covered Bases" = .fmt_na(g("ITDCoverageKmerCoveredBases")),
+    "Combined Covered Bases" = .fmt_na(g("ITDCoverageCombinedCoveredBases")),
+    "Direct Mean Depth" = .fmt_na(g("ITDCoverageDirectMeanDepth"), "%.2f"),
+    "PE Projected Mean Depth (diagnostic only)" = .fmt_na(g("ITDCoveragePEMeanDepth"), "%.2f"),
+    "K-mer Mean Depth" = .fmt_na(g("ITDCoverageKmerMeanDepth"), "%.2f"),
+    "Combined Mean Depth" = .fmt_na(g("ITDCoverageCombinedMeanDepth"), "%.2f"),
+    "Direct Uncovered Bases" = .fmt_na(g("ITDUncoveredBases_Direct")),
+    "PE Projection Uncovered Bases (diagnostic only)" = .fmt_na(g("ITDUncoveredBases_PE")),
+    "K-mer Uncovered Bases" = .fmt_na(g("ITDUncoveredBases_Kmer")),
+    "Combined Uncovered Bases" = .fmt_na(g("ITDUncoveredBases_Combined")),
+    "Combined Uncovered Intervals" = .fmt_na(g("ITDUncoveredIntervals_Combined")),
+    "Coverage Read Alignments Processed" = .fmt_na(g("ITDCoverageReadAlignmentsProcessed")),
+    "Coverage Read Alignments Matched" = .fmt_na(g("ITDCoverageReadsMatched")),
+    "Coverage Fragments Processed" = .fmt_na(g("ITDCoverageFragmentsProcessed")),
+    "Coverage Fragments with Direct Alignment" = .fmt_na(g("ITDCoverageFragmentsWithDirectAlignment")),
+    "Direct Alignment Rate (%)" = .fmt_na(g("ITDCoverageDirectAlignmentRatePct"), "%.1f", "%"),
+    "Direct Median PID (%)" = .fmt_na(g("ITDCoverageDirectMedianPID"), "%.1f", "%"),
+    "Direct Mean PID (%)" = .fmt_na(g("ITDCoverageDirectMeanPID"), "%.1f", "%"),
+    "Direct Median Aligned Bases" = .fmt_na(g("ITDCoverageDirectMedianAlignedBases")),
+    "Direct Median Query Coverage (%)" = .fmt_na(g("ITDCoverageDirectMedianQueryCoveragePct"), "%.1f", "%"),
+    "Any Direct Alignment Reads" = .fmt_na(g("ITDCoverageDirectReadsAnyAlignment")),
+    "Qualifying Direct Alignment Reads" = .fmt_na(g("ITDCoverageDirectReadsQualifying")),
+    "PE Spanning Pairs" = .fmt_na(g("ITDPE_SpanningPairs")),
+    "PE QNAME Matched Pairs" = .fmt_na(g("ITDPE_QnameMatchedPairs")),
+    "PE Coverage Status (detail)" = .fmt_na(g("ITDCoveragePEStatus")),
+    "K-mer Matched Read Ends" = .fmt_na(g("ITDKmerReads")),
+    "K-mer Tested Read Ends" = .fmt_na(g("ITDKmerTestedReads")),
+    "K-mer Matched Read Ends (%)" = .fmt_na(g("ITDKmerMatchedReadPct"), "%.1f", "%"),
+    "K-mer Tested Fragments" = .fmt_na(g("ITDKmerTestedFragments")),
+    "K-mer Matched Fragments" = .fmt_na(g("ITDKmerMatchedFragments")),
+    "K-mer Matched Fragments (%)" = .fmt_na(g("ITDKmerMatchedFragmentPct"), "%.1f", "%"),
+    "K-mer 7 Coverage (%)" = .fmt_na(g("ITDReadCoverage_Kmer7"), "%.1f", "%"),
+    "K-mer 9 Coverage (%)" = .fmt_na(g("ITDReadCoverage_Kmer9"), "%.1f", "%"),
+    "K-mer 11 Coverage (%)" = .fmt_na(g("ITDReadCoverage_Kmer11"), "%.1f", "%"),
+    "K-mer 13 Coverage (%)" = .fmt_na(g("ITDReadCoverage_Kmer13"), "%.1f", "%"),
+    "K-mer 15 Coverage (%)" = .fmt_na(g("ITDReadCoverage_Kmer15"), "%.1f", "%"),
+    "Direct Ambiguous Read Ends" = .fmt_na(g("ITDDirectAmbiguousReadEnds")),
+    "Direct Multi-placement Read Ends" = .fmt_na(g("ITDDirectMultiPlacementReadEnds")),
+    "Direct Ends at Alternative Search Limit" = .fmt_na(g("ITDDirectAlternativeSearchLimitReadEnds")),
+    "Direct Uncovered Intervals" = .fmt_na(g("ITDUncoveredIntervals_Direct")),
+    "PE Uncovered Intervals" = .fmt_na(g("ITDUncoveredIntervals_PE")),
+    "K-mer Uncovered Intervals" = .fmt_na(g("ITDUncoveredIntervals_Kmer")),
+    "Length PE Status" = .fmt_na(g("LengthPEStatus")),
+    "RefMatch Observed Status" = .fmt_na(g("RefMatchObservedStatus")),
+    "RefMatch Total Status" = .fmt_na(g("RefMatchTotalStatus")),
+    "Alignment Score Status" = .fmt_na(g("AlignmentScoreStatus")),
+    "Orientation Status" = .fmt_na(g("OrientationStatus")),
+    "Support Consistency (%)" = .fmt_na(g("SupportConsistency"), "%.1f", "%"),
+    "Support Consistency Status" = .fmt_na(g("SupportConsistencyStatus")),
+    "Coverage Status" = .fmt_na(g("ITDCoverageStatus")),
+    "Direct Coverage Status" = .fmt_na(g("ITDCoverageDirectStatus")),
+    "PE Coverage Status" = .fmt_na(g("ITDCoveragePEStatus")),
+    "K-mer Coverage Status" = .fmt_na(g("ITDCoverageKmerStatus")),
+    "Strand Bias" = .fmt_na(g("StrandBias"), "%.3f"),
+    "Mean MAPQ" = .fmt_na(g("MeanSupportMAPQ"), "%.1f"),
+    "Hotspot" = hotspot, "Evidence" = .fmt_na(g("CandidateTypes")),
     "Merged From N Fragment(s)" = merged,
+    "Merged Support Semantics" = .fmt_na(g("MergedSupportSemantics")),
+    "PE Orientation" = pe_orient,
     "Left Softclip Count" = .fmt_na(g("LeftSoftclipCount")),
     "Right Softclip Count" = .fmt_na(g("RightSoftclipCount")),
     "Left Softclip % (Support)" = .fmt_na(g("LeftSoftclipPctSupport"), "%.1f"),
-    "Right Softclip % (Support)" = .fmt_na(g("RightSoftclipPctSupport"), "%.1f"),
-    "Left Softclip % (WT)" = .fmt_na(g("LeftSoftclipPctWT"), "%.1f"),
-    "Right Softclip % (WT)" = .fmt_na(g("RightSoftclipPctWT"), "%.1f"),
-    "PE Softclip Support" = .fmt_na(g("PESoftclipSupport")),
-    "PE Event-size Pairs" = .fmt_na(g("PESoftclipEventPairs")),
-    "PE Long-span Pairs" = .fmt_na(g("PESoftclipLongPairs")),
-    "PE Orientation" = pe_orient
+    "Right Softclip % (Support)" = .fmt_na(g("RightSoftclipPctSupport"), "%.1f")
   )
+}
+
+# Compact variant-detail field set for the PDF report (canonical labels of
+# .variant_fields()). The full ~150-metric matrix caused multi-page tables
+# whose wrapped rows escaped the page frame; the PDF now prints this curated
+# one-page digest instead. The complete matrix remains available in the HTML
+# report (Results -> All result values) and in the results TSV.
+.COMPACT_VARIANT_FIELDS <- c(
+  "Sample", "Gene", "Genome Build", "Genomic Position", "Length (bp)",
+  "Duplicated exons", "Length Ext (bp)", "Length PE (all pairs) (bp)",
+  "PE Length Concordant", "PE Length Delta (PE - call)",
+  "VAF (%) - raw", "VAF (%) - size-corrected diagnostic", "In frame (diagnostic)",
+  "Supporting Reads - raw", "Independent Supporting QNAMEs",
+  "Anchor-confirmed Supporting QNAMEs", "Wildtype Reads", "Depth at Breakpoint - raw",
+  "Local Coverage", "Span Mean Coverage", "ITD Direct Coverage (%)",
+  "ITD K-mer Coverage (%)", "ITD Combined Coverage (%) - direct + k-mer", "HGVS cDNA", "HGVS Protein",
+  "Region", "Exon Number", "Orientation", "Strand Bias", "Mean MAPQ", "Hotspot",
+  "Evidence", "Merged From N Fragment(s)"
+)
+.COMPACT_ALU_FIELDS <- c(
+  "Sample", "Gene", "Genome Build", "Insertion site", "ALU subtype", "Orientation",
+  "TSD length", "Poly-A tail", "5' truncation", "Supporting reads", "Wildtype reads",
+  "VAF (%)", "Mean MAPQ", "Strand bias", "Region", "Exon number", "Hotspot"
+)
+
+#' Curated short field list of one result row for the PDF detail page
+#' @inheritParams .variant_fields
+#' @return Named character vector (label -> value), subset of .variant_fields().
+#' @keywords internal
+.compact_variant_fields <- function(row, genome_build = "custom",
+                                    mode = c("itd", "alu")) {
+  mode <- match.arg(mode)
+  fields <- .variant_fields(row, genome_build = genome_build, mode = mode)
+  keep <- intersect(if (mode == "alu") .COMPACT_ALU_FIELDS else .COMPACT_VARIANT_FIELDS,
+                    names(fields))
+  fields[keep]
 }
 
 # Configuration summary (PDF page, plotly annotation, HTML tab).
@@ -299,7 +574,8 @@
   c(
     "Gene" = .fmt_na(gene_config$gene), "Build" = .genome_build_label(gene_config),
     "Chromosome" = .fmt_na(gene_config$chrom), "Strand" = .fmt_na(gene_config$strand),
-    "Transcript" = if (is.null(gene_config$transcript) || is.na(gene_config$transcript)) "none" else gene_config$transcript,
+    "Transcript" = if (is.null(gene_config$transcript) || length(gene_config$transcript) != 1L ||
+                        is.na(gene_config$transcript) || !nzchar(gene_config$transcript)) "none" else gene_config$transcript,
     "CDS offset" = .fmt_na(gene_config$cds_offset),
     "Targeted exons" = if (is.null(tgt)) "N/A" else paste(unique(tgt$exon_idx), collapse = ", "),
     "Genomic window" = sprintf("%s-%s", gene_config$genomic_start, gene_config$genomic_end),
@@ -309,11 +585,154 @@
   )
 }
 
+# Variant-details pagination for the PDF report.
+#
+# History of this function: gridExtra::tableGrob() draws at its natural size,
+# so a summary taller than one page is split into page-sized chunks. The first
+# implementation drew the full ~150-metric table in one fixed 0.88-height
+# viewport and silently clipped every row outside the page; the second
+# implementation measured the row pitch from 1-row / 3-row probe grobs. That
+# probe under-reports the real drawn pitch by ~50% (cell padding is only
+# resolved when the table is drawn, and long eligibility text wraps to extra
+# lines the probe never sees), so chunks were again taller than the page and
+# the table ran past the top and bottom page edges ("second and third page
+# not in frame").
+#
+# The current design is deterministic instead of trusting probe measurements:
+#   * every cell value is pre-wrapped with strwrap() to a fixed character
+#     width, so the number of drawn text lines of every row is known exactly;
+#   * rows are packed per page from a line-count height model that slightly
+#     over-estimates the drawn pitch, so a chunk can only under-fill a page,
+#     never overflow it;
+#   * the table carries the compact variant-detail field set
+#     (.compact_variant_fields()), which fits a single page for any sample.
+# The width is still measured directly (widths are reported reliably) and the
+# font shrunk when a wide multi-call table would overflow the page width.
+# The no-gridExtra fallback paginates the printed text the same way.
+.draw_summary_pages <- function(summary_df, title, width, height) {
+  page_h_pt <- height * 72
+  page_w_pt <- width * 72
+  title_h_pt <- 30
+  vp_h_frac <- 0.88
+  vp_y_frac <- 0.455
+  avail_h_pt <- page_h_pt * vp_h_frac - 6
+  avail_w_pt <- page_w_pt * 0.95
+  n <- nrow(summary_df)
+  title_gp <- grid::gpar(fontsize = 13, fontface = "bold", col = "#2c3e50")
+
+  # Pre-wrap cell values and count the drawn lines per row. tableGrob renders
+  # one text line per strwrap segment, so the pagination below can compute the
+  # height of every row exactly instead of probing the grob (whose reported
+  # height under-estimates the drawn pitch; see the header comment). Line
+  # counts are taken from the original values BEFORE the wrapped copy is
+  # built: strwrap() would collapse the inserted newlines back into one
+  # segment and under-count again.
+  cell_lines <- function(v) {
+    v <- as.character(v)
+    if (is.na(v) || !nzchar(v)) return(1L)
+    max(1L, length(strwrap(v, width = 64)))
+  }
+  row_lines <- pmax(1L, apply(summary_df, 1L, function(r) max(vapply(r, cell_lines, integer(1L)))))
+  wrap_cell <- function(v) {
+    v <- as.character(v)
+    if (is.na(v) || !nzchar(v)) return(v)
+    parts <- strwrap(v, width = 64)
+    if (length(parts) <= 1L) return(v)
+    paste(parts, collapse = "\n")
+  }
+  summary_df <- as.data.frame(
+    lapply(summary_df, function(col_chr) vapply(col_chr, wrap_cell, character(1L))),
+    stringsAsFactors = FALSE
+  )
+
+  page_title <- function(page_i, npages, continued) {
+    ttl <- title
+    if (npages > 1L) {
+      ttl <- paste0(ttl, sprintf("  (%d/%d)", page_i, npages))
+      if (continued) ttl <- paste0(ttl, ", continued")
+    }
+    grid::grid.text(ttl, x = 0.5, y = grid::unit(0.975, "npc"),
+                    just = c("centre", "top"), gp = title_gp)
+  }
+
+  if (requireNamespace("gridExtra", quietly = TRUE)) {
+    theme_for <- function(core_cex, head_cex, nr) gridExtra::ttheme_minimal(
+      core = list(fg_params = list(cex = core_cex, fontface = "plain"),
+                  bg_params = list(fill = rep(c("white", "#f0f4f8"),
+                                               length.out = max(1L, nr)), col = NA)),
+      colhead = list(fg_params = list(cex = head_cex, fontface = "bold", col = "white"),
+                     bg_params = list(fill = "#2c3e50", col = NA)))
+    grob_width_pt <- function(df, th) {
+      g <- gridExtra::tableGrob(df, rows = NULL, theme = th)
+      w <- tryCatch(as.numeric(grid::convertUnit(grid::grobWidth(g), "pt", valueOnly = TRUE)),
+                    error = function(e) NA_real_)
+      w
+    }
+
+    th <- theme_for(0.7, 0.8, n)
+    full_w <- grob_width_pt(summary_df, th)
+    if (is.finite(full_w) && full_w > avail_w_pt && full_w > 0) {
+      scale <- max(0.45, avail_w_pt / full_w * 0.98)
+      th <- theme_for(0.7 * scale, 0.8 * scale, n)
+    }
+
+    # Deterministic pagination from the line counts: a cex-0.7 tableGrob row
+    # draws ~17.3 pt per text line and the header ~17 pt, so 18 pt/line with a
+    # 20 pt header and 6 pt slack over-estimates the drawn height and can only
+    # under-fill a page, never overflow it.
+    line_pitch_pt <- 18
+    head_pt <- 20
+    budget_pt <- avail_h_pt - head_pt - 6
+    chunks <- list()
+    start_i <- 1L
+    while (start_i <= n) {
+      used <- 0
+      end_i <- start_i - 1L
+      while (end_i < n) {
+        next_h <- row_lines[end_i + 1L] * line_pitch_pt
+        if (used + next_h > budget_pt && end_i >= start_i) break
+        used <- used + next_h
+        end_i <- end_i + 1L
+      }
+      chunks[[length(chunks) + 1L]] <- start_i:end_i
+      start_i <- end_i + 1L
+    }
+    npages <- length(chunks)
+    for (p in seq_along(chunks)) {
+      chunk <- summary_df[chunks[[p]], , drop = FALSE]
+      tbl <- gridExtra::tableGrob(chunk, rows = NULL, theme = th)
+      grid::grid.newpage()
+      page_title(p, npages, p > 1L)
+      grid::pushViewport(grid::viewport(x = 0.5, y = vp_y_frac, width = 0.96, height = vp_h_frac))
+      grid::grid.draw(tbl)
+      grid::popViewport()
+    }
+  } else {
+    lns <- utils::capture.output(print(summary_df))
+    line_h_pt <- 12 * 0.7 * 1.35
+    per_page <- max(8L, floor((page_h_pt * vp_h_frac - title_h_pt) / line_h_pt))
+    chunks <- split(lns, ceiling(seq_along(lns) / per_page))
+    npages <- length(chunks)
+    for (p in seq_along(chunks)) {
+      grid::grid.newpage()
+      page_title(p, npages, p > 1L)
+      grid::grid.text(paste(chunks[[p]], collapse = "\n"), x = 0.04, y = 0.90,
+                      just = c("left", "top"),
+                      gp = grid::gpar(cex = 0.7, fontfamily = "mono"))
+    }
+  }
+  invisible(NULL)
+}
+
 # ── PDF (Gviz) ───────────────────────────────────────────────────────────────
 
-#' Generate a publication-ready PDF plot (Gviz + summary table)
+#' Generate a publication-ready PDF plot (Gviz + compact variant details)
 #' Only the region restricted directly by targeted_exons context is shown
-#' (extended to include the plotted variants).
+#' (extended to include the plotted variants). Page 1 carries the Gviz
+#' tracks; the following pages carry a compact variant-details table
+#' (.compact_variant_fields()). The full ~150-metric matrix is not printed
+#' any more: it caused multi-page tables whose rows escaped the page frame;
+#' it remains available in the HTML report and the results TSV.
 #'
 #' @param itd_row Data frame of TALOS results for one sample/gene.
 #' @param gene_config Gene configuration list.
@@ -323,7 +742,9 @@
 #' @param width Plot dimension (inches).
 #' @param height Plot dimension (inches).
 #' @param show_config If TRUE, display configuration summary on a separate page.
-#' @param precomputed_cov Optional precomputed coverage Rle (to avoid re-reading BAM).
+#' @param precomputed_cov Optional precomputed coverage Rle indexed by genomic
+#'   coordinate (index 1 is genomic position 1) and long enough to include the
+#'   full plotted interval, including flanking exons.
 #' @param include_ptd If TRUE, include zero-length (PTD) events (default FALSE).
 #' @param gap Gap between Gviz tracks.
 #' @return Invisibly, output_pdf.
@@ -395,12 +816,24 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
 
   itd_cov_track <- NULL
   if (nrow(pd$itd_cov) > 0L) {
-    itd_cov_track <- do.call(Gviz::DataTrack, c(list(
-      start = pd$itd_cov$disp_pos, end = pd$itd_cov$disp_pos, data = pd$itd_cov$count,
-      chromosome = chrom, genome = genome_build, type = "histogram", name = "ITD cov reads",
-      col.histogram = "#f39c12", fill.histogram = "#fdebd0", lwd = 2,
-      ylim = c(0, max(pd$itd_cov$count, na.rm = TRUE)), ylab = "ITD cov"
-    ), title_args))
+    itd_cov_ok <- is.finite(pd$itd_cov$disp_pos) & is.finite(pd$itd_cov$count)
+    itd_cov_plot <- pd$itd_cov[itd_cov_ok, , drop = FALSE]
+    if (nrow(itd_cov_plot) > 0L) {
+      # Gviz drops / mis-scales a DataTrack with ylim=c(0, 0). Keep a visible
+      # zero-depth baseline and coerce display coordinates to finite integers.
+      itd_cov_max <- max(1, itd_cov_plot$count, na.rm = TRUE)
+      itd_cov_track <- tryCatch(do.call(Gviz::DataTrack, c(list(
+        start = pmax(1L, as.integer(round(itd_cov_plot$disp_pos))),
+        end = pmax(1L, as.integer(round(itd_cov_plot$disp_pos))),
+        data = as.numeric(itd_cov_plot$count),
+        chromosome = chrom, genome = genome_build, type = "histogram", name = "ITD cov reads",
+        col.histogram = "#f39c12", fill.histogram = "#fdebd0", lwd = 2,
+        ylim = c(0, itd_cov_max * 1.05), ylab = "ITD cov"
+      ), title_args)), error = function(e) {
+        warning("Could not construct the ITD coverage PDF track: ", conditionMessage(e))
+        NULL
+      })
+    }
   }
 
   itd_labels <- ifelse(nzchar(orient),
@@ -429,35 +862,28 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
   subtitle <- sprintf("Positions: %s  |  Lengths: %s  |  VAFs: %s%%",
                       paste(breakpoints, collapse = ", "), paste(dup_lens, collapse = ", "),
                       paste(vafs, collapse = ", "))
+  # Keep the subtitle inside Gviz's title margin. Drawing it later at a fixed
+  # page coordinate (0.885 npc) placed it over the genome tracks on tall plots.
+  main_title <- paste(main_title, subtitle, sep = "\n")
   Gviz::plotTracks(tracks[present], from = axis_ctx$disp_from, to = axis_ctx$disp_to,
-                   sizes = sizes[present], collapse = FALSE, main = main_title, cex.main = 1.2,
+                   sizes = sizes[present], collapse = FALSE, main = main_title, cex.main = 1.05,
                    fontcolor.title = "#2c3e50", col.axis = "black", cex.axis = 0.8,
                    margins = c(18, 14, 6.5, 14), gap = gap)
-  grid::grid.text(label = subtitle, x = grid::unit(0.5, "npc"), y = grid::unit(0.885, "npc"),
-                  gp = grid::gpar(fontsize = 9, col = "#2c3e50"))
 
-  fields <- lapply(seq_len(nrow(itd_df)), function(i) .variant_fields(itd_df[i, , drop = FALSE], genome_build))
+  # Compact variant-details page: the PDF carries a curated digest of every
+  # call; the full result matrix stays in the HTML report and the TSV.
+  fields <- lapply(seq_len(nrow(itd_df)), function(i)
+    .compact_variant_fields(itd_df[i, , drop = FALSE], genome_build))
   summary_df <- data.frame(Metric = names(fields[[1L]]), stringsAsFactors = FALSE)
   for (i in seq_along(fields)) summary_df[[paste0("ITD_", i)]] <- unname(fields[[i]])
   summary_df[summary_df$Metric == "Sample", -1L] <- as.character(sample_name)
 
-  grid::grid.newpage()
-  if (requireNamespace("gridExtra", quietly = TRUE)) {
-    tbl <- gridExtra::tableGrob(summary_df, rows = NULL, theme = gridExtra::ttheme_minimal(
-      core = list(fg_params = list(cex = 0.7, fontface = "plain"),
-                  bg_params = list(fill = rep(c("white", "#f0f4f8"), length.out = nrow(summary_df)), col = NA)),
-      colhead = list(fg_params = list(cex = 0.8, fontface = "bold", col = "white"),
-                     bg_params = list(fill = "#2c3e50", col = NA))))
-    grid::grid.text(sprintf("Variant Summary - Sample: %s | %s (%d variants)", sample_name,
-                            gene_config$gene, nrow(itd_df)),
-                    x = 0.5, y = 0.91, gp = grid::gpar(fontsize = 13, fontface = "bold", col = "#2c3e50"))
-    grid::pushViewport(grid::viewport(x = 0.5, y = 0.49, width = 0.90, height = 0.80))
-    grid::grid.draw(tbl)
-    grid::popViewport()
-  } else {
-    grid::grid.text(paste(utils::capture.output(print(summary_df)), collapse = "\n"), x = 0.05, y = 0.95,
-                    just = "left", gp = grid::gpar(cex = 0.7, fontfamily = "mono"))
-  }
+  .draw_summary_pages(
+    summary_df,
+    sprintf("Variant Details (compact) - Sample: %s | %s (%d variants)", sample_name,
+            gene_config$gene, nrow(itd_df)),
+    width, height
+  )
 
   if (show_config) {
     grid::grid.newpage()
@@ -482,20 +908,41 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
 # Short hover text for one variant (plotly widget and HTML report).
 .variant_hover <- function(row, i, vaf_str) {
   f <- .variant_fields(row)
+  # Resolve fields by their current canonical labels. Older labels such as
+  # "RefMatch (%)" and "ITD Read Coverage (%)" are not emitted by
+  # .variant_fields(); indexing those names with [[ ]] raises subscript-out-of-
+  # bounds and caused the entire genome panel to be discarded after coverage
+  # had already been calculated.
+  field <- function(name, fallback = "N/A") {
+    if (name %in% names(f) && length(f[[name]]) == 1L && !is.na(f[[name]])) {
+      as.character(f[[name]])
+    } else fallback
+  }
+  direct_cov <- field("ITD Direct Coverage (%)")
+  combined_cov <- field("ITD Combined Coverage (%)")
+  cov_line <- if (combined_cov != "N/A" && direct_cov != "N/A" &&
+                  combined_cov != direct_cov) {
+    paste0(direct_cov, " (combined ", combined_cov, ")")
+  } else if (combined_cov != "N/A") combined_cov else direct_cov
+
   paste0("<b>ITD ", i, "</b><br>",
-         "Breakpoint: ", f[["Genomic Position"]], "<br>",
-         "Length: ", f[["Length (bp)"]], " bp<br>",
+         "Breakpoint: ", field("Genomic Position"), "<br>",
+         "Length: ", field("Length (bp)"), " bp<br>",
          "VAF: ", vaf_str, "<br>",
-         "HGVS cDNA: ", f[["HGVS cDNA"]], "<br>",
-         "HGVS Protein: ", f[["HGVS Protein"]], "<br>",
-         "Region: ", f[["Region"]], "<br>",
-         if (f[["Duplicated exons"]] != "N/A") paste0("Exons: ", f[["Duplicated exons"]], "<br>") else "",
-         "Support: ", f[["Supporting Reads"]], " reads<br>",
-         "RefMatch: ", f[["RefMatch (%)"]], "<br>",
-         "ITD Cov: ", f[["ITD Read Coverage (%)"]], "<br>",
-         "Orientation: ", sub("N/A", "?", f[["Orientation"]]), "<br>",
-         "Left Softclip: ", f[["Left Softclip Count"]], " (", f[["Left Softclip % (Support)"]], "% of support)<br>",
-         "Right Softclip: ", f[["Right Softclip Count"]], " (", f[["Right Softclip % (Support)"]], "% of support)")
+         "HGVS cDNA: ", field("HGVS cDNA"), "<br>",
+         "HGVS Protein: ", field("HGVS Protein"), "<br>",
+         "Region: ", field("Region"), "<br>",
+         if (field("Duplicated exons") != "N/A") paste0("Exons: ", field("Duplicated exons"), "<br>") else "",
+         "Adjusted support: ", field("Supporting Reads"), " reads<br>",
+         "Independent QNAMEs: ", field("Independent Supporting QNAMEs"), "<br>",
+         "Anchor-confirmed QNAMEs: ", field("Anchor-confirmed Supporting QNAMEs"), "<br>",
+         "RefMatch: ", field("RefMatch Observed (%)"), "<br>",
+         "ITD Cov: ", cov_line, "<br>",
+         "Orientation: ", sub("N/A", "?", field("Orientation")), "<br>",
+         "Left Softclip: ", field("Left Softclip Count"), " (",
+         field("Left Softclip % (Support)"), "% of support)<br>",
+         "Right Softclip: ", field("Right Softclip Count"), " (",
+         field("Right Softclip % (Support)"), "% of support)")
 }
 
 #' Generate an interactive plotly visualisation for TALOS results
@@ -506,7 +953,9 @@ plot_talos_report <- function(itd_row, gene_config, bam_path,
 #' @param bam_path Path to indexed BAM file.
 #' @param sample_name Sample identifier.
 #' @param show_config Add a config annotation string.
-#' @param precomputed_cov Optional precomputed coverage Rle (to avoid re-reading BAM).
+#' @param precomputed_cov Optional precomputed coverage Rle indexed by genomic
+#'   coordinate (index 1 is genomic position 1) and long enough to include the
+#'   full plotted interval, including flanking exons.
 #' @param include_ptd If TRUE, include zero-length (PTD) events (default FALSE).
 #' @return A plotly htmlwidget.
 #' @export
@@ -685,126 +1134,43 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
 })();)---"
 }
 
-# Full-width raw values explorer: every column is available, including fields
-# hidden from the clinical-first table. It uses the already embedded JSON only.
-.talos_all_values_script <- function() {
-  r"---((function () {
-  'use strict';
-  function init() {
-    var source = document.getElementById('talos-data');
-    var main = document.querySelector('main#panels');
-    if (!source || !main || document.getElementById('talos-all-values')) return;
-    var payload;
-    try { payload = JSON.parse(source.textContent || '{}'); } catch (_) { return; }
-    var table = payload.table || {}, cols = Array.isArray(table.cols) ? table.cols : [];
-    var data = table.data || {}, n = Number(table.n || 0);
-    var section = document.createElement('section');
-    section.id = 'talos-all-values';
-    section.className = 'card';
-    section.style.margin = '18px 0 0';
-    var details = document.createElement('details');
-    details.open = false;
-    var summary = document.createElement('summary');
-    summary.textContent = 'Browse all embedded result values (' + n + ' rows, ' + cols.length + ' columns)';
-    summary.style.cssText = 'cursor:pointer;font-weight:600;font-size:15px;padding:4px 0';
-    details.appendChild(summary);
-    var intro = document.createElement('p');
-    intro.className = 'note';
-    intro.textContent = 'Complete source result table, including sequence and diagnostic metrics. Search across all columns; click a header to sort. This table is embedded in the HTML and works without a server.';
-    details.appendChild(intro);
-    var bar = document.createElement('div'); bar.className = 'tbl-bar';
-    var search = document.createElement('input'); search.type = 'search';
-    search.placeholder = 'Search all values…'; search.setAttribute('aria-label', 'Search all result values');
-    search.style.maxWidth = '420px';
-    var pageSize = document.createElement('select'); pageSize.setAttribute('aria-label', 'Rows per page');
-    [10, 25, 50, 100, 250].forEach(function (v) {
-      var o = document.createElement('option'); o.value = String(v); o.textContent = v + ' rows'; if (v === 25) o.selected = true; pageSize.appendChild(o);
-    });
-    var exportBtn = document.createElement('button'); exportBtn.className = 'btn'; exportBtn.type = 'button'; exportBtn.textContent = 'Export filtered CSV';
-    var count = document.createElement('span'); count.className = 'note';
-    bar.append(search, pageSize, exportBtn, count); details.appendChild(bar);
-    var wrap = document.createElement('div'); wrap.className = 'tbl-wrap'; wrap.style.maxHeight = '520px';
-    var t = document.createElement('table'); t.className = 'tbl';
-    var thead = document.createElement('thead'), tbody = document.createElement('tbody');
-    var hr = document.createElement('tr'), sortCol = -1, sortDir = 1, page = 0;
-    cols.forEach(function (c, j) {
-      var th = document.createElement('th'); th.textContent = c; th.tabIndex = 0;
-      th.title = 'Sort by ' + c;
-      function sort() { if (sortCol === j) sortDir *= -1; else { sortCol = j; sortDir = 1; } page = 0; render(); }
-      th.addEventListener('click', sort); th.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sort(); } });
-      hr.appendChild(th);
-    });
-    thead.appendChild(hr); t.append(thead, tbody); wrap.appendChild(t); details.appendChild(wrap);
-    var foot = document.createElement('div'); foot.className = 'tbl-bar';
-    var prev = document.createElement('button'); prev.className = 'btn'; prev.type = 'button'; prev.textContent = 'Previous';
-    var next = document.createElement('button'); next.className = 'btn'; next.type = 'button'; next.textContent = 'Next';
-    var pageLabel = document.createElement('span'); pageLabel.className = 'note';
-    prev.addEventListener('click', function () { page = Math.max(0, page - 1); render(); });
-    next.addEventListener('click', function () { page++; render(); });
-    foot.append(prev, pageLabel, next); details.appendChild(foot);
-    section.appendChild(details); main.parentNode.insertBefore(section, main.nextSibling);
-    function val(c, i) { var a = data[c]; var v = Array.isArray(a) ? a[i] : null; return v === null || v === undefined ? '' : String(v); }
-    function rows() {
-      var q = search.value.trim().toLowerCase(), out = [];
-      for (var i = 0; i < n; i++) {
-        var row = cols.map(function (c) { return val(c, i); });
-        if (!q || row.some(function (v) { return v.toLowerCase().indexOf(q) >= 0; })) out.push({ i: i, row: row });
-      }
-      if (sortCol >= 0) out.sort(function (a, b) {
-        var x = a.row[sortCol], y = b.row[sortCol], nx = Number(x), ny = Number(y);
-        var bothNumeric = x.trim() !== '' && y.trim() !== '' && Number.isFinite(nx) && Number.isFinite(ny);
-        var cmp = bothNumeric ? nx - ny : x.localeCompare(y, undefined, { numeric: true, sensitivity: 'base' });
-        return cmp * sortDir || a.i - b.i;
-      });
-      return out;
-    }
-    var filtered = [];
-    function render() {
-      filtered = rows();
-      var size = Number(pageSize.value || 25), pages = Math.max(1, Math.ceil(filtered.length / size));
-      page = Math.min(page, pages - 1);
-      var start = page * size, shown = filtered.slice(start, start + size);
-      while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
-      shown.forEach(function (item) {
-        var tr = document.createElement('tr');
-        item.row.forEach(function (v) { var td = document.createElement('td'); td.textContent = v === '' ? '—' : v; if (/^-?(?:\d+\.?\d*|\.\d+)$/.test(v)) td.className = 'num'; tr.appendChild(td); });
-        tbody.appendChild(tr);
-      });
-      Array.prototype.forEach.call(hr.children, function (th, j) {
-        th.setAttribute('aria-sort', j !== sortCol ? 'none' : (sortDir === 1 ? 'ascending' : 'descending'));
-      });
-      count.textContent = 'Showing ' + (filtered.length ? start + 1 : 0) + '–' + Math.min(start + shown.length, filtered.length) + ' of ' + filtered.length;
-      pageLabel.textContent = 'Page ' + (page + 1) + ' of ' + pages;
-      prev.disabled = page <= 0; next.disabled = page >= pages - 1;
-    }
-    search.addEventListener('input', function () { page = 0; render(); });
-    pageSize.addEventListener('change', function () { page = 0; render(); });
-    exportBtn.addEventListener('click', function () {
-      function quote(v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }
-      var lines = [cols.map(quote).join(',')];
-      filtered.forEach(function (r) { lines.push(r.row.map(quote).join(',')); });
-      var blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
-      var url = URL.createObjectURL(blob), a = document.createElement('a');
-      a.href = url; a.download = 'TALOS_all_result_values.csv'; document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-    });
-    render();
-  }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
-})();)---"
-}
-
-# Local plotly.js: options(TALOS.plotly_js = "<file>"), else the copy shipped
-# with the R 'plotly' package (htmlwidgets library).
+# Locate a local Plotly JavaScript bundle without requiring the optional R
+# package `plotly`. The HTML report can always fall back to the CDN, so a
+# missing bundle must never abort report generation.
 .local_plotly_js <- function() {
-  user <- getOption("TALOS.plotly_js", "")
-  if (nzchar(user) && file.exists(user)) return(user)
-  if (!requireNamespace("plotly", quietly = TRUE)) return(NA_character_)
-  lib <- system.file("htmlwidgets", "lib", "plotlyjs", package = "plotly")
-  cand <- c(file.path(lib, "plotly-latest.min.js"),
-            list.files(lib, pattern = "\\.min\\.js$", full.names = TRUE))
-  cand <- cand[nzchar(cand) & file.exists(cand)]
-  if (length(cand)) cand[[1L]] else NA_character_
+  is_js_file <- function(x) {
+    length(x) == 1L && !is.na(x) && nzchar(x) &&
+      file.exists(x) && !dir.exists(x) && file.access(x, 4L) == 0L
+  }
+
+  configured <- getOption("TALOS.plotly_js", NULL)
+  if (is.null(configured) || !length(configured)) {
+    configured <- Sys.getenv("TALOS_PLOTLY_JS", unset = "")
+  }
+  if (length(configured) == 1L && !is.na(configured) && nzchar(configured)) {
+    configured <- path.expand(configured)
+    if (dir.exists(configured)) {
+      configured <- file.path(configured, c("plotly.min.js", "plotly-latest.min.js"))
+    }
+    configured <- as.character(configured)
+    hit <- configured[vapply(configured, is_js_file, logical(1L))]
+    if (length(hit)) return(normalizePath(hit[[1L]], winslash = "/", mustWork = TRUE))
+  }
+
+  # Plotly has used both names across releases. `system.file()` is safe when
+  # the optional package is not installed (it returns an empty string).
+  candidates <- unlist(lapply(c("plotly", "htmlwidgets"), function(pkg) {
+    root <- tryCatch(system.file(package = pkg), error = function(e) "")
+    if (!length(root) || is.na(root) || !nzchar(root)) return(character(0))
+    file.path(root, c(
+      "htmlwidgets/lib/plotlyjs/plotly.min.js",
+      "htmlwidgets/lib/plotlyjs/plotly-latest.min.js",
+      "htmlwidgets/lib/plotlyjs/plotly.js"
+    ))
+  }), use.names = FALSE)
+  hit <- candidates[vapply(candidates, is_js_file, logical(1L))]
+  if (!length(hit)) return(NA_character_)
+  normalizePath(hit[[1L]], winslash = "/", mustWork = TRUE)
 }
 
 # plotly.js <script> tag.
@@ -820,20 +1186,54 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
   mode <- match.arg(mode)
   cdn <- "<script src=\"https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js\"></script>"
   if (mode == "cdn") return(list(tag = cdn, inline = FALSE))
-  path <- .local_plotly_js()
+  path <- tryCatch(.local_plotly_js(), error = function(e) NA_character_)
+  if (!length(path) || is.na(path[[1L]]) || !nzchar(path[[1L]])) path <- NA_character_
   if (is.na(path)) {
     if (mode == "inline") warning("plotly.js not found locally (install the R 'plotly' package or set options(TALOS.plotly_js=)); using the CDN.")
     return(list(tag = cdn, inline = FALSE))
   }
-  bytes <- readBin(path, what = "raw", n = file.info(path)$size)
-  b64 <- jsonlite::base64_enc(bytes)
-  b64 <- gsub("[\r\n]", "", b64)
-  list(tag = paste0("<script src=\"data:text/javascript;base64,", b64, "\"></script>"), inline = TRUE)
+  inline <- tryCatch({
+    size <- file.info(path)$size
+    if (length(size) != 1L || is.na(size) || size < 1) stop("empty or unreadable Plotly bundle")
+    bytes <- readBin(path, what = "raw", n = size)
+    if (!length(bytes)) stop("Plotly bundle could not be read")
+    b64 <- jsonlite::base64_enc(bytes)
+    b64 <- gsub("[\r\n]", "", b64)
+    list(tag = paste0("<script src=\"data:text/javascript;base64,", b64, "\"></script>"),
+         inline = TRUE)
+  }, error = function(e) {
+    message(.html_error_diagnostic(e, context = "HTML report / Plotly bundle"))
+    NULL
+  })
+  if (!is.null(inline)) return(inline)
+  warning("Could not inline the local plotly.js bundle; using the CDN.", call. = FALSE)
+  list(tag = cdn, inline = FALSE)
 }
 
 .arr <- function(x) I(as.vector(x))
 
 # data.frame -> column-oriented JSON-ready list.
+# Serialize every source result column for the browser-side Variant Details
+# table. Values become stable display strings while preserving column order;
+# hidden/internal fields remain selectable from the HTML column chooser.
+.raw_variant_row_values <- function(row) {
+  if (is.null(row) || !is.data.frame(row) || nrow(row) != 1L) {
+    stop("'row' must be a one-row data.frame.", call. = FALSE)
+  }
+  keys <- names(row)
+  values <- vapply(keys, function(nm) {
+    value <- row[[nm]]
+    if (is.factor(value)) value <- as.character(value)
+    if (is.list(value)) {
+      if (!length(value) || all(is.na(value))) return(NA_character_)
+      return(paste(unlist(value, use.names = FALSE), collapse = ";"))
+    }
+    if (!length(value) || all(is.na(value))) return(NA_character_)
+    paste(as.character(value), collapse = ";")
+  }, character(1L), USE.NAMES = FALSE)
+  list(keys = keys, values = values)
+}
+
 .table_payload <- function(df) {
   data <- lapply(df, function(col) {
     if (is.list(col)) col <- vapply(col, function(x) paste(x, collapse = ";"), character(1L))
@@ -852,18 +1252,46 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
 # "NA%"-style labels for zero-VAF calls. NA/length-0 values are now normalised
 # explicitly; hotspot/flag metadata is carried through so the details tab can
 # draw badges without re-querying.
+# Capture actionable diagnostics without coupling optional genome panels to
+# the main report. Keep the message compact enough for batch logs while
+# retaining the failing call and a bounded tail of the R call stack.
+.html_error_diagnostic <- function(e, context = NULL, calls = sys.calls()) {
+  call <- conditionCall(e)
+  call_txt <- if (is.null(call)) "<no condition call>" else
+    paste(deparse(call, width.cutoff = 120L), collapse = " ")
+  stack_txt <- if (length(calls)) {
+    paste(vapply(tail(calls, 10L), function(cl) {
+      paste(deparse(cl, width.cutoff = 120L), collapse = "")
+    }, character(1L)), collapse = " -> ")
+  } else "<no call stack>"
+  cls <- paste(class(e), collapse = "/")
+  prefix <- if (is.null(context) || !nzchar(context)) "HTML report" else context
+  sprintf("[%s] error=%s; class=%s; call=%s; stack=%s",
+          prefix, conditionMessage(e), cls, call_txt, stack_txt)
+}
+
 .panel_payload <- function(sub_df, gene_config, bam_path, cov, sample, gene, mode, pos_col, ids) {
   pd <- tryCatch(
     .variant_plot_data(sub_df, gene_config, bam_path, cov, include_ptd = TRUE, pos_col = pos_col),
     error = function(e) {
-      message(sprintf("[HTML report] Could not build the genome view for %s/%s: %s",
-                      sample, gene, conditionMessage(e)))
+      message(.html_error_diagnostic(
+        e, context = sprintf("HTML report / genome payload %s/%s", sample, gene)
+      ))
       NULL
     }
   )
   if (is.null(pd)) return(NULL)
   ax <- pd$axis
-  has_cov <- any(!is.na(pd$cov_df$depth))
+  cov_df <- pd$cov_df
+  cov_n <- if (is.data.frame(cov_df)) nrow(cov_df) else 0L
+  cov_depth <- if (is.data.frame(cov_df) && "depth" %in% names(cov_df)) {
+    suppressWarnings(as.numeric(cov_df$depth))
+  } else numeric(0)
+  finite_cov <- is.finite(cov_depth)
+  has_cov <- cov_n > 0L && any(finite_cov)
+  message(sprintf("[HTML report] Genome panel %s/%s: coverage_points=%d; finite=%d; max_depth=%s",
+                  sample, gene, cov_n, sum(finite_cov),
+                  if (any(finite_cov)) as.character(max(cov_depth[finite_cov])) else "NA"))
   variants <- lapply(seq_len(nrow(pd$itd_df)), function(i) {
     row <- pd$itd_df[i, , drop = FALSE]
     vaf_raw <- suppressWarnings(as.numeric(row$AlleleFrequency))
@@ -892,9 +1320,12 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
       vaf = vaf, label = label, hover = hover
     )
   })
-  itd_cov <- lapply(split(pd$itd_cov, pd$itd_cov$variant), function(d) {
-    list(vid = ids[d$variant[1L]], x = .arr(d$disp_pos), y = .arr(d$count), pos = .arr(d$raw_idx))
-  })
+  itd_cov <- list()
+  if (is.data.frame(pd$itd_cov) && nrow(pd$itd_cov) > 0L) {
+    itd_cov <- lapply(split(pd$itd_cov, pd$itd_cov$variant), function(d) {
+      list(vid = ids[d$variant[1L]], x = .arr(d$disp_pos), y = .arr(d$count), pos = .arr(d$raw_idx))
+    })
+  }
   list(
     id = paste0("p_", make.names(sample), "_", make.names(gene)),
     sample = sample, gene = gene, chrom = gene_config$chrom,
@@ -928,7 +1359,8 @@ plot_talos_interactive <- function(itd_df, gene_config, bam_path,
 #' @param title       Report title string.
 #' @param show_config Include the per-gene configuration tab.
 #' @param mode        \code{"itd"} (default) or \code{"alu"}.
-#' @param coverages   Optional named list of precomputed coverage Rle, keyed
+#' @param coverages   Optional named list of precomputed genomic-coordinate-indexed
+#'   coverage Rles (index 1 is genomic position 1), keyed
 #'   \code{"<sample>_<gene>"} (avoids re-reading the BAM).
 #' @param plotly_js   \code{"auto"} (inline plotly.js when the R plotly
 #'   package is installed, else CDN), \code{"inline"} or \code{"cdn"}.
@@ -952,8 +1384,14 @@ talos_html_report <- function(result_df,
 
   # Results table (Genome build next to Gene, as before).
   df <- as.data.frame(result_df, stringsAsFactors = FALSE)
+  get_config <- function(g) {
+    if (is.null(gene_configs) || !is.list(gene_configs) || !length(gene_configs)) return(NULL)
+    nm <- names(gene_configs)
+    if (is.null(nm) || !g %in% nm) return(NULL)
+    gene_configs[[match(g, nm)]]
+  }
   build_of <- function(g) {
-    cfg <- gene_configs[[g]]
+    cfg <- get_config(g)
     if (is.null(cfg)) "custom" else .genome_build_label(cfg)
   }
   if (nrow(df) && "Gene" %in% names(df)) {
@@ -974,6 +1412,12 @@ talos_html_report <- function(result_df,
     for (k in seq_along(rows)) {
       row <- sub_df[k, , drop = FALSE]
       fields <- .variant_fields(row, gb, mode)
+      # Keep the complete raw result row alongside the curated clinical
+      # details. The browser-side Details table uses the same column chooser
+      # state as the Results table, so every result variable is selectable.
+      raw_row <- .raw_variant_row_values(row)
+      all_keys <- raw_row$keys
+      all_values <- raw_row$values
       seq_col <- if (mode == "alu") "ALU_Sequence" else "ITD_Sequence"
       sq <- if (seq_col %in% names(row)) as.character(row[[seq_col]]) else NA_character_
       # Hotspot metadata carries through so the details tab can draw a badge
@@ -988,21 +1432,45 @@ talos_html_report <- function(result_df,
                 else sprintf("Variant %d: %s", k, if (fields[["HGVS cDNA"]] != "N/A") fields[["HGVS cDNA"]] else
                   sprintf("%s bp @ %s", fields[["Length (bp)"]], fields[["Genomic Position"]])),
         keys = .arr(names(fields)), values = .arr(unname(fields)),
+        all_keys = .arr(all_keys), all_values = .arr(all_values),
         sequence = if (!is.na(sq) && nzchar(sq)) sq else NULL,
         flag = isTRUE(row$MergeFragmentWarning) || isTRUE(row$ArtifactSuspect),
         hotspot = hotspot_flag,
         hotspot_name = hotspot_name
       )
     }
-    cfg <- gene_configs[[gn]]
+    cfg <- get_config(gn)
+    if (is.null(cfg)) {
+      message(sprintf("[HTML report] Genome panel skipped for %s/%s: no gene configuration.", sn, gn))
+    }
     if (!is.null(cfg)) {
       key <- paste(sn, gn, sep = "_")
-      bam <- if (!is.null(bam_paths) && sn %in% names(bam_paths)) bam_paths[[sn]] else NULL
-      cov <- coverages[[key]]
-      if (!is.null(cov) || (!is.null(bam) && file.exists(bam))) {
-        # Variant ids are table row numbers (all calls are kept: include_ptd).
-        pnl <- .panel_payload(sub_df, cfg, bam, cov, sn, gn, mode, pos_col, ids = rows)
+      bam <- if (!is.null(bam_paths) && !is.null(names(bam_paths)) && sn %in% names(bam_paths)) {
+        bam_paths[[match(sn, names(bam_paths))]]
+      } else NULL
+      cov <- if (is.list(coverages) && !is.null(names(coverages)) && key %in% names(coverages)) {
+        coverages[[match(key, names(coverages))]]
+      } else NULL
+      if (!is.null(cov) || (!is.null(bam) && length(bam) == 1L && !is.na(bam) && file.exists(bam))) {
+        message(sprintf("[HTML report] Building genome panel %s/%s (BAM=%s; precomputed_coverage=%s)",
+                        sn, gn,
+                        if (!is.null(bam) && length(bam) == 1L && !is.na(bam) && file.exists(bam)) "available" else "unavailable",
+                        if (!is.null(cov) && length(cov) > 0L) "available" else "unavailable"))
+        # A malformed optional genome panel must not suppress the complete
+        # results/details HTML report. Keep the panel error in the run log.
+        pnl <- tryCatch(
+          .panel_payload(sub_df, cfg, bam, cov, sn, gn, mode, pos_col, ids = rows),
+          error = function(e) {
+            message(.html_error_diagnostic(
+              e, context = sprintf("HTML report / genome panel %s/%s", sn, gn)
+            ))
+            NULL
+          }
+        )
         if (!is.null(pnl)) panels[[length(panels) + 1L]] <- pnl
+        else message(sprintf("[HTML report] Genome panel omitted for %s/%s; see preceding diagnostic.", sn, gn))
+      } else {
+        message(sprintf("[HTML report] Genome panel skipped for %s/%s: neither BAM nor precomputed coverage is available.", sn, gn))
       }
     }
   }
@@ -1039,8 +1507,16 @@ talos_html_report <- function(result_df,
                       toupper(mode)))
     )
   )
-  json <- as.character(jsonlite::toJSON(payload, auto_unbox = TRUE, null = "null", na = "null",
-                                        digits = NA, force = TRUE))
+  message("[HTML report] Serializing report payload: variants=", length(variants),
+          "; panels=", length(panels), "; rows=", nrow(df))
+  json <- tryCatch(
+    as.character(jsonlite::toJSON(payload, auto_unbox = TRUE, null = "null", na = "null",
+                                  digits = NA, force = TRUE)),
+    error = function(e) {
+      message(.html_error_diagnostic(e, context = "HTML report / JSON serialization"))
+      stop(e)
+    }
+  )
   # Keep the JSON inert inside its <script> element.
   json <- gsub("<!--", "<\\!--", gsub("</", "<\\/", json, fixed = TRUE), fixed = TRUE)
 
@@ -1061,18 +1537,25 @@ talos_html_report <- function(result_df,
     "<span class=\"spacer\"></span>",
     "<button id=\"print-btn\" class=\"btn\" type=\"button\" aria-label=\"Print or save the report as PDF\">Print</button>",
     "<button id=\"theme-btn\" class=\"btn\" type=\"button\" aria-label=\"Toggle colour theme\">Theme</button></div>\n",
+    "<div id=\"sample-pick\" class=\"sample-pick\" hidden></div>\n",
     "<nav id=\"tabs\" class=\"tabs\" role=\"tablist\" aria-label=\"Report sections\"></nav>\n",
     "</div></header>\n<main id=\"panels\"></main>\n",
     "<noscript><p style=\"padding:16px\">This report needs JavaScript enabled.</p></noscript>\n",
     "<script id=\"talos-data\" type=\"application/json\">", json, "</script>\n",
     "<script>\n", .talos_coverage_enhancement_js(), "\n</script>\n",
     "<script>\n", .report_asset("talos_report.js"), "\n</script>\n",
-    "<script>\n", .talos_all_values_script(), "\n</script>\n</body>\n</html>\n"
+    "</body>\n</html>\n"
   )
-  con <- file(output_file, open = "wb")
-  on.exit(close(con), add = TRUE)
-  writeBin(charToRaw(enc2utf8(html)), con)
-  message("HTML report written to: ", normalizePath(output_file))
+  con <- tryCatch(file(output_file, open = "wb"), error = function(e) {
+    message(.html_error_diagnostic(e, context = "HTML report / output file open"))
+    stop(e)
+  })
+  on.exit(try(close(con), silent = TRUE), add = TRUE)
+  tryCatch(writeBin(charToRaw(enc2utf8(html)), con), error = function(e) {
+    message(.html_error_diagnostic(e, context = "HTML report / output write"))
+    stop(e)
+  })
+  message("[HTML report] HTML report written to: ", normalizePath(output_file))
   invisible(normalizePath(output_file))
 }
 
@@ -1111,6 +1594,7 @@ talos_html_report <- function(result_df,
   if (html_report) {
     report_path <- file.path(sample_folder, paste0(base_name, "_report.html"))
     key <- paste(sample_name, gene_config$gene, sep = "_")
+    message(sprintf("[HTML report] Starting report generation for %s/%s", sample_name, gene_config$gene))
     ok <- tryCatch({
       talos_html_report(
         result_df = final_df,
@@ -1121,9 +1605,14 @@ talos_html_report <- function(result_df,
         show_config = add_config_to_report,
         coverages = if (!is.null(precomputed_cov)) stats::setNames(list(precomputed_cov), key) else NULL
       )
+      message(sprintf("[HTML report] Report generation completed for %s/%s", sample_name, gene_config$gene))
       TRUE
     }, error = function(e) {
-      warning("HTML report skipped: ", conditionMessage(e))
+      diagnostic <- .html_error_diagnostic(
+        e, context = sprintf("HTML report / report generation %s/%s",
+                             sample_name, gene_config$gene), calls = sys.calls()
+      )
+      warning("HTML report skipped: ", diagnostic, call. = FALSE)
       FALSE
     })
     if (!ok) report_path <- NULL

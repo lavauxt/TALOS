@@ -8,6 +8,23 @@
 #' @param min_size Minimum duplication length (default 10).
 #' @param max_missing_kmers Proportion threshold to drop reads.
 #' @param cluster_tolerance Radius (bp) to cluster breakpoints.
+#' @param min_base_quality Minimum mean Phred base quality for a read to enter
+#'   the analysis population (candidate discovery, wild-type support and
+#'   coverage-derived metrics). Reads without quality strings are retained.
+#'   Default 20; set 0 to disable.
+#' @param adapter_sequences Character vector of adapter sequences screened as
+#'   read-through contamination. Defaults to the standard Illumina TruSeq /
+#'   Nextera / small-RNA adapter set. Screening is a report, not a filter:
+#'   affected QNAMEs are counted region-wide and per variant. NULL or
+#'   character(0) disables screening.
+#' @param adapter_min_overlap Minimum contiguous adapter bases (exact prefix
+#'   match) that flag a read (default 10).
+#' @param cluster_length_scale Length-scaled breakpoint clustering: the
+#'   effective tolerance for a breakpoint with duplication length L is
+#'   max(cluster_tolerance, cluster_length_scale * L), capped by
+#'   max_cluster_tolerance. Default 0.1; set 0 for the legacy scalar tolerance.
+#' @param max_cluster_tolerance Upper bound of the length-scaled clustering
+#'   tolerance (default 50).
 #' @param search_window Max distance (bp) the split-read anchor search
 #'   (.estimate_itd_from_anchors()) looks for a re-anchor match. This is a
 #'   hard ceiling on any anchor-confirmed length estimate -- a true
@@ -35,7 +52,7 @@
 #' @param verbose Logging enabled.
 #' @param debug If TRUE, writes one line per candidate cluster.
 #' @param nominal_read_len Assumed read length.
-#' @param max_correction Size-bias correction cap.
+#' @param max_correction Exploratory size-bias correction cap (default 1 = no inflation). Primary AF and support remain raw regardless of this setting.
 #' @param plot Output PDF.
 #' @param sample_name Extracted/assigned sample name.
 #' @param filter_intronic Auto-drop non-exonic breakpoints.
@@ -70,18 +87,20 @@
 #' @param min_microhomology Required MH length.
 #' @param min_discordant_ratio Required ratio length (for filtering).
 #' @param min_entropy Sequence repeat complexity baseline.
-#' @param min_alignment_score Minimum sequence identity (0–1) between read-derived ITD sequence and the corresponding reference segment. Bypassed automatically for imputed sequences (default 0.2).
+#' @param min_alignment_score Minimum sequence identity (0-1) between read-derived ITD sequence and the corresponding reference segment. Bypassed automatically for imputed sequences (default 0.2).
 #' @param detect_orientation Check inverse loops.
 #' @param annotate_hotspots SQLite DB lookups.
 #' @param hotspot_db_path Path to SQLite lookup DB.
 #' @param compute_alignment_score Metric toggle.
 #' @param compute_support_bases Metric toggle.
-#' @param compute_consistency Metric toggle. Default FALSE: SupportConsistency
-#'   never gates .apply_filters() (purely informational) and is circular for
-#'   imputed/ref-derived PTD sequence (checking reads against a sequence
-#'   assembled from a subset of those same reads, or filled from reference).
-#'   AlignmentScore/RefMatch_Observed/ITDReadCoverage already cover this
-#'   ground without the circularity. Set TRUE to restore it for debugging.
+#' @param compute_consistency Metric toggle (default TRUE). Calculates the
+#'   percentage of supporting read-end sequences that align to a fully
+#'   read-derived full-length ITD template at >=90% identity over >=20 bases.
+#'   This is informational only and never gates .apply_filters(). It is not
+#'   calculated against reference-imputed or reference-only coverage templates,
+#'   because those templates cannot independently validate the read sequence.
+#'   Use ITDCoverageDirectAlignmentRatePct for the read-to-template rate when
+#'   only a reference coordinate template is available.
 #' @param compute_itd_coverage Metric toggle.
 #' @param compute_coverage_drop Metric toggle.
 #' @param compute_microhomology Metric toggle.
@@ -93,18 +112,18 @@
 #' @param min_itd_read_coverage Minimum percentage of the ITD length that must be covered by supporting reads (default 50). Low values indicate the sequence was largely imputed rather than directly observed. KMT2A is automatically relaxed to 10 to accommodate large PTDs where only the junctions are read-covered.
 #' @param max_reads_in_region Loading safeguard.
 #' @param add_config_to_report Render configs in results.
-#' @param max_pairwise_alignments Max limit for computationally heavy sub-alignments.
+#' @param max_pairwise_alignments Maximum number of supporting reads aligned per chunk for ITD metrics (default 30). All distinct supporting reads are processed; this is not a read-sampling cap.
 #' @param include_sample Include sample name in output filenames (default TRUE).
 #' @param include_gene Include gene name in output filenames (default TRUE).
 #' @param include_timestamp Include timestamp in output filenames (default TRUE).
 #' @param output_sep Separator between filename parts (default "_").
 #' @param global_log Write all logs (config, compute time, errors) to a single file (default TRUE).
-#' @param min_side_softclip_reads Minimum number of reads with soft‑clip on each side (default 0, i.e. disabled).
-#' @param max_side_ratio Maximum ratio of left/right soft‑clip counts before filtering (default 10).
-#' @param min_softclip_pct_side Minimum percentage of supporting reads that must have a soft‑clip on each side (default 0, i.e. disabled).
-#' @param min_left_softclip_pct_wt Minimum percentage of wildtype reads with left soft‑clip (default 0, i.e. disabled).
-#' @param min_right_softclip_pct_wt Minimum percentage of wildtype reads with right soft‑clip (default 0, i.e. disabled).
-#' @param min_abs_side_softclip Minimum absolute soft‑clip count on each side (default 0, i.e. disabled).
+#' @param min_side_softclip_reads Minimum number of reads with soft-clip on each side (default 0, i.e. disabled).
+#' @param max_side_ratio Maximum ratio of left/right soft-clip counts before filtering (default 10).
+#' @param min_softclip_pct_side Minimum percentage of supporting reads that must have a soft-clip on each side (default 0, i.e. disabled).
+#' @param min_left_softclip_pct_wt Minimum percentage of wildtype reads with left soft-clip (default 0, i.e. disabled).
+#' @param min_right_softclip_pct_wt Minimum percentage of wildtype reads with right soft-clip (default 0, i.e. disabled).
+#' @param min_abs_side_softclip Minimum absolute soft-clip count on each side (default 0, i.e. disabled).
 #' @param max_itd_length Maximum duplication length to consider as ITD; longer duplications are automatically converted to PTD (zero length) if \code{convert_long_to_ptd} is TRUE (default 1000).
 #' @param convert_long_to_ptd If TRUE, duplications longer than \code{max_itd_length} are reported as PTDs (length 0). If FALSE, they are skipped (default TRUE).
 #' @param min_length Minimum duplication length to report (NULL = no lower bound).
@@ -146,11 +165,21 @@ detect_itd <- function(
   bam_path,
   gene_config,
   genomic_ref_seq = NULL,
-  k = 11,
+  k = 12,
   min_support = 10,
   min_size = 15,
   max_missing_kmers = 0.5,
   cluster_tolerance = 10,
+  min_base_quality = 20,
+  adapter_sequences = c(
+    "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA",
+    "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT",
+    "CTGTCTCTTATACACATCT",
+    "TGGAATTCTCGGGTGCCAAGG"
+  ),
+  adapter_min_overlap = 10L,
+  cluster_length_scale = 0.1,
+  max_cluster_tolerance = 50,
   prefilter = TRUE,
   search_window = 5000L,
   require_unique_anchor = FALSE,
@@ -161,7 +190,7 @@ detect_itd <- function(
   verbose = TRUE,
   debug = FALSE,
   nominal_read_len = 150,
-  max_correction = 2.0,
+  max_correction = 1.0,
   plot = FALSE,
   sample_name = NULL,
   filter_intronic = FALSE,
@@ -192,7 +221,7 @@ detect_itd <- function(
   hotspot_db_path = NULL,
   compute_alignment_score = TRUE,
   compute_support_bases = TRUE,
-  compute_consistency = FALSE,
+  compute_consistency = TRUE,
   compute_itd_coverage = TRUE,
   compute_coverage_drop = TRUE,
   compute_microhomology = TRUE,
@@ -233,6 +262,40 @@ detect_itd <- function(
   ...
 ) {
   start_time <- Sys.time()
+  if (length(min_mapq) != 1L || is.na(min_mapq) || min_mapq < 0L) {
+    stop("min_mapq must be one non-negative integer.", call. = FALSE)
+  }
+  if (length(vaf_threshold) != 1L || !is.finite(vaf_threshold) ||
+      vaf_threshold < 0 || vaf_threshold > 1) {
+    stop("vaf_threshold must be one finite value between 0 and 1.", call. = FALSE)
+  }
+  if (length(max_correction) != 1L || !is.finite(max_correction) || max_correction < 1) {
+    stop("max_correction must be one finite value >= 1; use 1 to disable size correction.", call. = FALSE)
+  }
+  if (length(nominal_read_len) != 1L || !is.finite(nominal_read_len) || nominal_read_len <= 0) {
+    stop("nominal_read_len must be one positive finite number.", call. = FALSE)
+  }
+  if (length(min_base_quality) != 1L || is.na(min_base_quality) ||
+      !is.finite(min_base_quality) || min_base_quality < 0) {
+    stop("min_base_quality must be one non-negative finite number (0 disables the filter).", call. = FALSE)
+  }
+  if (length(adapter_min_overlap) != 1L || is.na(adapter_min_overlap) ||
+      adapter_min_overlap < 1) {
+    stop("adapter_min_overlap must be one positive integer.", call. = FALSE)
+  }
+  if (length(cluster_length_scale) != 1L || is.na(cluster_length_scale) ||
+      !is.finite(cluster_length_scale) || cluster_length_scale < 0 ||
+      cluster_length_scale > 1) {
+    stop("cluster_length_scale must be one finite number between 0 and 1 (0 disables length scaling).", call. = FALSE)
+  }
+  if (length(max_cluster_tolerance) != 1L || is.na(max_cluster_tolerance) ||
+      !is.finite(max_cluster_tolerance) || max_cluster_tolerance < cluster_tolerance) {
+    stop("max_cluster_tolerance must be one finite number >= cluster_tolerance.", call. = FALSE)
+  }
+  if (!is.null(adapter_sequences)) {
+    adapter_sequences <- as.character(adapter_sequences)
+    adapter_sequences <- adapter_sequences[!is.na(adapter_sequences) & nzchar(adapter_sequences)]
+  }
   gene_name <- gene_config$gene %||% "UNKNOWN"
   if (is.null(sample_name)) {
     sample_name <- .sample_from_bam(bam_path)
@@ -264,11 +327,22 @@ detect_itd <- function(
     cat(sep_line, file = global_log_file, append = TRUE)
   }
 
+  # [FIX Phase 4] log_msg() writes to stdout via cat() (NOT message()) so
+  # that the withCallingHandlers(message=...) wrapper below can safely
+  # mirror ALL message() calls from engine helpers (engine_metrics.R,
+  # engine_bam.R, engine_alu.R) into the log file without duplicating
+  # log_msg()'s own output. Using cat() to stdout visually matches
+  # message() in interactive R sessions; the only difference is the
+  # stream (stdout vs stderr), which doesn't matter for the console.
   log_msg <- function(..., append = TRUE) {
     msg <- paste(..., collapse = " ")
-    if (verbose) message(msg)
+    if (verbose) cat(msg, "\n")
     if (!is.null(global_log_file)) cat(msg, "\n", file = global_log_file, append = append)
   }
+
+  # Carry the analysis MAPQ threshold into optional report BAM queries so the
+  # displayed depth is calculated from the same read population as WT support.
+  gene_config$min_mapq <- as.integer(min_mapq)
 
   log_msg("Starting TALOS detection engine...")
   on.exit({
@@ -288,16 +362,32 @@ detect_itd <- function(
       sample_name = sample_name, gene_config = gene_config, ref_dna = ref,
       bam_path = bam_path, write_vcf = write_vcf, plot = plot,
       html_report = html_report, verbose = verbose,
-      add_config_to_report = add_config_to_report, precomputed_cov = cov
+      add_config_to_report = add_config_to_report,
+      # bam_data$cov is restricted to gene_config$genomic_start/end (the
+      # detection window). The report includes flanking transcript exons such
+      # as FLT3 E16, so let the PDF/HTML plot loaders query their full plotted
+      # genomic interval from the indexed BAM instead of reusing this partial
+      # detection-only Rle.
+      precomputed_cov = NULL
     )
     invisible(data.frame())
   }
 
   tryCatch(
-    {
-      ref_dna <- gene_config$genomic_ref_seq
-      if (is.null(ref_dna) || is.na(ref_dna) || nchar(ref_dna) == 0) {
-        stop("No genomic reference sequence available in gene_config.")
+    withCallingHandlers(
+      {
+      ref_dna <- genomic_ref_seq %||% gene_config$genomic_ref_seq
+      if (is.null(ref_dna) || length(ref_dna) != 1L || is.na(ref_dna) || nchar(ref_dna) == 0) {
+        stop("No genomic reference sequence available in gene_config or genomic_ref_seq override.")
+      }
+      ref_dna <- toupper(as.character(ref_dna))
+      if (!is.null(genomic_ref_seq)) {
+        expected_len <- gene_config$genomic_end - gene_config$genomic_start + 1L
+        if (nchar(ref_dna) != expected_len) {
+          stop("genomic_ref_seq is ", nchar(ref_dna), " bp but the configured window is ",
+               expected_len, " bp; the override must match the configured genomic window exactly.")
+        }
+        log_msg("[TALOS] Using caller-supplied genomic_ref_seq override.")
       }
       ref_len <- nchar(ref_dna)
       if (ref_len < k) {
@@ -308,32 +398,57 @@ detect_itd <- function(
       ref_kmers <- .prepare_kmers(ref_dna, k)
       bam_data <- .load_bam_data_streaming(
         bam_path, gene_config,
-        compute_pairs = compute_discordant_ratio,
+        compute_pairs = isTRUE(compute_discordant_ratio) || isTRUE(compute_itd_coverage),
         max_reads = max_reads_in_region,
         verbose = verbose
       )
       all_reads <- bam_data$reads
-      if (length(all_reads) == 0) {
+      if (length(all_reads) == 0L) {
         return(finish_empty("No reads found in target region.", cov = bam_data$cov, ref = ref_dna))
+      }
+
+      # -- Adapter screening (report-only) and base-quality filtering --------
+      # Screening flags reads carrying adapter read-through; it never removes
+      # reads. The base-quality filter drops reads whose mean Phred score is
+      # below min_base_quality from the whole analysis population (candidate
+      # discovery, wild-type support and coverage metrics share it). Both
+      # steps run before the WT population split so every downstream
+      # population is defined identically.
+      adapter_screen <- .screen_adapter_reads(
+        all_reads, adapter_sequences, adapter_min_overlap, verbose = verbose
+      )
+      bq_loaded <- .bam_has_base_quality(all_reads)
+      if (bq_loaded && min_base_quality > 0) {
+        all_reads <- .filter_reads_by_base_quality(all_reads, min_base_quality, verbose = verbose)
+        if (length(all_reads) == 0L) {
+          return(finish_empty("No reads passed the base-quality filter.", cov = bam_data$cov, ref = ref_dna))
+        }
       }
 
       wt_mapqs <- S4Vectors::mcols(all_reads)$mapq
       wt_mapqs[is.na(wt_mapqs)] <- 0L
       all_reads_for_wt <- all_reads[wt_mapqs >= min_mapq]
+      # All coverage-derived metrics must use the same MAPQ / duplicate / QC
+      # population as WT support. bam_data$cov is the unfiltered loader depth.
+      cov_filtered <- if (length(all_reads_for_wt) > 0L)
+        GenomicAlignments::coverage(all_reads_for_wt) else NULL
+      all_reads_cov_filtered <- if (!is.null(cov_filtered) &&
+                                    gene_config$chrom %in% names(cov_filtered))
+        cov_filtered[[gene_config$chrom]] else NULL
 
       if (prefilter) {
         all_reads <- .filter_reads_by_cigar(all_reads, min_mapq, min_ins_filter, verbose = verbose)
-        if (length(all_reads) == 0) {
+        if (length(all_reads) == 0L) {
           return(finish_empty("No reads passed CIGAR prefilter.", cov = bam_data$cov, ref = ref_dna))
         }
       }
 
-      # ── Candidate extraction ──────────────────────────────────────────────
+      # -- Candidate extraction ---------------------------------------------
       candidates <- list()
 
       if (use_exon_graph && !is.null(gene_config$all_exons)) {
         log_msg("[TALOS] Running Exon-Graph PTD reconstruction...")
-        graph_cycles <- extract_graph_candidates(bam_path, gene_config)
+        graph_cycles <- extract_graph_candidates(bam_path, gene_config, min_mapq = min_mapq)
         if (length(graph_cycles) > 0) {
           for (cy in graph_cycles) {
             log_msg(sprintf(
@@ -344,7 +459,7 @@ detect_itd <- function(
           }
           # Look the reads up in the MAPQ-filtered set: everted mates carry no
           # clip and are removed by the CIGAR prefilter.
-          gc <- .graph_cycles_to_candidates(graph_cycles, all_reads_for_wt, gstart)
+          gc <- .graph_cycles_to_candidates(graph_cycles, all_reads_for_wt, gstart, ref_len = ref_len)
           if (length(gc$candidates) > 0) {
             candidates <- c(candidates, gc$candidates)
             log_msg(sprintf("[TALOS] Graph extraction contributed %d read-level PTD candidate(s) from %d cycle(s).",
@@ -377,7 +492,14 @@ detect_itd <- function(
         return(finish_empty("No candidate reads (clips or k-mer jumps) found.", cov = bam_data$cov, ref = ref_dna))
       }
       bp_df <- .candidates_to_df(candidates, gstart)
-      clusters <- .cluster_breakpoints(bp_df$breakpoint, cluster_tolerance)
+      # Length-scaled clustering (v0.4.20): the effective tolerance for a
+      # breakpoint grows with its duplication length (capped), while the
+      # anti-chaining total-width bound is kept.
+      clusters <- .cluster_breakpoints(
+        bp_df$breakpoint, cluster_tolerance,
+        lengths = bp_df$length, length_scale = cluster_length_scale,
+        max_scaled_tolerance = max_cluster_tolerance
+      )
 
       ptd_assembled_seqs <- list()
       if (ptd_mode && ptd_use_local_assembly && nrow(bp_df) > 0) {
@@ -417,29 +539,74 @@ detect_itd <- function(
         "min_softclip_pct_side", "min_left_softclip_pct_wt", "min_right_softclip_pct_wt",
         "min_abs_side_softclip"
       ))
-      thresholds <- mget(threshold_names, envir = environment())
+      # [FIX Phase 4] Defensive mget(): if a threshold name in .FILTER_RULES
+      # ever drifts from a detect_itd() formal argument, the previous
+      # mget() threw a cryptic "value for 'X' not found" error mid-run. We
+      # pass an explicit ifnotfound (a simple list of NAs -- NO side effects
+      # inside, because R evaluates ifnotfound eagerly when the list is
+      # built, which would emit spurious warnings for every name even when
+      # the name IS found). After mget() we check which names came back NA
+      # and emit ONE consolidated warning listing all of them.
+      thresholds <- mget(
+        threshold_names,
+        envir = environment(),
+        ifnotfound = setNames(replicate(length(threshold_names), NA, simplify = FALSE),
+                              threshold_names)
+      )
+      missing_thresholds <- threshold_names[
+        vapply(thresholds, function(v) is.null(v) || (length(v) == 1L && is.na(v)),
+               logical(1L))
+      ]
+      if (length(missing_thresholds) > 0L) {
+        warning(
+          "[TALOS] The following threshold(s) were not found in detect_itd() ",
+          "formals and will be treated as 'rule disabled' by .apply_filters(): ",
+          paste(missing_thresholds, collapse = ", "),
+          ". Check the .FILTER_RULES / formal-argument name alignment in ",
+          "engine_metrics.R and main.R."
+        )
+      }
 
       metric_args <- list(
         genomic_start = gstart, ref_dna = ref_dna, gene_config = gene_config,
-        all_reads_cov = bam_data$cov, all_pairs = bam_data$pairs, wildtype_info = wt_info,
+        all_reads_cov = all_reads_cov_filtered, all_reads_for_coverage = all_reads_for_wt,
+        all_pairs = bam_data$pairs, wildtype_info = wt_info,
         ptd_mode = ptd_mode, min_support = min_support, min_wt_reads = min_wt_reads,
         nominal_read_len = nominal_read_len, max_correction = max_correction,
-        vaf_threshold = vaf_threshold, do_alignment_score = compute_alignment_score,
+        min_mapq = min_mapq, vaf_threshold = vaf_threshold, do_alignment_score = compute_alignment_score,
         do_consistency = compute_consistency, do_itd_coverage = compute_itd_coverage,
         do_support_bases = compute_support_bases, do_coverage_drop = compute_coverage_drop,
         do_microhomology = compute_microhomology, do_repeat_entropy = compute_repeat_entropy,
         do_discordant_ratio = compute_discordant_ratio, do_detect_orientation = detect_orientation,
         do_hgvs = compute_hgvs, max_pairwise_alignments = max_pairwise_alignments,
         span_flank = coverage_window, max_itd_length = max_itd_length,
+        adapter_positive_qnames = adapter_screen$qnames,
+        adapter_screened_reads = adapter_screen$screened,
+        adapter_positive_reads = adapter_screen$positive,
+        adapter_n_configured = length(adapter_sequences),
+        adapter_min_overlap = as.integer(adapter_min_overlap),
+        base_quality_loaded = bq_loaded,
+        min_base_quality = min_base_quality,
         debug = debug, verbose = verbose
       )
 
       results <- list()
       # Metrics + filters + debug line + collection: one place instead of three.
-      evaluate_cluster <- function(cluster_bps, best_len, support_rows, length_ext, lookup_bp) {
+      evaluate_cluster <- function(cluster_bps, best_len, support_rows, length_ext, lookup_bp,
+                                   anchor_confirmed_qnames = NA_integer_) {
+        if (is.na(anchor_confirmed_qnames) && nrow(ext_read_level) > 0L) {
+          candidate_qnames <- unique(support_rows$read_name)
+          anchor_rows <- ext_read_level[
+            ext_read_level$read_name %in% candidate_qnames &
+              ext_read_level$itdsize_source == "anchor" &
+              (is.na(best_len) | ext_read_level$itdsize == best_len), , drop = FALSE
+          ]
+          anchor_confirmed_qnames <- length(unique(anchor_rows$read_name))
+        }
         metrics <- do.call(.compute_variant_metrics, c(list(
           cluster_bps = cluster_bps, best_len = best_len, support_rows = support_rows,
-          length_ext = length_ext, pre_assembled_seq = .lookup_assembled_seq(lookup_bp)
+          length_ext = length_ext, pre_assembled_seq = .lookup_assembled_seq(lookup_bp),
+          anchor_confirmed_qnames = anchor_confirmed_qnames
         ), metric_args))
         if (is.null(metrics)) return(invisible(FALSE))
         passed <- .apply_filters(metrics, thresholds, min_length, max_length,
@@ -455,82 +622,95 @@ detect_itd <- function(
         }
       }
 
-      # ── Path 1: extension-refined clusters ─────────────────────────────────
-      if (prefer_extended_length && !ptd_mode && nrow(ext_df) >= 3) {
-        ext_valid <- ext_df[!is.na(ext_df$itdsize) & ext_df$itdsize >= min_size, ]
-        if (nrow(ext_valid) >= 3) {
-          for (rcl in .cluster_breakpoints(ext_valid$breakpoint_refined, cluster_tolerance)) {
-            rcl_reads <- ext_valid[ext_valid$breakpoint_refined %in% rcl, ]
-            if (nrow(rcl_reads) < 3) {
+      # -- Path 1: extension-refined clusters -------------------------------
+      # Collapse each QNAME before clustering or taking a length mode. A
+      # read/pair can generate several raw candidate rows; those are not
+      # independent votes for the same duplication.
+      ext_read_level <- .collapse_extension_candidates_by_read(ext_df)
+      if (prefer_extended_length && !ptd_mode && nrow(ext_read_level) >= 3L) {
+        ext_read_valid <- ext_read_level[!is.na(ext_read_level$itdsize) &
+                                           ext_read_level$itdsize >= min_size, , drop = FALSE]
+        if (nrow(ext_read_valid) >= 3L) {
+          for (rcl in .cluster_breakpoints(
+            ext_read_valid$breakpoint_refined, cluster_tolerance,
+            lengths = ext_read_valid$itdsize, length_scale = cluster_length_scale,
+            max_scaled_tolerance = max_cluster_tolerance
+          )) {
+            rcl_reads <- ext_read_valid[
+              ext_read_valid$breakpoint_refined %in% rcl, , drop = FALSE
+            ]
+            if (nrow(rcl_reads) < 3L) {
               skip_debug(round(stats::median(rcl, na.rm = TRUE)), nrow(rcl_reads),
-                         "refined cluster has <3 supporting reads; metrics not computed, min_support/other filters never applied")
+                         "refined cluster has <3 independent supporting QNAMEs")
               next
             }
-            anchor_vals <- rcl_reads$itdsize[rcl_reads$itdsize_source == "anchor"]
-            best_len <- .mode(rcl_reads$itdsize)
-            median_bp <- as.integer(stats::median(rcl_reads$breakpoint_refined, na.rm = TRUE))
+            best_len <- .mode_extension_length(rcl_reads$itdsize, rcl_reads$itdsize_source)
+            # Keep only QNAMEs supporting the modal length. This prevents
+            # different ITD-size hypotheses at one breakpoint being pooled.
+            selected_reads <- rcl_reads[rcl_reads$itdsize == best_len, , drop = FALSE]
+            if (nrow(selected_reads) < 3L) next
+            median_bp <- as.integer(stats::median(selected_reads$breakpoint_refined, na.rm = TRUE))
+            selected_qnames <- unique(selected_reads$read_name)
             near <- abs(bp_df$breakpoint - median_bp) <= cluster_tolerance
-            support_rows <- unique(rbind(
-              bp_df[bp_df$read_name %in% rcl_reads$read_name & near, ],
-              bp_df[near & !(bp_df$read_name %in% rcl_reads$read_name), ]
-            ))
-            if (nrow(support_rows) == 0) {
-              skip_debug(median_bp, 0L, "no bp_df rows matched refined cluster; metrics not computed")
+            support_rows <- bp_df[bp_df$read_name %in% selected_qnames & near, , drop = FALSE]
+            if (nrow(support_rows) == 0L) {
+              skip_debug(median_bp, 0L, "no breakpoint rows matched extension-selected QNAMEs")
               next
             }
+            anchor_n <- sum(selected_reads$itdsize_source == "anchor", na.rm = TRUE)
             if (verbose) {
               log_msg(sprintf(
-                "Extension-based cluster at %d: %d bp (mode of %d anchor-confirmed / %d total values, %d supporting reads)",
-                median_bp, best_len, length(anchor_vals), nrow(rcl_reads), nrow(support_rows)
+                "Extension-based cluster at %d: %d bp (%d/%d independent QNAMEs anchor-confirmed; %d selected support rows)",
+                median_bp, best_len, anchor_n, nrow(selected_reads), nrow(support_rows)
               ))
             }
-            evaluate_cluster(rep(median_bp, nrow(support_rows)), best_len, support_rows, best_len, median_bp)
+            evaluate_cluster(rep(median_bp, nrow(support_rows)), best_len, support_rows,
+                             best_len, median_bp, anchor_confirmed_qnames = anchor_n)
           }
         }
       }
 
-      # ── Path 2: raw breakpoint clusters ────────────────────────────────────
-      # Runs for every cluster not already called by path 1. It used to run
-      # only when path 1 returned nothing, which silently dropped any second
-      # event (e.g. a CIGAR-only ITD next to an anchor-refined one).
-      called_pos <- vapply(results, function(r) as.numeric(r$GenomicPosition), numeric(1L))
-      ext_by_read <- if (nrow(ext_df) > 0) {
-        tmp <- tapply(ext_df$itdsize, ext_df$read_name, function(x) x[1L]); tmp[!is.na(tmp)]
-      } else {
-        c()
-      }
-      bp_refined_by_read <- if (nrow(ext_df) > 0) {
-        tmp <- tapply(ext_df$breakpoint_refined, ext_df$read_name, function(x) x[1L]); tmp[!is.na(tmp)]
-      } else {
-        c()
-      }
-      first_or_na <- function(v, key) { x <- v[key]; if (length(x) == 0 || is.null(x)) NA_integer_ else x[[1L]] }
-
+      # -- Path 2: raw breakpoint clusters ------------------------------------
+      # Run for every raw cluster not already called by the extension path.
       for (cl in clusters) {
+        # Refresh inside the loop: Path 2 can append a call, so a snapshot
+        # taken before iteration can allow later length groups to duplicate it.
+        called_pos <- vapply(results, function(r) as.numeric(r$GenomicPosition), numeric(1L))
         cluster_candidates <- which(bp_df$breakpoint %in% cl)
-        if (length(cluster_candidates) == 0) {
+        if (length(cluster_candidates) == 0L) {
           skip_debug(round(stats::median(cl, na.rm = TRUE)), 0L, "no candidates matched cluster; metrics not computed")
           next
         }
         if (length(called_pos) && any(abs(called_pos - stats::median(cl)) <= cluster_tolerance)) next
 
-        support_read_names <- bp_df$read_name[cluster_candidates]
-        sz <- vapply(support_read_names, function(rn) as.numeric(first_or_na(ext_by_read, rn)), numeric(1L))
-        bp_ref <- vapply(support_read_names, function(rn) as.numeric(first_or_na(bp_refined_by_read, rn)), numeric(1L))
-        ok <- !is.na(sz) & !is.na(bp_ref)
-        ext_sizes <- as.integer(sz[ok])
-        refined_bps <- bp_ref[ok]
+        support_read_names <- unique(bp_df$read_name[cluster_candidates])
+        raw_center <- stats::median(cl, na.rm = TRUE)
+        ext_cluster <- ext_read_level[
+          ext_read_level$read_name %in% support_read_names &
+            abs(ext_read_level$breakpoint_refined - raw_center) <= cluster_tolerance,
+          , drop = FALSE
+        ]
 
-        if (prefer_extended_length && !ptd_mode && length(ext_sizes) >= 3) {
-          best_len <- .mode(ext_sizes)
-          median_bp <- as.integer(stats::median(refined_bps, na.rm = TRUE))
-          support_rows <- bp_df[bp_df$read_name %in% names(ext_by_read) &
-                                  abs(bp_df$breakpoint - median_bp) <= cluster_tolerance, ]
-          # Fallback keeps the original cluster (it was overwritten with
-          # rep(median_bp) first, so only reads exactly at the median matched).
-          if (nrow(support_rows) == 0) support_rows <- bp_df[bp_df$breakpoint %in% cl, ]
-          evaluate_cluster(rep(median_bp, nrow(support_rows)), best_len, support_rows, best_len, median_bp)
-          next
+        if (prefer_extended_length && !ptd_mode && nrow(ext_cluster) >= 3L) {
+          best_len <- .mode_extension_length(ext_cluster$itdsize, ext_cluster$itdsize_source)
+          selected_reads <- ext_cluster[ext_cluster$itdsize == best_len, , drop = FALSE]
+          # If no length hypothesis has >=3 independent QNAMEs, do not
+          # abandon this raw breakpoint cluster: fall through to the raw
+          # CIGAR-length path below instead of silently losing the event.
+          if (nrow(selected_reads) >= 3L) {
+            median_bp <- as.integer(stats::median(selected_reads$breakpoint_refined, na.rm = TRUE))
+            selected_qnames <- unique(selected_reads$read_name)
+            support_rows <- bp_df[
+              bp_df$read_name %in% selected_qnames &
+                abs(bp_df$breakpoint - median_bp) <= cluster_tolerance,
+              , drop = FALSE
+            ]
+            if (nrow(support_rows) > 0L) {
+              evaluate_cluster(rep(median_bp, nrow(support_rows)), best_len,
+                               support_rows, best_len, median_bp)
+              next
+            }
+          }
         }
 
         cluster_lengths <- bp_df$length[cluster_candidates]
@@ -543,10 +723,12 @@ detect_itd <- function(
           } else {
             bp_df[in_cl & !is.na(bp_df$length) & bp_df$length == best_len, ]
           }
-          ext_sizes_cl <- unlist(ext_by_read[support_rows$read_name], use.names = FALSE)
-          ext_sizes_cl <- ext_sizes_cl[!is.na(ext_sizes_cl) & ext_sizes_cl > 0L]
+          ext_sizes_cl <- ext_read_level$itdsize[
+            ext_read_level$read_name %in% support_rows$read_name &
+              !is.na(ext_read_level$itdsize) & ext_read_level$itdsize > 0L
+          ]
           length_ext <- if (length(ext_sizes_cl) >= 3L) {
-            as.integer(names(sort(table(ext_sizes_cl), decreasing = TRUE))[1L])
+            as.integer(names(sort(table(ext_sizes_cl, decreasing = TRUE))[1L]))
           } else {
             NA_integer_
           }
@@ -589,7 +771,9 @@ detect_itd <- function(
         final_df <- final_df[is.na(final_df$Region) | final_df$Region == "exonic", ]
       }
       final_df$TranscriptRef <- rep(
-        if (is.na(gene_config$transcript)) "none" else gene_config$transcript, nrow(final_df)
+        if (is.null(gene_config$transcript) || length(gene_config$transcript) != 1L ||
+            is.na(gene_config$transcript) || !nzchar(gene_config$transcript)) "none"
+        else gene_config$transcript, nrow(final_df)
       )
 
       .write_talos_output(
@@ -597,12 +781,33 @@ detect_itd <- function(
         sample_name = sample_name, gene_config = gene_config, ref_dna = ref_dna,
         bam_path = bam_path, write_vcf = write_vcf, plot = plot, html_report = html_report,
         verbose = verbose, add_config_to_report = add_config_to_report,
-        precomputed_cov = bam_data$cov
+        # Detection coverage is limited to the configured target interval.
+        # Report coverage is fetched separately across every displayed exon,
+        # including flanking exons outside the candidate-discovery window.
+        precomputed_cov = NULL
       )
 
       log_msg(sprintf("Analysis completed successfully. %d variant(s) found.", nrow(final_df)))
       return(final_df)
     },
+    # [FIX Phase 4] Mirror every message() emitted inside the engine body
+    # (PE-spanning coverage, PE insert-size length, debug anchor sizes,
+    # anything in engine_metrics.R / engine_bam.R / engine_alu.R) into the
+    # global log file. log_msg() already does this for messages it emits,
+    # but engine helpers call base::message() directly, so their text only
+    # reached the console. Here we append the condition's message text to
+    # the log file (when one is open). We do NOT call
+    # invokeRestart("muffleMessage"), so the default handler still prints
+    # the message to the console -- the only side effect here is the extra
+    # cat() to the log file.
+    message = function(m) {
+      if (!is.null(global_log_file)) {
+        cat(conditionMessage(m), "\n", file = global_log_file, append = TRUE)
+      }
+      # Returning without muffling -> default handler prints to console too.
+    }
+    )
+  ,
     error = function(e) {
       log_msg(sprintf("\n%s\nERROR: %s\n%s", strrep("-", 40), conditionMessage(e), strrep("-", 40)))
       stop(e)
@@ -630,17 +835,61 @@ detect_itd <- function(
   final_df
 }
 
+# Merge per-base coverage RLEs in genomic coordinates. Coverage vectors are
+# anchored at each source row's GenomicPosition; gaps remain zero. This keeps
+# PDF and HTML ITD-coverage tracks available after PTD interval consolidation.
+.merge_coverage_rle_column <- function(rows, column, merged_start, merged_len,
+                                       max_length = 1000000L) {
+  if (!column %in% names(rows) || length(merged_len) != 1L ||
+      is.na(merged_len) || merged_len < 1L || merged_len > max_length) {
+    return(NA_character_)
+  }
+  merged_len <- as.integer(merged_len)
+  out <- integer(merged_len)
+  found <- FALSE
+  for (i in seq_len(nrow(rows))) {
+    cov_vec <- .parse_itd_coverage_rle(rows[[column]][i])
+    if (!length(cov_vec)) next
+    row_start <- suppressWarnings(as.numeric(rows$GenomicPosition[i]))
+    if (length(row_start) != 1L || !is.finite(row_start)) next
+    offset <- as.integer(row_start - as.numeric(merged_start))
+    src_lo <- max(1L, 1L - offset)
+    src_hi <- min(length(cov_vec), merged_len - offset)
+    if (src_hi < src_lo) next
+    dst_lo <- offset + src_lo
+    dst_hi <- offset + src_hi
+    # Per-row coverage RLEs are non-additive summaries (max support per
+    # base), not independent read-depth contributions. Summing them inflated
+    # merged interval coverage whenever adjacent rows overlapped.
+    out[dst_lo:dst_hi] <- pmax(out[dst_lo:dst_hi],
+      as.integer(cov_vec[src_lo:src_hi]))
+    found <- TRUE
+  }
+  if (!found) return(NA_character_)
+  rr <- rle(out)
+  paste(paste0(rr$values, ":", rr$lengths), collapse = ",")
+}
+
 # Columns combined when several duplication rows are merged into one interval.
 .MERGE_SUM_COLS <- c("TotalSupportBases", "LeftSoftclipCount", "RightSoftclipCount",
                      "BothSoftclipCount", "PESoftclipSupport", "PESoftclipEventPairs",
                      "PESoftclipLongPairs", "PEOrientationFR", "PEOrientationRF",
-                     "PEOrientationFF", "PEOrientationRR", "PEOrientationOther")
+                     "PEOrientationFF", "PEOrientationRR", "PEOrientationOther",
+                     "ITDPE_SpanningPairs", "ITDKmerReads")
 .MERGE_WMEAN_COLS <- list(RefMatch_Observed = 1L, RefMatch_Total = 1L, ITDReadCoverage = NA_integer_,
+                          ITDReadCoverage_Combined = NA_integer_, ITDReadCoverage_Kmer = NA_integer_,
                           SupportConsistency = NA_integer_, AlignmentScore = NA_integer_,
                           StrandBias = 4L, MeanSupportMAPQ = 1L)
 .MERGE_RESET_COLS <- list(ITD_Sequence = NA_character_, HGVS_cDNA = NA_character_,
                           HGVS_Protein = NA_character_, ITDCoverageRLE = NA_character_,
+                          ITDCoverageRLE_Direct = NA_character_,
+                          ITDCoverageRLE_PE = NA_character_,
+                          ITDCoverageRLE_Kmer = NA_character_,
                           LengthPE = NA_real_, LengthPE_NSpanning = NA_integer_,
+                          LengthPE_Delta = NA_real_, LengthPE_Concordant = NA,
+                          ITDUncoveredBases_Direct = NA_integer_,
+                          ITDUncoveredBases_Combined = NA_integer_,
+                          ITDUncoveredIntervals_Combined = NA_character_,
                           LengthExt = NA_integer_, SequenceImputed = TRUE, SequencePartial = TRUE,
                           SequenceSource = "merged_intervals", Hotspot = FALSE,
                           HotspotName = NA_character_, Region = NA_character_,
@@ -661,6 +910,10 @@ detect_itd <- function(
 #' @keywords internal
 .merge_ptd_intervals <- function(final_df, min_ptd_length, merge_gap, max_plausible_fragments,
                                  thresholds, cov, chrom, coverage_window, log_msg = message) {
+  thv <- function(nm, default) {
+    v <- thresholds[[nm]]
+    if (is.null(v) || length(v) != 1L || is.na(v)) default else as.numeric(v)
+  }
   min_gapwidth <- .ptd_merge_min_gapwidth(merge_gap)
   merge_gap <- min_gapwidth - 1L
   if (length(chrom) != 1L || is.na(chrom) || !nzchar(as.character(chrom))) {
@@ -713,20 +966,68 @@ detect_itd <- function(
 
     template$GenomicPosition <- mg_start
     template$Length <- mg_len
+    template$InFrame <- if (mg_len > 0L) (as.integer(mg_len) %% 3L == 0L) else NA
     if (!is.null(cov)) {
       sc <- .compute_span_coverage_summary(cov, chrom, mg_start, mg_len, flank = coverage_window)
       template$SpanMinCoverage <- sc$min_cov
       template$SpanMeanCoverage <- sc$mean_cov
       template$SpanDepthFoldChange <- sc$depth_fold_change
     }
-    template$SupportingReads <- sum_na(final_df$SupportingReads[grp])
-    template$WildtypeReads <- sum_na(final_df$WildtypeReads[grp])
+    # Exact QNAME-union support (v0.4.20). Component rows carry their
+    # supporting / wild-type QNAME sets (SupportQNAMEs / WildtypeQNAMEs,
+    # ";"-joined). Merged support is the size of the SET UNION, so a read
+    # supporting two adjacent fragments counts once instead of twice. When
+    # the QNAME columns are missing, or a set was truncated (oversized sets
+    # carry a "...TRUNCATED" marker), fall back to the legacy component-row
+    # sum and say so in MergedSupportSemantics.
+    qnames_union <- function(col) {
+      if (!col %in% names(final_df)) return(NULL)
+      vals <- as.character(final_df[[col]][grp])
+      vals <- vals[!is.na(vals) & nzchar(vals)]
+      if (!length(vals)) return(NULL)
+      if (any(grepl("...TRUNCATED", vals, fixed = TRUE))) return(NULL)
+      unique(stats::na.omit(unlist(strsplit(vals, ";", fixed = TRUE))))
+    }
+    sup_union <- qnames_union("SupportQNAMEs")
+    wt_union <- qnames_union("WildtypeQNAMEs")
+    exact_union <- !is.null(sup_union) || !is.null(wt_union)
+    template$SupportingReads <- if (!is.null(sup_union)) length(sup_union) else
+      sum_na(final_df$SupportingReads[grp])
+    template$WildtypeReads <- if (!is.null(wt_union)) length(wt_union) else
+      sum_na(final_df$WildtypeReads[grp])
+    if (!is.null(sup_union)) {
+      template$SupportQNAMEs <- paste(sort(sup_union), collapse = ";")
+      if ("IndependentSupportQNAMEs" %in% names(final_df)) {
+        template$IndependentSupportQNAMEs <- length(sup_union)
+      }
+    }
+    if (!is.null(wt_union)) {
+      template$WildtypeQNAMEs <- paste(sort(wt_union), collapse = ";")
+    }
     template$DepthAtBreakpoint <- template$SupportingReads + template$WildtypeReads
     template$AlleleFrequency <- if (template$DepthAtBreakpoint > 0L) {
       template$SupportingReads / template$DepthAtBreakpoint
     } else {
       NA_real_
     }
+    if ("AdjustedSupportingReads" %in% names(final_df)) {
+      # Corrected counts are exploratory diagnostics; recompute them from the
+      # union support with the template row's size-correction factor so the
+      # diagnostic stays consistent with the primary union count.
+      if (!is.null(sup_union)) {
+        scf <- suppressWarnings(as.numeric(template$SizeCorrectionFactor))
+        if (length(scf) != 1L || is.na(scf) || !is.finite(scf) || scf < 1) scf <- 1
+        template$AdjustedSupportingReads <- as.integer(round(length(sup_union) * scf))
+      } else {
+        template$AdjustedSupportingReads <- sum_na(final_df$AdjustedSupportingReads[grp])
+      }
+      template$CorrectedDepthAtBreakpoint <- template$AdjustedSupportingReads + template$WildtypeReads
+      template$CorrectedAlleleFrequency <- if (template$CorrectedDepthAtBreakpoint > 0L)
+        template$AdjustedSupportingReads / template$CorrectedDepthAtBreakpoint else NA_real_
+      template$SizeCorrectionFactor <- if (template$SupportingReads > 0L)
+        template$AdjustedSupportingReads / template$SupportingReads else 1
+    }
+    template$RawAlleleFrequency <- template$AlleleFrequency
     for (cl in intersect(.MERGE_SUM_COLS, names(final_df))) {
       template[[cl]] <- as.integer(sum_na(final_df[[cl]][grp]))
     }
@@ -741,6 +1042,16 @@ detect_itd <- function(
     if (n_members > 1L) {
       for (cl in intersect(names(.MERGE_RESET_COLS), names(final_df))) {
         template[[cl]] <- .MERGE_RESET_COLS[[cl]]
+      }
+      # Do not discard position-resolved coverage when adjacent fragments are
+      # consolidated. Restore each coverage layer by mapping its RLE onto the
+      # merged genomic interval; the combined display RLE is merged as well.
+      coverage_rle_cols <- c("ITDCoverageRLE", "ITDCoverageRLE_Direct",
+                             "ITDCoverageRLE_PE", "ITDCoverageRLE_Kmer")
+      for (cl in intersect(coverage_rle_cols, names(final_df))) {
+        template[[cl]] <- .merge_coverage_rle_column(
+          final_df[grp, , drop = FALSE], cl, mg_start, mg_len
+        )
       }
       for (cl in intersect(c("DupExons", "CandidateTypes"), names(final_df))) {
         v <- unique(stats::na.omit(final_df[[cl]][grp]))
@@ -757,6 +1068,11 @@ detect_itd <- function(
       names(pe_counts[pe_ok])[which.max(pe_counts[pe_ok])]
     template$MergedFromN <- n_members
     template$MergeFragmentWarning <- n_members > max_plausible_fragments
+    template$MergedSupportSemantics <- if (exact_union) {
+      "exact_qname_union_across_component_rows"
+    } else {
+      "sum_of_component_rows; shared_QNAMEs_may_be_double_counted"
+    }
     if (isTRUE(template$MergeFragmentWarning)) {
       log_msg(sprintf(paste(
         "WARNING: merged interval at %d (length %d bp) pools %d fragments,",
@@ -767,7 +1083,8 @@ detect_itd <- function(
         "reporting. Flagged via MergeFragmentWarning."
       ), mg_start, mg_len, n_members, max_plausible_fragments))
     }
-    if (!is.na(template$SpanMinCoverage) && template$SpanMinCoverage < thresholds$min_span_coverage) {
+    if (!is.na(template$SpanMinCoverage) &&
+        template$SpanMinCoverage < thv("min_span_coverage", 0)) {
       log_msg(sprintf(paste(
         "REJECTED merged interval at %d (length %d bp, %d fragment(s)):",
         "SpanMinCoverage=%.1f < min_span_coverage=%.1f -- part of this span",
@@ -777,8 +1094,8 @@ detect_itd <- function(
       return(NULL)
     }
     if (!is.na(template$SpanDepthFoldChange) &&
-        (template$SpanDepthFoldChange < thresholds$min_span_depth_fold_change ||
-         template$SpanDepthFoldChange > thresholds$max_span_depth_fold_change)) {
+        (template$SpanDepthFoldChange < thv("min_span_depth_fold_change", 0) ||
+         template$SpanDepthFoldChange > thv("max_span_depth_fold_change", Inf))) {
       log_msg(sprintf(paste(
         "REJECTED merged interval at %d (length %d bp, %d fragment(s)):",
         "SpanDepthFoldChange=%.2fx outside [%.2f, %.2f] -- doesn't match the",
@@ -821,6 +1138,11 @@ talos <- function(
   min_mapq = NULL,
   min_wt_reads = NULL,
   cluster_tolerance = NULL,
+  min_base_quality = NULL,
+  adapter_sequences = NULL,
+  adapter_min_overlap = NULL,
+  cluster_length_scale = NULL,
+  max_cluster_tolerance = NULL,
   search_window = NULL,
   require_unique_anchor = NULL,
   vaf_threshold = NULL,
@@ -912,6 +1234,8 @@ talos <- function(
   tunable <- c(
     "min_support", "min_size", "max_correction", "filter_intronic", "max_missing_kmers",
     "ptd_mode", "use_cigar_bp", "refine_bp", "min_mapq", "min_wt_reads", "cluster_tolerance",
+    "min_base_quality", "adapter_sequences", "adapter_min_overlap",
+    "cluster_length_scale", "max_cluster_tolerance",
     "vaf_threshold", "search_window", "require_unique_anchor", "min_strand_bias",
     "max_strand_bias", "min_mean_support_mapq", "max_breakpoint_spread",
     "min_softclip_fraction", "min_unique_breakpoints", "min_coverage_drop",

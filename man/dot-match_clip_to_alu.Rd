@@ -4,7 +4,13 @@
 \alias{.match_clip_to_alu}
 \title{Match a single soft-clip sequence against all ALU consensus entries}
 \usage{
-.match_clip_to_alu(clip_seq, alu_seqs, min_clip_len = 25L, min_score = 0.6)
+.match_clip_to_alu(
+  clip_seq,
+  alu_seqs,
+  min_clip_len = 25L,
+  min_score = 0.6,
+  min_aligned_bases = 20L
+)
 }
 \arguments{
 \item{clip_seq}{Character string (soft-clip bases).}
@@ -14,13 +20,30 @@
 \item{min_clip_len}{Minimum clip length to attempt alignment (default 25).}
 
 \item{min_score}{Minimum normalised score to accept a match (default 0.6).}
+
+\item{min_aligned_bases}{Minimum aligned clip width required (default 20).}
 }
 \description{
 Uses local pairwise alignment (Smith-Waterman).  Returns a list with:
-  subtype  – best-matching ALU family name
-  score    – normalised alignment score (0–1)
-  strand   – "+" (sense) or "-" (antisense)
-  aln_start– start position in the ALU consensus (for 5' truncation calc)
-  aln_end  – end position in the ALU consensus
+  subtype       - best-matching ALU family name
+  score         - normalised alignment score (0-1)
+  strand        - "+" (sense) or "-" (antisense)
+  aln_start     - start position in the ALU consensus (for 5' truncation calc)
+  aln_end       - end position in the ALU consensus
+  pattern_start - start position of the local alignment in the *clip*
+                  sequence (1-based). Bases before this position in the clip
+                  are not aligned to ALU and may be target-site sequence.
+  pattern_end   - end position of the local alignment in the *clip*
+                  sequence. Bases after this position in the clip are not
+                  aligned to ALU and may be target-site sequence or poly-A.
+}
+\details{
+[ITEM 2] Pattern alignment positions are now stored alongside subject
+(consensus) positions. The non-ALU bases at clip boundaries
+(clip[1 .. pattern_start-1] for trail clips, clip[pattern_end+1 .. end]
+for lead clips) frequently correspond to the target-site duplication
+(TSD) created at insertion time. Storing these positions enables more
+precise TSD detection without re-running the alignment. See
+.extract_alu_boundary_bases() for the helper that recovers them.
 }
 \keyword{internal}

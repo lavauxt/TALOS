@@ -35,3 +35,25 @@ mis-assigned intronic breakpoints (nearest exon of a breakpoint in intron
 k/k+1 can be either exon) and dropped single-exon duplications as
 self-loops.
 }
+\details{
+[ITEM 4] The two \code{near()} calls and the per-row \code{lapply()} over
+evidence rows previously ran \code{vapply()} per position, an O(n_reads x
+n_exons) scan that becomes a bottleneck for genes with many exons (KMT2A
+has 36+ exons; a single BAM scan can yield thousands of evidence rows).
+The current implementation replaces them with:
+
+  1. \code{GenomicRanges::distanceToNearest()} -- O((n_reads + n_exons) *
+     log(n_exons)) to filter evidence whose start or end is too far from
+     any exon. Falls back to the original O(n_reads * n_exons) vapply()
+     only when GenomicRanges is unavailable.
+
+  2. \code{GenomicRanges::findOverlaps(ev_gr, exon_gr, type = "within")}
+     with expanded evidence ranges to discover, for each surviving event,
+     which exons lie inside [S - exon_tol, E + exon_tol]. This is a single
+     interval-tree query rather than a per-row scan, and it returns both
+     the evidence index and the matched exon index in one shot.
+
+The fallback path preserves the original numerical behaviour when
+GenomicRanges is unavailable, so the function still works in a base-R
+environment (e.g. minimal test runs without S4 infrastructure).
+}

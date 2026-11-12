@@ -11,7 +11,8 @@ compute_pe_itd_length(
   flank = 5000L,
   min_mapq = 20L,
   min_spanning = 5L,
-  max_insert = 5000L
+  max_insert = 5000L,
+  support_qnames = NULL
 )
 }
 \arguments{
@@ -26,16 +27,17 @@ ITD is likely larger than a single read (default 150).}
 
 \item{min_mapq}{Minimum MAPQ for both reads of a pair (default 20).}
 
-\item{min_spanning}{Minimum spanning pairs required for a valid estimate
-(default 5).}
+\item{min_spanning}{Minimum spanning pairs required for a valid estimate (default 5).}
 
 \item{max_insert}{Maximum plausible outer insert size to include (default 5000).}
+
+\item{support_qnames}{Optional normalized QNAME set used to restrict spanning
+pairs. The background insert-size baseline remains the same all-pair
+non-spanning population, so this estimate is directly comparable with the
+unfiltered all-pair estimate.}
 }
 \value{
-Named list with elements \code{length_pe} (estimated length,
-  \code{NA_real_} if insufficient data), \code{n_spanning} (number of
-  spanning pairs used), and \code{n_background} (number of background
-  pairs used).
+Named list with estimated length, pair counts, insert medians, and status.
 }
 \description{
 For ITDs larger than the read length, neither CIGAR insertions nor k-mer

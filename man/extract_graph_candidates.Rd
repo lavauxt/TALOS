@@ -10,7 +10,8 @@ extract_graph_candidates(
   max_exon_distance = NULL,
   buffer_bp = NULL,
   min_support = NULL,
-  expected_isize_max = NULL
+  expected_isize_max = NULL,
+  min_mapq = 20L
 )
 }
 \arguments{
@@ -29,6 +30,8 @@ gene_config$graph_settings$min_support, else 2.}
 
 \item{expected_isize_max}{Minimum mate separation for a discordant pair.
 Default gene_config$graph_settings$expected_isize_max, else 1000.}
+
+\item{min_mapq}{Minimum mapping quality passed to evidence extraction (default 20).}
 }
 \value{
 list of PTD cycles (possibly empty). Each carries the duplicated

@@ -10,7 +10,8 @@
   gene_config,
   wt_info,
   alu_seqs,
-  min_support = 3L
+  min_support = 3L,
+  min_tsd = 0L
 )
 }
 \arguments{

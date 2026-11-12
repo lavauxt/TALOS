@@ -32,7 +32,8 @@ draw coverage). Names must match \code{result_df$Sample}.}
 
 \item{mode}{\code{"itd"} (default) or \code{"alu"}.}
 
-\item{coverages}{Optional named list of precomputed coverage Rle, keyed
+\item{coverages}{Optional named list of precomputed genomic-coordinate-indexed
+coverage Rles (index 1 is genomic position 1), keyed
 \code{"<sample>_<gene>"} (avoids re-reading the BAM).}
 
 \item{plotly_js}{\code{"auto"} (inline plotly.js when the R plotly

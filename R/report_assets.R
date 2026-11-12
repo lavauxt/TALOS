@@ -123,6 +123,26 @@ pre { margin: 0; padding: 12px; overflow: auto; background: var(--page);
 main { max-width: 1440px; margin: 0 auto; padding: 16px; }
 .panel[hidden] { display: none; }
 
+/* ---- Header sample filter (ECHO-style global filter) ---- */
+.sample-pick { display: flex; align-items: center; column-gap: 10px; row-gap: 8px; flex-wrap: wrap;
+               padding-top: 10px; font-size: 12px; color: var(--text-2); }
+.sample-pick[hidden] { display: none; }
+.sample-pick > label { font-weight: 600; white-space: nowrap; }
+.sample-pick select { max-width: 280px; }
+.sample-pick .pick-note { color: var(--muted); }
+
+/* ---- Sub-tabs inside the merged Results tab ---- */
+.subtabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: thin;
+           border-bottom: 1px solid var(--axis); margin-bottom: 12px; }
+.subtab { appearance: none; background: var(--surface); color: var(--text-2); font: inherit;
+          font-size: 12.5px; padding: 6px 14px; cursor: pointer; white-space: nowrap;
+          border: 1px solid var(--axis); border-bottom: 0; border-radius: 8px 8px 0 0; }
+.subtab:hover { background: var(--accent-soft); color: var(--text); }
+.subtab[aria-selected="true"] { color: var(--text); font-weight: 600; background: var(--page);
+                                border-bottom: 2px solid var(--accent); }
+.subtab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.subpanel[hidden] { display: none; }
+
 /* ---- Cards, grids, controls ---- */
 .card { background: var(--surface); border: 1px solid var(--ring); border-radius: var(--radius);
         padding: 14px; min-width: 0; }
@@ -281,10 +301,14 @@ button.seg-btn[aria-pressed="true"] { background: var(--accent-soft); color: var
 details.colmenu { position: relative; }
 details.colmenu > summary { list-style: none; display: inline-flex; align-items: center; gap: 6px; }
 details.colmenu > summary::-webkit-details-marker { display: none; }
-.colmenu-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; width: 360px; max-height: min(480px, 70vh);
+.colmenu-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; width: min(480px, 88vw); max-height: min(560px, 75vh);
                  overflow: auto; background: var(--surface); border: 1px solid var(--axis); border-radius: 10px;
                  padding: 10px 12px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16); scrollbar-width: thin; }
 .colmenu .hintline { font-size: 11.5px; color: var(--muted); margin: 6px 0 2px; }
+.colmenu-search { width: 100%; max-width: none; min-width: 0; box-sizing: border-box; margin: 7px 0 5px; }
+.colmenu .colmenu-actions { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0; }
+.colmenu .colmenu-actions .btn { font-size: 11.5px; padding: 4px 8px; }
+.colmenu .cols label[hidden], .colmenu fieldset[hidden] { display: none !important; }
 :root[data-theme="dark"] .colmenu-panel { box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5); }
 .colmenu fieldset { border: 0; margin: 4px 0 10px; padding: 0; min-width: 0; }
 .colmenu legend { font-size: 12px; font-weight: 600; color: var(--text-2); display: flex; align-items: center; gap: 6px; padding: 0; }
@@ -301,14 +325,15 @@ details.colmenu > summary::-webkit-details-marker { display: none; }
 .kv.wide dt, .kv.wide dd { font-size: 12.5px; }
 .group-title { margin: 18px 0 8px; font-size: 15px; color: var(--text-2); }
 
-/* ---- Variant details table (matches Results table visual style) ---- */
-.detail-table-wrap { max-height: 560px; }
-table.tbl.detail-table { font-size: 12.5px; }
-.tbl.detail-table .field-name { color: var(--text-2); font-weight: 600; white-space: nowrap; width: 38%; }
-.tbl.detail-table .detail-value { white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
-.tbl.detail-table .seq-cell { padding: 4px 10px; }
+/* ---- Variant details table: one variant per horizontal row ---- */
+.detail-table-wrap { max-height: 560px; overflow: auto; }
+table.tbl.detail-table { width: max-content; min-width: 100%; table-layout: auto; font-size: 12.5px; }
+.tbl.detail-table thead th { min-width: 112px; max-width: 240px; white-space: normal; vertical-align: bottom; }
+.tbl.detail-table .detail-value { min-width: 90px; max-width: 260px; white-space: normal; overflow-wrap: anywhere; vertical-align: top; }
+.tbl.detail-table .seq-cell { min-width: 260px; padding: 4px 10px; }
 .tbl.detail-table .seq-cell details.seq summary { margin-top: 0; }
-.tbl.detail-table .seq-cell details.seq pre { max-height: 280px; }
+.tbl.detail-table .seq-cell details.seq pre { max-height: 280px; min-width: 240px; }
+tr.variant-focus > td { background: var(--accent-soft) !important; outline: 1px solid var(--accent); }
 .vcard { scroll-margin-top: 12px; }
 .vcard.hl { outline: 2px solid var(--accent); outline-offset: 2px; }
 .vcard h3 { font-size: 14px; }
@@ -325,8 +350,9 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
 @media (max-width: 900px) { .detail-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 720px) { main { padding: 12px; } }
 @media print {
-  .tabs, .toolbar, .btn, .qchips, .colmenu, .pager, .tbl-bar { display: none !important; }
+  .tabs, .toolbar, .btn, .qchips, .colmenu, .pager, .tbl-bar, .subtabs { display: none !important; }
   .panel[hidden] { display: block !important; }
+  .subpanel[hidden] { display: block !important; }
   .card { break-inside: avoid; }
   .tbl-wrap { max-height: none; overflow: visible; }
   .js-plotly-plot .modebar { display: none !important; }
@@ -422,6 +448,29 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
   function hasCol(c) { return T.cols.indexOf(c) >= 0; }
   function cellRaw(c, i) { var a = col(c); return a.length ? a[i] : null; }
   function numv(c, i) { var v = cellRaw(c, i); return typeof v === 'number' && isFinite(v) ? v : null; }
+
+  // ------------------------------------------------------------------ global sample filter (ECHO-style)
+  // One cohort-wide sample filter lives in the report header. Every tab reads
+  // it through samplePred()/state.sample; setSample() notifies the listeners
+  // so table predicates, the genome panel selector and the overview re-render.
+  var SAMPLES = uniq(col('Sample'));
+  var state = { sample: '' };
+  var stateListeners = [];
+  var headerPicker = null;
+  function onState(cb) { stateListeners.push(cb); }
+  function notifyState() {
+    stateListeners.forEach(function (cb) { try { cb(); } catch (e) { if (window.console) console.error(e); } });
+  }
+  function setSample(s, quiet) {
+    var next = s || '';
+    if (next === state.sample) { if (headerPicker) headerPicker.value = next; return; }
+    state.sample = next;
+    if (headerPicker) headerPicker.value = next;
+    if (!quiet) notifyState();
+  }
+  function rowSample(i) { var s = col('Sample'); return s.length ? s[i] : ''; }
+  function samplePred(i) { return !state.sample || rowSample(i) === state.sample; }
+  function visibleRows() { return range(NROW).filter(samplePred); }
 
   // ------------------------------------------------------------------ icons
   var ICONS = {
@@ -562,43 +611,81 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     });
     return dl;
   }
-  // Variant details table: matches the Results table visual style (.tbl with
-  // column-group header strips, sticky header, hover). Two columns: Field | Value.
-  // Long values wrap; the optional sequence is a collapsible row.
-  function variantDetailTable(v) {
-    var thead = h('thead', null, h('tr', null,
-      h('th', { scope: 'col', class: 'g-identity no-sort', text: 'Field' }),
-      h('th', { scope: 'col', class: 'g-call no-sort', text: 'Value' })));
-    var tbody = h('tbody');
-    var keys = arr(v.keys), values = arr(v.values);
-    keys.forEach(function (k, i) {
-      var val = values[i];
-      var valStr = (val === null || val === undefined || val === '') ? '' : String(val);
-      var td = h('td', { class: 'detail-value' });
-      if (!valStr) {
-        td.appendChild(h('span', { class: 'cell-muted', text: '\u2014' }));
-      } else if (valStr.length > 120) {
-        var span = h('span', { class: 'mono', text: valStr.slice(0, 117) + '\u2026' });
-        td.appendChild(span);
-        td.title = valStr;
-      } else {
-        td.textContent = valStr;
-      }
-      tbody.appendChild(h('tr', null,
-        h('td', { class: 'field-name', text: k }),
-        td));
+  // Variant Details renders one variant per horizontal row. The displayed
+  // variables follow the Results table selection (legacy per-variant cards);
+  // the merged Results tab additionally hosts three full tableViews with
+  // independent column choosers (Results table, Variant details, All result
+  // values).
+  var DETAIL_TABLES = [];
+  // Selection state shared by the Results table and the per-variant cards.
+  var detailColumnSelection = {};
+  var detailColumnSelectionReady = false;
+  function refreshDetailTables() {
+    DETAIL_TABLES.forEach(function (table) {
+      if (table && typeof table.refresh === 'function') table.refresh();
     });
-    if (v.sequence) {
-      var seqTd = h('td', { class: 'detail-value seq-cell' });
-      seqTd.appendChild(h('details', { class: 'seq' },
-        h('summary', { text: v.sequence.length + ' bp \u2014 click to expand' }),
-        h('pre', { text: v.sequence })));
-      tbody.appendChild(h('tr', null,
-        h('td', { class: 'field-name', text: isAlu ? 'ALU sequence' : 'ITD sequence' }),
-        seqTd));
+    // Redraw the Variant details table (it keeps its own column selection;
+    // this only re-renders rows after the Results selection changed).
+    if (detailsTableAPI && typeof detailsTableAPI.refresh === 'function') detailsTableAPI.refresh();
+  }
+  function variantDetailTable(v) {
+    var hasAll = Array.isArray(v.all_keys) && Array.isArray(v.all_values);
+    var sourceKeys = hasAll ? arr(v.all_keys) : arr(v.keys);
+    var sourceValues = hasAll ? arr(v.all_values) : arr(v.values);
+    var holder = h('div', { class: 'tbl-wrap detail-table-wrap' });
+
+    function draw() {
+      clear(holder);
+      var selected = [];
+      var fallbackKeys = {};
+      if (!detailColumnSelectionReady) {
+        arr(v.keys).forEach(function (k) { fallbackKeys[k] = true; });
+      }
+      sourceKeys.forEach(function (k, i) {
+        var visible = detailColumnSelectionReady
+          ? !!detailColumnSelection[k]
+          : !!fallbackKeys[k];
+        if (visible) selected.push({ key: k, value: sourceValues[i] });
+      });
+      if (!selected.length && v.sequence && !hasAll) {
+        selected.push({ key: isAlu ? 'ALU sequence' : 'ITD sequence', value: v.sequence });
+      }
+      if (!selected.length) {
+        holder.appendChild(emptyNote('No variables selected. Open Results → Columns to choose fields for this table.'));
+        return;
+      }
+
+      var theadRow = h('tr');
+      selected.forEach(function (item) {
+        theadRow.appendChild(h('th', { scope: 'col', class: 'no-sort', text: item.key }));
+      });
+      var valueRow = h('tr');
+      selected.forEach(function (item) {
+        var value = item.value;
+        var valueString = value === null || value === undefined || value === '' ? '' : String(value);
+        var td = h('td', { class: 'detail-value' });
+        if (!valueString || valueString === 'NA' || valueString === '.') {
+          td.appendChild(h('span', { class: 'cell-muted', text: '\u2014' }));
+        } else if (item.key === 'ITD_Sequence' || item.key === 'ALU_Sequence' || valueString.length > 180) {
+          var label = item.key === 'ITD_Sequence' || item.key === 'ALU_Sequence'
+            ? valueString.length + ' bp — expand'
+            : 'Expand value (' + valueString.length + ' characters)';
+          td.appendChild(h('details', { class: 'seq' },
+            h('summary', { text: label }),
+            h('pre', { text: valueString })));
+        } else {
+          td.textContent = valueString;
+        }
+        valueRow.appendChild(td);
+      });
+      holder.appendChild(h('table', { class: 'tbl detail-table', 'aria-label': 'Variant details' },
+        h('thead', null, theadRow), h('tbody', null, valueRow)));
     }
-    return h('div', { class: 'tbl-wrap detail-table-wrap' },
-      h('table', { class: 'tbl detail-table', 'aria-label': 'Variant details' }, thead, tbody));
+
+    holder.refresh = draw;
+    DETAIL_TABLES.push(holder);
+    draw();
+    return holder;
   }
 
   // ------------------------------------------------------------------ column docs & groups
@@ -611,19 +698,25 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     GenomicPosition: 'Leftmost genomic base of the duplicated segment (first copy).',
     InsertionSite: 'Median genomic position of the ALU insertion breakpoint cluster.',
     Length: 'Duplicated segment length (bp). 0 = PTD call from soft-clips only; values above ~1 kb are PTD-scale events.',
+    InFrame: 'Informational diagnostic: duplication length divisible by 3; not used as a call filter.',
     DupExons: 'Duplicated exons in transcript numbering, from the exon-graph reconstruction.',
     ExonNumber: 'Exon containing the breakpoint, when exonic.',
     Region: 'exonic when the breakpoint falls inside a targeted exon, intronic otherwise.',
     HGVS_cDNA: 'HGVS c. notation of the duplication, relative to the configured transcript.',
     HGVS_Protein: 'HGVS p. notation (frameshifts are reported as p.XxxNNfsTer?).',
     Orientation: 'tandem = duplicated copy in the same orientation; inverted = reverse complemented.',
-    CandidateTypes: 'How the call was found: bwd_jump / missing_kmer (k-mer walk), anchor_ext (soft-clip re-anchoring), cigar_ins, ptd_clip, ptd_graph (exon graph).',
+    CandidateTypes: 'How the call was found: bwd_jump / missing_kmer (k-mer walk), anchor_ext (soft-clip re-anchoring), cigar_ins, ptd_clip, ptd_graph (split-read exon graph) / ptd_graph_imprecise (pair-only fragment envelope).',
     Hotspot: 'Overlaps a known hotspot from the annotation database.',
     HotspotName: 'Name of the matched hotspot.',
-    AlleleFrequency: 'Size-bias-corrected variant allele fraction (supporting reads / depth at breakpoint).',
-    SupportingReads: 'Supporting reads after size-bias correction.',
+    AlleleFrequency: 'Raw variant allele fraction: distinct supporting QNAMEs / (supporting QNAMEs + wild-type QNAMEs); no size correction.',
+    RawAlleleFrequency: 'Raw variant allele fraction with unadjusted support and denominator.',
+    CorrectedAlleleFrequency: 'Exploratory size-corrected allele fraction; not the primary clinical AF.',
+    SizeCorrectionFactor: 'Exploratory size-bias multiplier; defaults to 1 (no inflation).',
+    SupportingReads: 'Raw distinct supporting QNAME count (not size corrected).',
+    AdjustedSupportingReads: 'Exploratory size-corrected support count.',
     WildtypeReads: 'Wild-type reads spanning the breakpoint (primary alignments, MAPQ-filtered).',
-    DepthAtBreakpoint: 'Corrected support + wild-type depth at the breakpoint.',
+    DepthAtBreakpoint: 'Raw supporting + wild-type depth at the breakpoint.',
+    CorrectedDepthAtBreakpoint: 'Exploratory corrected support + wild-type depth.',
     StrandBias: 'Fraction of supporting reads on the reverse strand; 0.25-0.75 is balanced.',
     MeanSupportMAPQ: 'Mean mapping quality of the supporting reads.',
     BreakpointSpread: 'Range of breakpoint positions within the supporting cluster (bp).',
@@ -639,16 +732,124 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     RepeatEntropy: 'Dinucleotide Shannon entropy around the breakpoint (low = repetitive sequence).',
     SequenceImputed: 'TRUE when the ITD sequence was filled from the reference rather than observed in reads.',
     SequencePartial: 'TRUE when only part of the sequence was observed, the rest imputed.',
-    SequenceSource: 'observed = read-derived; partial_read+ref = mixed; ref_imputed = reference-derived; merged_intervals = merged PTD.',
+    SequenceSource: 'observed = read-derived; partial_read+ref = mixed; partial_read_unresolved = the observed fragment did not validate against the full reference segment; ref_imputed = reference-derived; merged_intervals = merged PTD.',
+    CoverageTemplateSource: 'Sequence used only as the positional template for per-base ITD coverage: read_derived_sequence / reference_imputed_sequence, or reference_segment_for_coverage_only when the read-derived sequence is unresolved. A coverage-only reference template does not resolve or impute ITD_Sequence.',
+    CoverageTemplateLength: 'Length of the positional template used for ITD coverage; independent of whether the clinical sequence was resolved.',
+    ITDCoverageReadsProcessed: 'Number of distinct supporting read-end alignments processed for direct ITD coverage; both mates may contribute when both support the event.',
+    ITDCoverageReadsMatched: 'Number of supporting read-end alignments with a qualifying local alignment (>=90% identity and >=20 aligned bases) to the ITD coverage template.',
+    ITDCoverageDirectAlignmentRatePct: 'Percentage of processed supporting read-end alignments with a qualifying direct local alignment to the coverage template.',
+    ITDCoverageDirectMedianPID: 'Median percent identity of qualifying direct alignments.',
+    ITDCoverageDirectMeanPID: 'Mean percent identity of all local support-read alignments that reached the minimum aligned width.',
+    ITDCoverageDirectMedianQueryCoveragePct: 'Median percent of each support read participating in qualifying direct alignments.',
+    ITDCoverageDirectReadsAnyAlignment: 'Number of support reads with any local alignment of at least the minimum aligned width.',
+    ITDCoverageDirectReadsQualifying: 'Number of support reads with qualifying direct alignments (>=90% identity and >=20 aligned bases).',
+    ITDObservedFragmentPID: 'Percent identity of the observed partial fragment to its best local reference-segment alignment.',
+    ITDObservedFragmentQueryCoveragePct: 'Percent of the observed partial fragment covered by its best local reference-segment alignment.',
+    ITDObservedFragmentAlignedBases: 'Number of observed partial-fragment bases participating in its best local reference-segment alignment.',
+    ITDObservedFragmentOrientation: 'Orientation of the observed partial fragment relative to the expected reference segment; not a full ITD orientation call.',
+    ITDObservedFragmentReferenceStart: '1-based start of the observed fragment local alignment within the expected reference segment.',
+    ITDObservedFragmentReferenceEnd: '1-based end of the observed fragment local alignment within the expected reference segment.',
+    ITDObservedFragmentTemplateStart: 'Alias of the observed-fragment local alignment start within the coverage template.',
+    ITDObservedFragmentTemplateEnd: 'Alias of the observed-fragment local alignment end within the coverage template.',
+    ITDObservedFragmentSupportReads: 'Number of supporting candidate rows carrying the modal observed partial-fragment sequence.',
+    ITDObservedFragmentUniqueSequences: 'Number of distinct observed partial-fragment sequences among supporting candidate rows.',
+    ITDCoverageReadAlignmentsProcessed: 'Number of distinct supporting read-end alignments processed for direct ITD coverage.',
+    ITDBaseQualityStatus: 'Base-quality filtering state for this run: applied_min_mean_base_quality_<N>_per_read (reads below the threshold were dropped), measured_not_filtered_min_base_quality_0 (measured, filter off), or unavailable_BAM_QUAL_not_loaded_into_candidate_rows (no QUAL column was loaded).',
+    ITDMeanBaseQuality: 'Mean Phred base quality of the supporting reads (one value per read, averaged); NA when the run loaded no BAM QUAL column.',
+    ITDMinBaseQuality: 'Lowest mean Phred base quality among the supporting reads; the worst-quality read in the support set.',
+    ITDTerminalMeanBaseQuality: 'Mean Phred base quality of the supporting reads overlapping the final 30 bp of the called interval.',
+    ITDAdapterScreeningStatus: 'performed_<N>_adapters_min_overlap_<M>_exact_prefix_match when screening ran against N configured adapters, or disabled_no_adapter_reference_configured when no adapter set was supplied. Screening is a report, not a filter.',
+    ITDAdapterScreenedReads: 'Number of reads in the detection window screened against the configured adapter set.',
+    ITDAdapterPositiveReads: 'Number of screened reads carrying at least adapter_min_overlap contiguous bases of a configured adapter (region-wide, all reads).',
+    ITDAdapterPositiveSupportReads: 'Number of this variant\'s supporting QNAMEs flagged by adapter screening; adapter-bearing soft clips may need manual review when this is above zero.',
+    ITDCoverageFragmentsProcessed: 'Number of distinct QNAME fragments represented among direct-coverage read alignments.',
+    ITDCoverageFragmentsWithDirectAlignment: 'Number of distinct QNAME fragments with at least one qualifying direct alignment to the ITD template.',
+    ITDCoverageDirectMedianAlignedBases: 'Median number of query bases participating in qualifying direct alignments.',
+    ITDCoverageDirectCoveredBases: 'Number of ITD template positions covered by direct read alignments.',
+    ITDCoverageDirectTotalDepth: 'Sum of per-base direct read depth across the ITD template.',
+    ITDCoverageDirectMeanDepth: 'Mean per-base direct read depth across the ITD template.',
+    ITDCoverageDirectMaxDepth: 'Maximum per-base direct read depth across the ITD template.',
+    ITDCoveragePECoveredBases: 'Number of ITD template positions supported by paired-end fragments.',
+    ITDCoveragePETotalDepth: 'Sum of per-base PE fragment depth across the ITD template.',
+    ITDCoveragePEMeanDepth: 'Mean per-base PE fragment depth across the ITD template.',
+    ITDCoveragePEMaxDepth: 'Maximum per-base PE fragment depth across the ITD template.',
+    ITDCoverageKmerCoveredBases: 'Number of ITD template positions supported by position-unique k-mers.',
+    ITDCoverageKmerTotalDepth: 'Sum of per-base unique k-mer support depth across the ITD template.',
+    ITDCoverageKmerMeanDepth: 'Mean per-base unique k-mer support depth across the ITD template.',
+    ITDCoverageKmerMaxDepth: 'Maximum per-base unique k-mer support depth across the ITD template.',
+    ITDCoverageCombinedCoveredBases: 'Number of ITD template positions supported by direct read-sequence alignment or sequence-anchored k-mer evidence; PE projection is excluded.',
+    ITDCoverageCombinedTotalDepth: 'Sum of per-base folded display support depth (direct read-sequence alignment and sequence-anchored k-mer evidence; PE coordinate projection excluded).',
+    ITDCoverageCombinedMeanDepth: 'Mean per-base folded display support depth (direct read-sequence alignment and sequence-anchored k-mer evidence; PE coordinate projection excluded).',
+    ITDCoverageCombinedMaxDepth: 'Maximum per-base folded display support depth (direct read-sequence alignment and sequence-anchored k-mer evidence; PE coordinate projection excluded).',
     RefMatch_Observed: '% identity between the observed (read-derived) sequence and the reference segment.',
     RefMatch_Total: '% identity between the full reconstructed sequence and the reference segment.',
-    ITDReadCoverage: '% of the ITD sequence covered by supporting reads.',
-    ITDCoverageRLE: 'Run-length encoding of per-base ITD read coverage (value:length,...).',
-    SupportConsistency: '% of supporting reads aligning to the ITD sequence at >= 90% identity (informational).',
-    AlignmentScore: 'Fraction of matching bases between the ITD sequence and the reference segment (0-1).',
+    ITDReadCoverage: '% of the ITD sequence covered by supporting reads (direct alignment, PID >= 90).',
+    ITDReadCoverage_PE: 'Reference-coordinate PE projection only; not allele-specific sequence evidence and excluded from combined ITD coverage.',
+    ITDCoveragePEStatus: 'Status of the PE reference-coordinate projection diagnostic; this layer is not used to fill combined ITD allele coverage.',
+    ITDUncoveredIntervals_PE: 'ITD-relative intervals not covered by the PE reference-coordinate projection diagnostic.',
+    ITDReadCoverage_Kmer: '% of the ITD sequence covered by the multi-k sliding k-mer evidence layer (7, 9, 11, 13 and 15 nt). Each k is evaluated at every nucleotide offset; only position-unique collinear anchors are used.',
+    ITDReadCoverage_Combined: '% of the ITD sequence supported by direct read-sequence alignments or position-resolved sequence-anchored k-mers. PE genomic-coordinate projection is excluded because it is not allele-specific.',
+    ITDUncoveredBases_Direct: 'Number of ITD bases with no direct read alignment (PID >= 90).',
+    ITDUncoveredBases_Combined: 'Number of ITD bases unsupported by direct read-sequence alignment or position-resolved sequence-anchored k-mer evidence; PE projection is excluded.',
+    ITDUncoveredIntervals_Combined: '1-based inclusive ITD-relative intervals with no direct read-sequence alignment or position-resolved sequence-anchored k-mer evidence; | separates intervals.',
+    LengthPE_Delta: 'PE insert-size estimate minus the primary extension/k-mer length (bp); large disagreement is a review flag, not an automatic rejection.',
+    LengthPE_Concordant: 'TRUE when PE and primary length estimates differ by no more than max(20 bp, 15% of the primary length). Informational only.',
+    LengthPE_AllPairs: 'PE ITD length estimate using all valid spanning read pairs; non-support QNAMEs may contribute to the spanning distribution.',
+    LengthPE_SupportQNAME: 'PE ITD length estimate restricted to read pairs whose QNAME belongs to the ITD-supporting fragment set.',
+    LengthPE_SupportQNAME_NSpanning: 'Number of support-QNAME pairs used for the support-restricted PE length estimate.',
+    LengthPE_SupportQNAME_NSpanningAll: 'Number of all valid spanning pairs before restriction to support QNAMEs.',
+    LengthPE_SupportQNAME_NMatched: 'Number of valid pairs with a QNAME matching the ITD-supporting fragment set.',
+    ITDReadCoverage_DirectCertain: 'Conservative direct-read coverage: positions supported by every co-optimal placement for each ambiguously aligned read end.',
+    ITDReadCoverage_DirectPossible: 'Upper-bound direct-read coverage: positions supported by at least one co-optimal placement for each read end.',
+    ITDReadCoverage_DirectAmbiguous: 'Percent of ITD bases with coverage contributed only by ambiguous alternative placements.',
+    ITDReadCoverage_CombinedCertain: 'Conservative union of direct-certain and multi-k sequence-anchored coverage; PE projection is excluded.',
+    ITDReadCoverage_CombinedPossible: 'Upper-bound union of direct-possible and multi-k sequence-anchored coverage; PE projection is excluded.',
+    ITDReadCoverage_Kmer7: 'Position-unique, collinear 7-mer coverage; all nucleotide offsets are tested.',
+    ITDReadCoverage_Kmer9: 'Position-unique, collinear 9-mer coverage; all nucleotide offsets are tested.',
+    ITDReadCoverage_Kmer11: 'Position-unique, collinear 11-mer coverage; all nucleotide offsets are tested.',
+    ITDReadCoverage_Kmer13: 'Position-unique, collinear 13-mer coverage; all nucleotide offsets are tested.',
+    ITDReadCoverage_Kmer15: 'Position-unique, collinear 15-mer coverage; all nucleotide offsets are tested.',
+    ITDKmerReads: 'Read-end sequences matching at least one configured multi-k layer (7, 9, 11, 13 or 15 nt) through position-unique collinear anchors.',
+    ITDKmerTestedReads: 'Number of distinct supporting read-end sequences evaluated for position-unique k-mer coverage.',
+    ITDKmerMatchedReadPct: 'Percentage of tested read-end sequences with at least two collinear position-unique k-mer matches.',
+    ITDKmerTestedFragments: 'Number of distinct QNAME fragments represented by read-end sequences tested for k-mer coverage.',
+    ITDKmerMatchedFragments: 'Number of distinct QNAME fragments with at least one read end matching position-unique k-mers.',
+    ITDKmerMatchedFragmentPct: 'Percentage of tested QNAME fragments with at least one read end matching position-unique k-mers.',
+    ITDKmerKValues: 'K-mer sizes used for multi-k sliding coverage.',
+    ITDDirectAmbiguousReadEnds: 'Number of direct-alignment read ends with bases whose placement varies across co-optimal template placements.',
+    ITDDirectMultiPlacementReadEnds: 'Number of direct-alignment read ends with more than one co-optimal template placement.',
+    ITDDirectAlternativeSearchLimitReadEnds: 'Number of read ends for which alternative-placement enumeration reached the configured attempt limit; possible coverage may be incomplete for these reads.',
+    ITDDirectMeanPlacements: 'Mean number of co-optimal template placements among read ends processed by ambiguity-aware alignment.',
+    ITDDirectMaxPlacements: 'Maximum number of co-optimal template placements found for one read end.',
+    LengthPE_AllPairs_Status: 'Status of the paired-end length estimate using all valid spanning pairs.',
+    LengthPE_SupportQNAME_Status: 'Status of the paired-end length estimate restricted to ITD-supporting QNAMEs.',
+    LengthPE_SupportQNAME_Delta: 'Support-QNAME PE length estimate minus the primary anchor/extension length (bp).',
+    LengthPE_SupportQNAME_Concordant: 'TRUE when the support-QNAME PE estimate differs from the primary length by no more than max(20 bp, 15%).',
+    ITDPE_SpanningPairs: 'Supporting read pairs with fragment geometry compatible with the duplicated interval; diagnostic only and not direct allele-specific sequence evidence.',
+    ITDCoverageRLE: 'Run-length encoding of combined ITD support from direct read-sequence alignment plus sequence-anchored k-mer evidence (value:length,...); PE coordinate projection is excluded.',
+    ITDCoverageRLE_Direct: 'Run-length encoding of per-base DIRECT-alignment ITD coverage (value:length,...).',
+    ITDCoverageRLE_PE: 'Run-length encoding of per-base PE-spanning ITD coverage (value:length,...).',
+    ITDCoverageRLE_Kmer: 'Run-length encoding of the combined multi-k per-base ITD coverage (value:length,...).',
+    ITDCoverageRLE_DirectCertain: 'RLE of direct positions that remain covered under every co-optimal read placement.',
+    ITDCoverageRLE_DirectPossible: 'RLE of direct positions covered under at least one co-optimal read placement.',
+    ITDCoverageRLE_DirectAmbiguous: 'RLE of direct depth contributed by alternative-placement positions beyond the conservative intersection.',
+    ITDCoverageRLE_CombinedCertain: 'RLE of the union of direct-certain and multi-k sequence-anchored coverage; PE projection is excluded.',
+    ITDCoverageRLE_CombinedPossible: 'RLE of the union of direct-possible and multi-k sequence-anchored coverage; PE projection is excluded.',
+    ITDCoverageRLE_Kmer15: 'Run-length encoding of position-unique sliding 15-mer coverage (value:length,...).',
+    ITDCoverageRLE_Kmer13: 'Run-length encoding of position-unique sliding 13-mer coverage (value:length,...).',
+    ITDCoverageRLE_Kmer11: 'Run-length encoding of position-unique sliding 11-mer coverage (value:length,...).',
+    ITDCoverageRLE_Kmer9: 'Run-length encoding of position-unique sliding 9-mer coverage (value:length,...).',
+    ITDCoverageRLE_Kmer7: 'Run-length encoding of position-unique sliding 7-mer coverage (value:length,...).',
+    SupportConsistency: '% of supporting read-end alignments with a >=90% local alignment to a fully read-derived ITD sequence. Not calculated against a reference-only or reference-imputed template.',
+    SupportConsistencyStatus: 'Identifies whether support consistency was computed and whether its template was read-derived or reference-derived.',
+    AlignmentScore: 'Fraction of matching bases between the full ITD sequence and the reference segment (0-1); unavailable when the full sequence is unresolved.',
+    AlignmentScoreStatus: 'Explains why AlignmentScore is available, disabled or unavailable.',
+    RefMatchTotalStatus: 'Explains why full-sequence reference identity is available, disabled or unavailable.',
+    OrientationStatus: 'Explains why tandem/inverted orientation is available, disabled or unavailable.',
+    SequenceDependentMetricsStatus: 'Status of metrics that require a full-length sequence; reference-only coverage does not resolve the clinical sequence.',
     TotalSupportBases: 'Total soft-clip bases contributed by the supporting reads.',
-    LengthPE: 'ITD length estimated from paired-end insert sizes (spanning pairs).',
-    LengthPE_NSpanning: 'Number of spanning pairs used for the PE length estimate.',
+    LengthPE: 'ITD length estimated from all valid paired-end spanning pairs.',
+    LengthPE_NSpanning: 'Number of spanning pairs used for the all-pair PE length estimate.',
     LengthExt: 'Anchor-extension length estimate (mode of per-read sizes).',
     PESoftclipSupport: 'Paired-end support among reads with a soft-clip.',
     PESoftclipEventPairs: 'Pairs whose insert size matches background + event length.',
@@ -668,6 +869,9 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     RightSoftclipPctWT: '% of wild-type reads with a trailing soft-clip.',
     ArtifactSuspect: 'Fully reference-imputed sequence with ~100% reference match - likely an alignment artifact.',
     MergedFromN: 'Number of duplication rows merged into this interval.',
+    MergedSupportSemantics: 'exact_qname_union_across_component_rows when merged support/WT/AF were recomputed from the exact union of the component rows\' QNAME sets (shared reads counted once); sum_of_component_rows means the legacy sum was kept (QNAME sets unavailable or truncated).',
+    SupportQNAMEs: 'Semicolon-joined QNAMEs of the supporting reads of this call; the exact set behind SupportingReads. Merged intervals carry the union of their component rows.',
+    WildtypeQNAMEs: 'Semicolon-joined QNAMEs of the wild-type reads spanning this breakpoint (primary alignments, MAPQ-filtered); the exact set behind WildtypeReads.',
     MergeFragmentWarning: 'Merged interval pools more fragments than plausibly come from one true PTD; review before reporting.',
     ITD_Sequence: 'Duplicated sequence (observed, partial or imputed - see SequenceSource).',
     ALUSubtype: 'Best-matching ALU consensus family (e.g. AluY, AluSx, AluJb).',
@@ -686,16 +890,57 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
       'HGVS_cDNA', 'HGVS_Protein', 'Orientation', 'CandidateTypes', 'Hotspot', 'HotspotName'] },
     { id: 'support', label: 'Support', cols: ['AlleleFrequency', 'SupportingReads', 'WildtypeReads',
       'DepthAtBreakpoint', 'StrandBias', 'MeanSupportMAPQ'] },
-    { id: 'evidence', label: 'Evidence', cols: ['LengthPE', 'LengthPE_NSpanning', 'LengthExt', 'PESoftclipSupport',
+    { id: 'evidence', label: 'Evidence', cols: ['LengthPE', 'LengthPE_AllPairs', 'LengthPE_NSpanning',
+      'LengthPE_SupportQNAME', 'LengthPE_SupportQNAME_NSpanning', 'LengthPE_SupportQNAME_NSpanningAll',
+      'LengthPE_SupportQNAME_NMatched', 'LengthPE_SupportQNAME_Status', 'LengthPE_SupportQNAME_Delta',
+      'LengthPE_SupportQNAME_Concordant', 'LengthExt', 'PESoftclipSupport',
       'PESoftclipEventPairs', 'PESoftclipLongPairs', 'PEOrientationFR', 'PEOrientationRF', 'PEOrientationFF',
       'PEOrientationRR', 'PEOrientationOther', 'PEOrientationDominant', 'LeftSoftclipCount', 'RightSoftclipCount',
       'BothSoftclipCount', 'LeftSoftclipPctSupport', 'RightSoftclipPctSupport', 'LeftSoftclipPctWT',
       'RightSoftclipPctWT', 'TotalSupportBases', 'SoftclipFraction', 'BreakpointSpread', 'UniqueBreakpoints'] },
     { id: 'qc', label: 'Quality', cols: ['CoverageDrop', 'LocalCoverage', 'SpanMinCoverage', 'SpanMeanCoverage',
       'SpanDepthFoldChange', 'MedianMicrohomology', 'DiscordantRatio', 'RepeatEntropy', 'RefMatch_Observed',
-      'RefMatch_Total', 'ITDReadCoverage', 'SupportConsistency', 'AlignmentScore', 'SequenceImputed',
-      'SequencePartial', 'SequenceSource', 'ArtifactSuspect', 'MergeFragmentWarning', 'MergedFromN'] },
-    { id: 'sequence', label: 'Sequence', cols: ['ITD_Sequence', 'ITDCoverageRLE'] }
+      'RefMatch_Total', 'ITDReadCoverage', 'ITDReadCoverage_Combined', 'ITDReadCoverage_Kmer',
+      'ITDReadCoverage_DirectCertain', 'ITDReadCoverage_DirectPossible',
+      'ITDReadCoverage_DirectAmbiguous', 'ITDReadCoverage_CombinedCertain',
+      'ITDReadCoverage_CombinedPossible', 'ITDReadCoverage_Kmer7', 'ITDReadCoverage_Kmer9',
+      'ITDReadCoverage_Kmer11', 'ITDReadCoverage_Kmer13', 'ITDReadCoverage_Kmer15',
+      'ITDKmerMatchedReadEnds7', 'ITDKmerMatchedReadEnds9', 'ITDKmerMatchedReadEnds11',
+      'ITDKmerMatchedReadEnds13', 'ITDKmerMatchedReadEnds15',
+      'ITDKmerMatchedFragments7', 'ITDKmerMatchedFragments9', 'ITDKmerMatchedFragments11',
+      'ITDKmerMatchedFragments13', 'ITDKmerMatchedFragments15',
+      'ITDDirectAmbiguousReadEnds', 'ITDDirectMultiPlacementReadEnds',
+      'ITDDirectAlternativeSearchLimitReadEnds',
+      'ITDDirectMeanPlacements', 'ITDDirectMaxPlacements', 'ITDUncoveredBases_Direct', 'ITDUncoveredBases_Combined', 'ITDUncoveredIntervals_Combined',
+      'ITDKmerReads', 'ITDPE_SpanningPairs', 'CoverageTemplateLength',
+      'ITDCoverageReadsProcessed', 'ITDCoverageReadsMatched',
+      'ITDCoverageReadAlignmentsProcessed', 'ITDCoverageFragmentsProcessed',
+      'ITDCoverageFragmentsWithDirectAlignment',
+      'ITDCoverageDirectAlignmentRatePct', 'ITDCoverageDirectMedianPID',
+      'ITDCoverageDirectMeanPID', 'ITDCoverageDirectMedianAlignedBases',
+      'ITDCoverageDirectMedianQueryCoveragePct', 'ITDCoverageDirectReadsAnyAlignment',
+      'ITDCoverageDirectReadsQualifying', 'ITDCoverageDirectCoveredBases',
+      'ITDCoverageDirectMeanDepth', 'ITDCoveragePECoveredBases',
+      'ITDCoveragePEMeanDepth', 'ITDCoverageKmerCoveredBases',
+      'ITDCoverageKmerMeanDepth', 'ITDCoverageCombinedCoveredBases',
+      'ITDCoverageCombinedMeanDepth', 'ITDObservedFragmentPID',
+      'ITDObservedFragmentQueryCoveragePct', 'ITDObservedFragmentAlignedBases',
+      'ITDObservedFragmentOrientation', 'ITDObservedFragmentTemplateStart',
+      'ITDObservedFragmentTemplateEnd', 'ITDObservedFragmentSupportReads',
+      'ITDObservedFragmentUniqueSequences', 'LengthPE_Delta', 'LengthPE_Concordant', 'CoverageTemplateSource',
+      'LengthPE_AllPairs_Status', 'LengthPE_AllPairs_MedianSpanningInsert',
+      'LengthPE_AllPairs_MedianBackgroundInsert', 'LengthPE_SupportQNAME_NBackground',
+      'LengthPE_SupportQNAME_NValid', 'LengthPE_SupportQNAME_MedianSpanningInsert',
+      'LengthPE_SupportQNAME_MedianBackgroundInsert', 'SupportConsistency', 'SupportConsistencyStatus', 'AlignmentScore',
+      'AlignmentScoreStatus', 'RefMatchTotalStatus', 'OrientationStatus',
+      'SequenceDependentMetricsStatus', 'SequenceImputed', 'SequencePartial',
+      'SequenceSource', 'ArtifactSuspect', 'MergeFragmentWarning', 'MergedFromN'] },
+    { id: 'sequence', label: 'Sequence', cols: ['ITD_Sequence', 'ITDCoverageRLE', 'ITDCoverageRLE_Direct',
+      'ITDCoverageRLE_PE', 'ITDCoverageRLE_Kmer', 'ITDCoverageRLE_DirectCertain',
+      'ITDCoverageRLE_DirectPossible', 'ITDCoverageRLE_DirectAmbiguous',
+      'ITDCoverageRLE_CombinedCertain', 'ITDCoverageRLE_CombinedPossible',
+      'ITDCoverageRLE_Kmer7', 'ITDCoverageRLE_Kmer9', 'ITDCoverageRLE_Kmer11',
+      'ITDCoverageRLE_Kmer13', 'ITDCoverageRLE_Kmer15'] }
   ];
   var KEY_ITD = ['Sample', 'Gene', 'GenomicPosition', 'Length', 'AlleleFrequency', 'HGVS_cDNA', 'HGVS_Protein',
     'SupportingReads', 'DepthAtBreakpoint', 'Hotspot', 'Region', 'GenomeBuild'];
@@ -737,24 +982,209 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     return out;
   }
 
-  // Column selection state (persisted per mode).
+  // Column selection state (persisted per mode). The clinical defaults are
+  // shared by the Results table and the Variant details view; every table
+  // owns an independent selection via makeColumnChooser() below.
   var colStore = 'talos-cols-' + M.mode;
   function defaultSel() {
     var s = {};
-    KEY_COLS.forEach(function (c) { if (hasCol(c)) s[c] = 1; });
+    // Compact clinical summary by default; all remaining fields stay available
+    // in the column chooser. Avoid opening the report with dozens of diagnostics.
+    var defaults = isAlu
+      ? ['Sample', 'Gene', 'InsertionSite', 'ALUSubtype', 'ALUOrientation', 'SupportingReads', 'WildtypeReads', 'AlleleFrequency', 'TSD_Length', 'Hotspot']
+      : ['Sample', 'Gene', 'GenomicPosition', 'Length', 'InFrame', 'AlleleFrequency', 'SupportingReads', 'WildtypeReads', 'HGVS_cDNA', 'HGVS_Protein', 'ITDReadCoverage_Direct', 'CoverageTemplateSource'];
+    defaults.forEach(function (c) { if (hasCol(c)) s[c] = 1; });
     return s;
   }
-  function readSel() {
-    try { var v = store(colStore); if (v) return JSON.parse(v); } catch (e) { /* fall through */ }
-    return defaultSel();
+
+  // ---- shared table toolbar widgets -------------------------------------------
+  // The three result tables (Results, Variant details, All result values) share
+  // the same feature set: a per-table column chooser, quick-filter chips, a
+  // compact/comfortable density toggle and a colour-group legend.
+
+  // One density preference for every result table (like the page size); the
+  // segments in each toolbar stay in sync and every table updates at once.
+  var DENSITY_SEGS = [];
+  function currentDensity() { return store('talos-density') || 'comfortable'; }
+  function setDensity(d) {
+    store('talos-density', d);
+    DENSITY_SEGS.forEach(function (s) { s.sync(); });
+    STICKY_TABLES.forEach(function (v) { v.setDensity(d); });
   }
-  var sel = readSel();
-  function saveSel() { store(colStore, JSON.stringify(sel)); }
-  function selectPreset(kind) {
-    sel = {};
-    if (kind === 'all') T.cols.forEach(function (c) { sel[c] = 1; });
-    else sel = defaultSel();
-    saveSel();
+  function makeDensitySeg() {
+    var seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Table density' });
+    var btns = {};
+    [['compact', 'Compact'], ['comfortable', 'Comfortable']].forEach(function (d) {
+      btns[d[0]] = h('button', { class: 'seg-btn', type: 'button', text: d[1],
+        onclick: function () { setDensity(d[0]); } });
+      seg.appendChild(btns[d[0]]);
+    });
+    var api = {
+      el: seg,
+      sync: function () {
+        var d = currentDensity();
+        btns.compact.setAttribute('aria-pressed', d === 'compact' ? 'true' : 'false');
+        btns.comfortable.setAttribute('aria-pressed', d === 'comfortable' ? 'true' : 'false');
+      }
+    };
+    api.sync();
+    DENSITY_SEGS.push(api);
+    return api;
+  }
+
+  // Quick-filter chips (All / Hotspot / Flagged / ITD / PTD), combined with a
+  // base predicate: the header sample filter (and, for the details view, the
+  // variant-id membership). The returned pred reads the active mode live, so
+  // the table keeps one predicate for its whole lifetime.
+  function makeQuickFilters(basePred, onChange) {
+    var qmode = null;
+    function qpred(i) {
+      if (qmode === 'hotspot') return cellRaw('Hotspot', i) === true;
+      if (qmode === 'flagged') return cellRaw('MergeFragmentWarning', i) === true || cellRaw('ArtifactSuspect', i) === true;
+      if (qmode === 'itd') { var l = numv('Length', i); return l != null && l > 0 && l <= 1000; }
+      if (qmode === 'ptd') { var l2 = numv('Length', i); return l2 != null && (l2 === 0 || l2 > 1000); }
+      return true;
+    }
+    function pred(i) { return basePred(i) && (!qmode || qpred(i)); }
+    var el = h('div', { class: 'qchips', role: 'group', 'aria-label': 'Quick filters' });
+    var defs = [['all', 'All'], ['hotspot', '\u2605 Hotspot'], ['flagged', '\u26A0 Flagged']];
+    if (!isAlu) { defs.push(['itd', 'ITD (\u22641 kb)']); defs.push(['ptd', 'PTD']); }
+    var btns = [];
+    defs.forEach(function (d) {
+      var b = h('button', { class: 'qchip', type: 'button', 'aria-pressed': d[0] === 'all' ? 'true' : 'false', text: d[1],
+        onclick: function () { setQuick(d[0] === 'all' ? null : d[0]); } });
+      btns.push({ b: b, id: d[0] });
+      el.appendChild(b);
+    });
+    function setQuick(mode) {
+      qmode = mode;
+      btns.forEach(function (q) { q.b.setAttribute('aria-pressed', (mode || 'all') === q.id ? 'true' : 'false'); });
+      if (onChange) onChange();
+    }
+    return { el: el, pred: pred, setQuick: setQuick };
+  }
+
+  // Colour-group legend for the visible columns of a table.
+  function groupLegendEl(cols) {
+    var ids = uniq(cols.map(groupOf));
+    return h('div', { class: 'glegend' }, ids.map(function (id) {
+      return h('span', { class: 'gk' }, h('span', { class: 'gdot', style: { background: 'var(--gc-' + id + ')' } }), groupLabel(id));
+    }));
+  }
+
+  // Column chooser: a searchable, grouped variable menu with presets. Each
+  // result table owns one instance with its own persisted selection, so the
+  // Results table, the Variant details and the All result values matrix can
+  // show different variables at the same time.
+  function makeColumnChooser(opts) {
+    // opts: { storeKey, defaults, chooserTitle, hint, onChange }
+    // defaults: array of column names, or an existing selection object
+    // (defaultSel() returns the latter) - both are accepted.
+    function defaultCols() {
+      var d = opts.defaults;
+      if (!d) return [];
+      if (Array.isArray(d)) return d;
+      if (typeof d === 'object') return Object.keys(d);
+      return [d];
+    }
+    function readLocalSel() {
+      try {
+        var v = store(opts.storeKey);
+        if (v) { var parsed = JSON.parse(v); if (parsed && typeof parsed === 'object') return parsed; }
+      } catch (e) { /* fall through */ }
+      var s = {};
+      defaultCols().forEach(function (c) { if (hasCol(c)) s[c] = 1; });
+      return s;
+    }
+    var localSel = readLocalSel();
+    function save() { store(opts.storeKey, JSON.stringify(localSel)); }
+    function preset(kind) {
+      localSel = {};
+      if (kind === 'all') T.cols.forEach(function (c) { localSel[c] = 1; });
+      else if (kind === 'key') defaultCols().forEach(function (c) { if (hasCol(c)) localSel[c] = 1; });
+      save();
+    }
+    function order() { return orderCols(localSel); }
+
+    var colBoxes = [];
+    var menuFieldsets = [];
+    var menu = h('details', { class: 'colmenu' });
+    var sum = h('summary', { class: 'btn', role: 'button', tabindex: '0', title: opts.chooserTitle || 'Choose which variables are shown' },
+      iconEl('columns', 13), 'Columns');
+    menu.appendChild(sum);
+    var panel = h('div', { class: 'colmenu-panel' });
+    var shownLabel = h('span', { class: 'small muted' });
+    panel.appendChild(shownLabel);
+    var columnSearch = h('input', { type: 'search', class: 'colmenu-search', placeholder: 'Find any variable\u2026', 'aria-label': 'Find a result variable' });
+    panel.appendChild(columnSearch);
+    panel.appendChild(h('div', { class: 'colmenu-actions' },
+      h('button', { class: 'btn', type: 'button', text: 'Clinical view', title: 'Show the key clinical columns', onclick: function () { preset('key'); sync(); changed(); } }),
+      h('button', { class: 'btn', type: 'button', text: 'Select all', title: 'Show every result variable', onclick: function () { preset('all'); sync(); changed(); } }),
+      h('button', { class: 'btn', type: 'button', text: 'Clear all', title: 'Hide all data columns', onclick: function () { preset('none'); sync(); changed(); } }),
+      h('button', { class: 'btn', type: 'button', text: 'Done', title: 'Close the column chooser', onclick: function () { menu.open = false; } })));
+    panel.appendChild(h('div', { class: 'hintline', text: opts.hint || 'Search by variable name, then tick any combination. The selection is remembered in this browser.' }));
+
+    var menuGroups = GROUPS.slice();
+    var internalCols = HIDDEN.filter(hasCol);
+    if (internalCols.length) menuGroups.push({ id: 'internal', label: 'Internal / sequence', cols: internalCols });
+    var otherCols = T.cols.filter(function (c) { return groupOf(c) === 'other' && HIDDEN.indexOf(c) < 0; });
+    if (otherCols.length) menuGroups.push({ id: 'other', label: 'Other variables', cols: otherCols });
+    // Any field not explicitly assigned to a curated group is still listed.
+    var listed = {};
+    menuGroups.forEach(function (g) { g.cols.forEach(function (c) { listed[c] = true; }); });
+    var unlisted = T.cols.filter(function (c) { return !listed[c]; });
+    if (unlisted.length) menuGroups.push({ id: 'other', label: 'Other variables', cols: unlisted });
+
+    menuGroups.forEach(function (g) {
+      var fs = h('fieldset');
+      var present = uniq(g.cols).filter(function (c) {
+        return hasCol(c) && (g.id === 'internal' || HIDDEN.indexOf(c) < 0);
+      });
+      if (!present.length) return;
+      fs.appendChild(h('legend', null,
+        h('span', { class: 'gdot', style: { background: 'var(--gc-' + g.id + ')' } }),
+        g.label + ' (' + present.length + ')'));
+      var gridEl = h('div', { class: 'cols' });
+      present.forEach(function (c) {
+        var cb = h('input', { type: 'checkbox' });
+        var label = h('label', { title: HELP[c] || '' }, cb, c);
+        cb.checked = !!localSel[c];
+        cb.addEventListener('change', function () {
+          if (cb.checked) localSel[c] = 1; else delete localSel[c];
+          save(); sync(); changed();
+        });
+        colBoxes.push({ cb: cb, c: c, label: label });
+        gridEl.appendChild(label);
+      });
+      fs.appendChild(gridEl);
+      menuFieldsets.push({ fs: fs, labels: colBoxes.slice(-present.length) });
+      panel.appendChild(fs);
+    });
+    menu.appendChild(panel);
+    function filterColumnOptions() {
+      var query = String(columnSearch.value || '').toLowerCase().trim();
+      colBoxes.forEach(function (b) {
+        b.label.hidden = !!query && b.c.toLowerCase().indexOf(query) < 0;
+      });
+      menuFieldsets.forEach(function (g) {
+        g.fs.hidden = !g.labels.some(function (b) { return !b.label.hidden; });
+      });
+    }
+    columnSearch.addEventListener('input', filterColumnOptions);
+    function sync() {
+      shownLabel.textContent = order().length + ' of ' + T.cols.length + ' variables shown';
+      colBoxes.forEach(function (b) { b.cb.checked = !!localSel[b.c]; });
+      filterColumnOptions();
+    }
+    function changed() { if (opts.onChange) opts.onChange(); }
+    sync();
+    return {
+      el: menu,
+      order: order,
+      preset: preset,
+      sync: sync,
+      selection: function () { return localSel; }
+    };
   }
 
   // ------------------------------------------------------------------ table view
@@ -807,6 +1237,13 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     var view = {
       refresh: function () { draw(); },
       recompute: function () { recompute(); },
+      focusRow: function (i) {
+        var at = idx.indexOf(Number(i));
+        if (at < 0) return false;
+        page = pageSize === Infinity ? 0 : Math.floor(at / pageSize);
+        draw();
+        return true;
+      },
       setPredicate: function (p) { pred = p; page = 0; recompute(); },
       setDensity: function (d) {
         tableEl.classList.toggle('d-compact', d === 'compact');
@@ -855,7 +1292,11 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
       var end = Math.min(idx.length, start + pageSize);
       for (var k = start; k < end; k++) (function (i) {
         var cls = [opts.onRow ? 'clickable' : '', rowClassFn(i)].filter(Boolean).join(' ');
-        var row = h('tr', { class: cls, title: opts.onRow ? 'Open full details' : null });
+        var row = h('tr', { class: cls, title: opts.onRow ? 'Open full details' : null,
+          id: opts.rowId ? opts.rowId(i) : null,
+          // The row itself opens the full details; the expander button stops
+          // the event so toggling the inline detail does not navigate.
+          onclick: opts.onRow ? function () { opts.onRow(i); } : null });
         if (hasDetail) {
           row.appendChild(h('td', { class: 'exp-c' },
             h('button', { class: 'exp', type: 'button', 'aria-expanded': expandedIds[i] ? 'true' : 'false',
@@ -937,18 +1378,26 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
   // ------------------------------------------------------------------ tabs
   var TABS = [];
   function tab(id, label, available, build) { TABS.push({ id: id, label: label, available: available, build: build, built: false }); }
+  var detailsTableAPI = null, allValuesAPI = null, resultsSub = null;
   function showVariant(id) {
-    activate('details', true);
-    var el = document.getElementById('v-' + id);
-    if (!el) return;
-    $$('.vcard.hl').forEach(function (x) { x.classList.remove('hl'); });
-    el.classList.add('hl');
-    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    activate('results', true);
+    if (resultsSub) resultsSub.switchTo('details', true);
+    if (detailsTableAPI && typeof detailsTableAPI.focusRow === 'function') {
+      detailsTableAPI.focusRow(Number(id) - 1);
+    }
+    setTimeout(function () {
+      var el = document.getElementById('variant-detail-row-' + id);
+      if (!el) return;
+      $$('.variant-focus').forEach(function (x) { x.classList.remove('variant-focus'); });
+      el.classList.add('variant-focus');
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 40);
   }
   var resultsAPI = null, pendingQF = null;
   function gotoResults(qf) {
     pendingQF = qf;
     activate('results', true);
+    if (resultsSub) resultsSub.switchTo('table', true);
     if (resultsAPI && pendingQF) { resultsAPI.setQuick(pendingQF); pendingQF = null; }
   }
   function panelIndexOfVariant(vid) {
@@ -967,17 +1416,97 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     return true;
   }
 
+  // Rebuild a lazily built tab (used when the global sample filter changes).
+  function rebuildTab(id) {
+    TABS.forEach(function (t) {
+      if (t.id !== id || !t.built || !panelsById()[id]) return;
+      var host = panelsById()[id];
+      clear(host);
+      try { t.build(host); } catch (e) {
+        host.appendChild(emptyNote('This tab could not be rebuilt: ' + e.message));
+        if (window.console) console.error(e);
+      }
+      refreshVisible(host);
+    });
+  }
+
+  // ------------------------------------------------------------------ sub-tabs
+  // ECHO-style inner segmented panels used by the merged Results tab: the
+  // results table, the variant details and every embedded result value share
+  // one top-level tab and one sample filter; each view carries its own
+  // column chooser, quick filters and density toggle.
+  function subTabs(items, defaultId) {
+    var current = defaultId || items[0].id;
+    var bar = h('div', { class: 'subtabs', role: 'tablist', 'aria-label': 'Result views' });
+    var subPanels = {};
+    var container = h('div');
+    items.forEach(function (it) {
+      var btn = h('button', { class: 'subtab', role: 'tab', type: 'button', id: 'subtab-' + it.id,
+        'aria-selected': it.id === current ? 'true' : 'false', 'aria-controls': 'subpanel-' + it.id,
+        text: it.label, onclick: function () { switchTo(it.id, true); } });
+      bar.appendChild(btn);
+      var p = h('div', { class: 'subpanel', role: 'tabpanel', id: 'subpanel-' + it.id,
+        'aria-labelledby': 'subtab-' + it.id, hidden: it.id !== current });
+      subPanels[it.id] = { btn: btn, panel: p, built: false, build: it.build };
+      container.appendChild(p);
+    });
+    function buildPanel(id) {
+      var rec = subPanels[id];
+      if (rec.built) return;
+      rec.built = true;
+      try { rec.build(rec.panel); } catch (e) {
+        rec.panel.appendChild(emptyNote('This view could not be built: ' + e.message));
+        if (window.console) console.error(e);
+      }
+    }
+    function switchTo(id, push) {
+      if (!subPanels[id]) id = items[0].id;
+      current = id;
+      Object.keys(subPanels).forEach(function (k) {
+        var on = k === id;
+        subPanels[k].panel.hidden = !on;
+        subPanels[k].btn.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      buildPanel(id);
+      refreshVisible(subPanels[id].panel);
+      setTimeout(function () { refreshVisible(subPanels[id].panel); }, 60);
+      if (push) pushHash();
+    }
+    container.insertBefore(bar, container.firstChild);
+    buildPanel(current);
+    return {
+      el: container,
+      switchTo: switchTo,
+      current: function () { return current; },
+      buildAll: function () { items.forEach(function (it) { buildPanel(it.id); }); }
+    };
+  }
+
   // ---- Overview
+  // All figures follow the global sample filter; the tab is rebuilt whenever
+  // the filter changes (see the onState registration below).
   tab('overview', 'Overview', function () { return true; }, function (root) {
-    var samples = uniq(col('Sample')), genes = uniq(col('Gene'));
-    var vaf = col('AlleleFrequency').map(function (v) { return typeof v === 'number' ? v * 100 : NaN; });
-    var hot = col('Hotspot').filter(function (v) { return v === true; }).length;
-    var flagged = col('MergeFragmentWarning').concat(col('ArtifactSuspect'))
-                  .filter(function (v) { return v === true; }).length;
-    var imputed = col('SequenceSource').filter(function (v) { return v === 'ref_imputed'; }).length;
+    var vis = visibleRows();
+    var visVariants = VARIANTS.filter(function (v) { return vis.indexOf(v.id - 1) >= 0; });
+    var samples = uniq(vis.map(rowSample)), genes = uniq(vis.map(function (i) { return col('Gene')[i]; }));
+    var vaf = vis.map(function (i) { var v = col('AlleleFrequency')[i]; return typeof v === 'number' ? v * 100 : NaN; });
+    var hot = vis.filter(function (i) { return cellRaw('Hotspot', i) === true; }).length;
+    var flagged = vis.filter(function (i) {
+      return cellRaw('MergeFragmentWarning', i) === true || cellRaw('ArtifactSuspect', i) === true;
+    }).length;
+    var imputed = vis.filter(function (i) { return cellRaw('SequenceSource', i) === 'ref_imputed'; }).length;
     var ptd = 0;
     if (!isAlu && hasCol('Length')) {
-      ptd = col('Length').filter(function (l) { return typeof l === 'number' && (l === 0 || l > 1000); }).length;
+      ptd = vis.filter(function (i) { var l = numv('Length', i); return l != null && (l === 0 || l > 1000); }).length;
+    }
+
+    if (state.sample && NROW > 0) {
+      root.appendChild(h('div', { class: 'banner neutral' },
+        h('span', { class: 'btitle' }, iconEl('info', 15), 'Filtered to sample: ' + state.sample),
+        h('span', { class: 'small', style: { color: 'var(--text-2)' },
+          text: vis.length + ' of ' + NROW + ' ' + M.events + ' shown. The header sample filter applies to every tab.' }),
+        h('button', { class: 'bchip', type: 'button', text: 'Show all samples',
+          onclick: function () { setSample(''); } })));
     }
 
     if (NROW === 0) {
@@ -986,6 +1515,11 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
         h('span', { class: 'small', style: { color: 'var(--text-2)' },
           text: 'No ' + M.events + ' passed the filters in this run. The Results and Genome view tabs are hidden; ' +
                 'check the Configuration and Run tabs for the thresholds that were applied.' })));
+    } else if (vis.length === 0) {
+      root.appendChild(h('div', { class: 'banner neutral' },
+        h('span', { class: 'btitle' }, iconEl('info', 15), 'No calls for sample: ' + state.sample),
+        h('span', { class: 'small', style: { color: 'var(--text-2)' },
+          text: 'This sample has no ' + M.events + ' in the run. Clear the header sample filter to see all calls.' })));
     } else {
       var banner = h('div', { class: 'banner' + (flagged ? '' : ' neutral') },
         h('span', { class: 'btitle' }, iconEl(flagged ? 'warn' : 'check', 15),
@@ -995,7 +1529,7 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
         chips.appendChild(h('button', { class: 'bchip', type: 'button', title: title || '', text: label,
           onclick: function () { gotoResults(qf); } }));
       }
-      bchip(NROW + ' ' + M.events + ' called', null, 'Open the results table');
+      bchip(vis.length + ' ' + M.events + ' called', null, 'Open the results table');
       if (hot) bchip('\u2605 ' + hot + ' in known hotspots', 'hotspot');
       if (flagged) bchip('\u26A0 ' + flagged + ' flagged for review', 'flagged');
       if (imputed) bchip(imputed + ' with reference-imputed sequence', null);
@@ -1005,23 +1539,28 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
       root.appendChild(banner);
     }
 
-    var tiles = [[NROW, M.events.charAt(0).toUpperCase() + M.events.slice(1) + ' called'], [samples.length, 'Samples'],
+    var tiles = [[vis.length, M.events.charAt(0).toUpperCase() + M.events.slice(1) + ' called'], [samples.length, 'Samples'],
       [genes.length, 'Genes'], [hot, 'In hotspots']];
     if (flagged > 0) tiles.push([flagged, '\u26A0 Flagged calls', 'warn']);
     var mv = median(vaf);
     if (isFinite(mv)) tiles.push([mv.toFixed(1) + '%', 'Median VAF']);
     if (!isAlu && hasCol('Length')) {
-      var big = col('Length').filter(function (l) { return typeof l === 'number' && l > 1000; }).length;
+      var big = vis.filter(function (i) { var l = numv('Length', i); return l != null && l > 1000; }).length;
       tiles.push([big, 'Calls > 1 kb (PTD scale)']);
     }
     root.appendChild(h('div', { class: 'tiles' }, tiles.map(function (t) {
       return h('div', { class: 'tile' + (t[2] ? ' ' + t[2] : '') }, h('div', { class: 'v', text: String(t[0]) }), h('div', { class: 'l', text: t[1] }));
     })));
     if (!NROW) { root.appendChild(h('div', { style: { marginTop: '12px' } }, card('Results', null, emptyNote('No variants detected.')))); return; }
+    if (!vis.length) {
+      root.appendChild(h('div', { style: { marginTop: '12px' } }, card('Results', null,
+        emptyNote('No ' + M.events + ' for the selected sample.'))));
+      return;
+    }
 
     var grid = h('div', { class: 'grid g2', style: { marginTop: '12px' } });
     var tb = h('tbody'), groups = {};
-    VARIANTS.forEach(function (v) { var k = v.sample + '\u0001' + v.gene; (groups[k] = groups[k] || []).push(v); });
+    visVariants.forEach(function (v) { var k = v.sample + '\u0001' + v.gene; (groups[k] = groups[k] || []).push(v); });
     Object.keys(groups).forEach(function (k) {
       var g = groups[k], vs = g.map(function (v) { var x = col('AlleleFrequency')[v.id - 1]; return typeof x === 'number' ? x * 100 : NaN; });
       tb.appendChild(h('tr', null, h('td', { text: g[0].sample }), h('td', { text: g[0].gene }), h('td', { class: 'num', text: String(g.length) }),
@@ -1032,12 +1571,11 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     var box = plotBox();
     grid.appendChild(card('Allele frequency per call', 'click a bar for details', box));
     root.appendChild(grid);
-    var labels = VARIANTS.map(function (v) { return v.sample + ' \u00b7 ' + v.gene + ' #' + v.n_in_group; });
     plot(box, function (t) {
-      var byGene = uniq(VARIANTS.map(function (v) { return v.gene; }));
+      var byGene = uniq(visVariants.map(function (v) { return v.gene; }));
       // One trace per gene so the bar colours are explained by a legend.
       var data = byGene.map(function (g, gi) {
-        var vs = VARIANTS.filter(function (v) { return v.gene === g; });
+        var vs = visVariants.filter(function (v) { return v.gene === g; });
         return { type: 'bar', name: g, x: vs.map(function (v) { return v.sample + ' \u00b7 ' + v.gene + ' #' + v.n_in_group; }),
           y: vs.map(function (v) { var x = col('AlleleFrequency')[v.id - 1]; return typeof x === 'number' ? x * 100 : null; }),
           customdata: vs.map(function (v) { return v.id; }), text: vs.map(function (v) { return v.title; }),
@@ -1077,7 +1615,7 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     var r = {
       AlleleFrequency: function (v) {
         if (typeof v !== 'number' || !isFinite(v)) return dash();
-        return tagEl(fmtPct(v), v >= 0.10 ? 'ok' : v >= 0.01 ? 'info' : 'mut', 'Variant allele frequency (size-bias corrected)');
+        return tagEl(fmtPct(v), v >= 0.10 ? 'ok' : v >= 0.01 ? 'info' : 'mut', 'Raw variant allele fraction (no size correction)');
       },
       GenomicPosition: function (v) { return h('span', { text: fmtInt(v) }); },
       InsertionSite: function (v) { return h('span', { text: fmtInt(v) }); },
@@ -1124,9 +1662,14 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
         return h('span', { class: v < 20 ? 'cell-warn' : '', text: v.toFixed(1), title: v < 20 ? 'Low mean MAPQ' : '' });
       },
       ITDReadCoverage: function (v) { return pctCell(v, 50); },
+      ITDReadCoverage_Kmer: function (v) { return pctCell(v); },
+      ITDReadCoverage_Combined: function (v) { return pctCell(v, 50); },
+      LengthPE_Concordant: function (v) { return v === true ? tagEl('concordant', 'ok') : v === false ? tagEl('discordant', 'warn') : dash(); },
       RefMatch_Observed: function (v) { return pctCell(v); },
       RefMatch_Total: function (v) { return pctCell(v); },
-      ITD_Sequence: monoCell, ITDCoverageRLE: monoCell, TSD_Sequence: monoCell,
+      ITD_Sequence: monoCell, ITDCoverageRLE: monoCell, ITDCoverageRLE_Direct: monoCell,
+      ITDCoverageRLE_PE: monoCell, ITDCoverageRLE_Kmer: monoCell,
+      ITDUncoveredIntervals_Combined: monoCell, TSD_Sequence: monoCell,
       HotspotName: monoCell, CandidateTypes: monoCell, DupExons: monoCell
     };
     return r;
@@ -1135,18 +1678,29 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
   // ---- Per-call warnings for the inline detail row
   function callWarnings(i) {
     var out = [];
+    var len = numv('Length', i); // hoisted var is initialized before PE warning construction
     function add(sev, ic, text) { out.push({ sev: sev, ic: ic, text: text }); }
     if (cellRaw('ArtifactSuspect', i) === true) add('danger', 'warn', 'Artifact suspect: sequence fully imputed from the reference with ~100% identity match.');
+    if (cellRaw('InFrame', i) === false) add('info', 'info', 'The reported duplication length is not divisible by 3 (out-of-frame diagnostic); this does not automatically reject the call.');
     if (cellRaw('MergeFragmentWarning', i) === true) add('warn', 'warn', 'Merged from ' + fmt(cellRaw('MergedFromN', i)) + ' fragments - more than expected for a single true PTD; review before reporting.');
     var src = cellRaw('SequenceSource', i);
     if (src === 'ref_imputed') add('warn', 'info', 'ITD sequence imputed from the reference (not read-derived).');
     else if (src === 'partial_read+ref') add('info', 'info', 'ITD sequence partially imputed from the reference.');
+    else if (src === 'partial_read_unresolved') add('warn', 'info', 'The observed sequence fragment did not validate against the expected reference segment; full-sequence coverage is therefore not calculated.');
+    if (cellRaw('LengthPE_Concordant', i) === false) {
+      add('warn', 'warn', 'The PE insert-size length estimate (' + fmt(numv('LengthPE', i)) + ' bp) disagrees with the primary length (' + fmt(len) + ' bp); review read-pair geometry and the breakpoint.');
+    }
     var sb = numv('StrandBias', i);
     if (sb != null && (sb < 0.2 || sb > 0.8)) add('warn', 'warn', 'Strong strand bias (' + sb.toFixed(3) + ' of supporting reads on one strand).');
     var mq = numv('MeanSupportMAPQ', i);
     if (mq != null && mq < 20) add('warn', 'warn', 'Low mean MAPQ of supporting reads (' + mq.toFixed(1) + ').');
-    var cov = numv('ITDReadCoverage', i), len = numv('Length', i);
-    if (cov != null && cov < 50 && !(len != null && len > 1000)) add('warn', 'warn', 'Only ' + cov.toFixed(0) + '% of the ITD sequence is covered by reads.');
+    var cov = numv('ITDReadCoverage', i);
+    if (cov != null && cov < 50 && !(len != null && len > 1000)) add('warn', 'warn', 'Only ' + cov.toFixed(0) + '% of the ITD sequence is covered by direct read alignment.');
+    var covC = numv('ITDReadCoverage_Combined', i);
+    if (cov != null && covC != null && cov < 50 && covC >= 50 && !(len != null && len > 1000))
+      add('info', 'info', 'Combined sequence-level evidence (direct read alignments + position-resolved k-mers) covers ' + covC.toFixed(0) + '% of the ITD sequence; this is a less-specific union, not direct read coverage.');
+    var gapN = numv('ITDUncoveredBases_Combined', i), gapTxt = cellRaw('ITDUncoveredIntervals_Combined', i);
+    if (gapN != null && gapN > 0) add('warn', 'warn', gapN + ' ITD base(s) remain unsupported by all enabled evidence sources' + (gapTxt ? ' (ITD-relative positions ' + gapTxt + ')' : '') + '.');
     if (cellRaw('Region', i) === 'intronic') add('info', 'info', 'Breakpoint is intronic.');
     if (cellRaw('Orientation', i) === 'inverted') add('warn', 'warn', 'Duplicated segment appears inverted.');
     if (cellRaw('Hotspot', i) === true) add('good', 'star', 'Known hotspot' + (cellRaw('HotspotName', i) ? ': ' + cellRaw('HotspotName', i) : '') + '.');
@@ -1173,6 +1727,9 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     } else {
       var lenTxt = len == null ? 'N/A' : len === 0 ? 'PTD (clip)' : fmtInt(len) + ' bp';
       var mq = numv('MeanSupportMAPQ', i), sb = numv('StrandBias', i);
+      var covD = numv('ITDReadCoverage', i), covC = numv('ITDReadCoverage_Combined', i),
+          covK = numv('ITDReadCoverage_Kmer', i), kr = numv('ITDKmerReads', i);
+      var longIt = len != null && len > 1000;
       stats = [
         ['VAF', af == null ? 'N/A' : fmtPct(af), af != null && af >= 0.1 ? 'good' : ''],
         ['Length', lenTxt, ''],
@@ -1180,8 +1737,12 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
         ['Depth', fmtInt(numv('DepthAtBreakpoint', i)) || 'N/A', ''],
         ['MAPQ', mq == null ? 'N/A' : mq.toFixed(1), mq != null && mq < 20 ? 'warn' : ''],
         ['Strand bias', sb == null ? 'N/A' : sb.toFixed(3), sb != null && (sb < 0.2 || sb > 0.8) ? 'warn' : ''],
-        ['ITD read cov.', numv('ITDReadCoverage', i) == null ? 'N/A' : numv('ITDReadCoverage', i).toFixed(0) + '%',
-          numv('ITDReadCoverage', i) != null && numv('ITDReadCoverage', i) < 50 && !(len != null && len > 1000) ? 'warn' : '']
+        ['ITD read cov.', covD == null ? 'N/A' : covD.toFixed(0) + '%',
+          covD != null && covD < 50 && !longIt ? 'warn' : ''],
+        ['ITD cov. (all)', covC == null ? 'N/A' : covC.toFixed(0) + '%',
+          covC != null && covC >= 50 && !longIt ? 'good' : ''],
+        ['K-mer cov.', covK == null ? 'N/A' : covK.toFixed(0) + '%', ''],
+        ['K-mer reads', kr == null ? 'N/A' : fmtInt(kr), '']
       ];
     }
     grid.appendChild(h('div', { class: 'mini-stats' }, stats.map(function (s) {
@@ -1226,10 +1787,15 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     return grid;
   }
 
-  // ---- Results table
-  tab('results', 'Results table', function () { return NROW > 0; }, function (root) {
+  // ---- Merged Results tab (ECHO-style sub-views).
+  // The results table, the variant details and every embedded result value
+  // live in ONE top-level tab so they share the column chooser, the quick
+  // filters, the CSV exports and the header sample filter. Sub-views build
+  // lazily, exactly like top-level tabs.
+  function buildResultsTableSub(root) {
     var host = h('div');
     var render = makeResultRenderers();
+    var legendHost = h('div');
     var rowClass = function (i) {
       var cls = [];
       if (hasCol('Hotspot') && cellRaw('Hotspot', i) === true) cls.push('row-hotspot');
@@ -1238,129 +1804,182 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
       if (len != null && (len === 0 || len > 1000)) cls.push('row-ptd');
       return cls.join(' ');
     };
-    function visible() { return orderCols(sel); }
 
-    // -- column chooser (Illumina variant-grid style)
-    var colBoxes = [];
-    var shownLabel = h('span', { class: 'small muted' });
-    var menu = h('details', { class: 'colmenu' });
-    var sum = h('summary', { class: 'btn', role: 'button', tabindex: '0', title: 'Choose which columns are shown' }, iconEl('columns', 13), 'Columns');
-    menu.appendChild(sum);
-    var panel = h('div', { class: 'colmenu-panel' });
-    panel.appendChild(shownLabel);
-    panel.appendChild(h('div', { class: 'chips', style: { margin: '6px 0 4px' } },
-      h('button', { class: 'btn', type: 'button', text: 'Clinical view', title: 'Show only the key columns', onclick: function () { selectPreset('key'); syncMenu(); view.refresh(); } }),
-      h('button', { class: 'btn', type: 'button', text: 'All columns', title: 'Show every column', onclick: function () { selectPreset('all'); syncMenu(); view.refresh(); } }),
-      h('button', { class: 'btn', type: 'button', text: 'Done', title: 'Close the column chooser', onclick: function () { menu.open = false; } })));
-    panel.appendChild(h('div', { class: 'hintline', text: 'Changes apply immediately and are remembered for future reports.' }));
-    var menuGroups = GROUPS.slice();
-    var internalCols = HIDDEN.filter(hasCol);
-    if (internalCols.length) menuGroups.push({ id: 'internal', label: 'Internal', cols: internalCols });
-    var otherCols = T.cols.filter(function (c) { return groupOf(c) === 'other' && HIDDEN.indexOf(c) < 0; });
-    if (otherCols.length) menuGroups.push({ id: 'other', label: 'Other', cols: otherCols });
-    menuGroups.forEach(function (g) {
-      var fs = h('fieldset');
-      // Hidden columns are listed under Internal only, so no column appears twice.
-      var present = g.cols.filter(function (c) { return hasCol(c) && (g.id === 'internal' || HIDDEN.indexOf(c) < 0); });
-      if (!present.length) return;
-      fs.appendChild(h('legend', null, h('span', { class: 'gdot', style: { background: 'var(--gc-' + g.id + ')' } }), g.label + ' (' + present.length + ')'));
-      var gridEl = h('div', { class: 'cols' });
-      present.forEach(function (c) {
-        var cb = h('input', { type: 'checkbox' });
-        cb.checked = !!sel[c];
-        cb.addEventListener('change', function () { if (cb.checked) sel[c] = 1; else delete sel[c]; saveSel(); syncMenu(); view.refresh(); });
-        colBoxes.push({ cb: cb, c: c });
-        gridEl.appendChild(h('label', { title: HELP[c] || '' }, cb, c));
-      });
-      fs.appendChild(gridEl);
-      panel.appendChild(fs);
+    var chooser = makeColumnChooser({
+      storeKey: colStore,
+      defaults: defaultSel(),
+      chooserTitle: 'Choose which variables are shown in the Results table',
+      hint: 'Search by variable name, then tick any combination. The selection applies to the Results table and is remembered in this browser.',
+      onChange: function () {
+        // Legacy wiring: the per-variant detail cards follow the Results
+        // selection; the other result tables simply redraw.
+        detailColumnSelection = chooser.selection();
+        detailColumnSelectionReady = true;
+        view.refresh(); refreshLegend(); refreshDetailTables();
+      }
     });
-    menu.appendChild(panel);
-    function syncMenu() {
-      shownLabel.textContent = orderCols(sel).length + ' of ' + T.cols.length + ' columns shown';
-      colBoxes.forEach(function (b) { b.cb.checked = !!sel[b.c]; });
-    }
+    detailColumnSelection = chooser.selection();
+    detailColumnSelectionReady = true;
 
-    // -- quick filters
-    var qmode = null;
-    function qpred(i) {
-      if (qmode === 'hotspot') return cellRaw('Hotspot', i) === true;
-      if (qmode === 'flagged') return cellRaw('MergeFragmentWarning', i) === true || cellRaw('ArtifactSuspect', i) === true;
-      if (qmode === 'itd') { var l = numv('Length', i); return l != null && l > 0 && l <= 1000; }
-      if (qmode === 'ptd') { var l2 = numv('Length', i); return l2 != null && (l2 === 0 || l2 > 1000); }
-      return true;
-    }
-    var qchips = h('div', { class: 'qchips', role: 'group', 'aria-label': 'Quick filters' });
-    var qdefs = [['all', 'All'], ['hotspot', '\u2605 Hotspot'], ['flagged', '\u26A0 Flagged']];
-    if (!isAlu) { qdefs.push(['itd', 'ITD (\u22641 kb)']); qdefs.push(['ptd', 'PTD']); }
-    var qbtns = [];
-    qdefs.forEach(function (d) {
-      var b = h('button', { class: 'qchip', type: 'button', 'aria-pressed': d[0] === 'all' ? 'true' : 'false', text: d[1],
-        onclick: function () { setQuick(d[0] === 'all' ? null : d[0]); } });
-      qbtns.push({ b: b, id: d[0] }); qchips.appendChild(b);
-    });
-    function setQuick(mode) {
-      qmode = mode;
-      qbtns.forEach(function (q) { q.b.setAttribute('aria-pressed', (mode || 'all') === q.id ? 'true' : 'false'); });
-      view.setPredicate(mode ? qpred : null);
-    }
-
-    // -- density
-    var density = store('talos-density') || 'comfortable';
-    var dseg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Table density' });
-    var dBtns = {};
-    [['compact', 'Compact'], ['comfortable', 'Comfortable']].forEach(function (d) {
-      var b = h('button', { class: 'seg-btn', type: 'button', 'aria-pressed': density === d[0] ? 'true' : 'false', text: d[1],
-        onclick: function () { density = d[0]; store('talos-density', density); syncDensity(); } });
-      dBtns[d[0]] = b; dseg.appendChild(b);
-    });
-    function syncDensity() {
-      dBtns.compact.setAttribute('aria-pressed', density === 'compact' ? 'true' : 'false');
-      dBtns.comfortable.setAttribute('aria-pressed', density === 'comfortable' ? 'true' : 'false');
-      view.setDensity(density);
-    }
+    var qf = makeQuickFilters(samplePred, function () { view.recompute(); });
+    var dseg = makeDensitySeg();
 
     var view = tableView(host, {
-      cols: visible, toolbar: h('span', { style: { display: 'inline-flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } }, qchips, menu, dseg),
+      cols: chooser.order,
+      pred: qf.pred,
+      toolbar: h('span', { style: { display: 'inline-flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } }, qf.el, chooser.el, dseg.el),
       pageSizes: [10, 25, 50, 100, Infinity], filename: 'TALOS_results.csv',
       onRow: function (i) { showVariant(i + 1); },
       render: render, rowClass: rowClass, detail: resultDetail, sticky: 2, label: 'Results'
     });
-    // initial quick filter / density / column state
-    syncMenu();
-    syncDensity();
-    if (pendingQF) { setQuick(pendingQF); pendingQF = null; }
-    resultsAPI = { setQuick: setQuick };
+    // apply the saved density preference to this table right away
+    view.setDensity(currentDensity());
+    // initial quick-filter state (deep links from the Overview banners)
+    resultsAPI = { setQuick: qf.setQuick, recompute: function () { view.recompute(); } };
+    if (pendingQF) { qf.setQuick(pendingQF); pendingQF = null; }
 
-    // group legend above the table
-    function legendFor() {
-      var vis = visible(), ids = uniq(vis.map(groupOf));
-      return h('div', { class: 'glegend' }, ids.map(function (id) {
-        return h('span', { class: 'gk' }, h('span', { class: 'gdot', style: { background: 'var(--gc-' + id + ')' } }), groupLabel(id));
-      }));
-    }
-    var legendHost = h('div');
+    function refreshLegend() { clear(legendHost).appendChild(groupLegendEl(chooser.order())); }
     var refresh0 = view.refresh;
-    view.refresh = function () { refresh0(); clear(legendHost).appendChild(legendFor()); };
+    view.refresh = function () { refresh0(); refreshLegend(); };
 
     var subtitle = 'Rows: \u2605 hotspot \u00b7 \u26A0 flagged \u00b7 purple edge = PTD \u00b7 bar = support \u00b7 hover a header for its meaning \u00b7 click \u25B8 to expand a row';
-    root.appendChild(card(
-      M.events.charAt(0).toUpperCase() + M.events.slice(1) + ' detected: ' + NROW +
-      ' across ' + uniq(col('Sample')).length + ' sample(s)',
-      subtitle, h('div', null, legendHost, host)));
-    clear(legendHost).appendChild(legendFor());
+    var cardTitle = M.events.charAt(0).toUpperCase() + M.events.slice(1) + ' detected: ' + NROW +
+      ' across ' + uniq(col('Sample')).length + ' sample(s)';
+    if (state.sample) cardTitle += ' \u2014 showing ' + visibleRows().length + ' for ' + state.sample;
+    root.appendChild(card(cardTitle, subtitle, h('div', null, legendHost, host)));
+    refreshLegend();
+  }
+
+  // -- Variant details sub-view: one row per called variant, with the same
+  // toolbar features as the Results table - its own variable chooser, quick
+  // filters, compact mode, colour-group legend and inline row details.
+  function buildDetailsSub(root) {
+    var variantIds = {};
+    VARIANTS.forEach(function (v) { variantIds[Number(v.id)] = true; });
+    var basePred = function (i) { return samplePred(i) && !!variantIds[i + 1]; };
+    var host = h('div');
+    var legendHost = h('div');
+    var chooser = makeColumnChooser({
+      storeKey: 'talos-cols-details-' + M.mode,
+      defaults: defaultSel(),
+      chooserTitle: 'Choose which variables are shown in Variant details',
+      hint: 'Search by variable name, then tick any combination. The Variant details selection is independent of the Results table and is remembered in this browser.',
+      onChange: function () { view.refresh(); refreshLegend(); }
+    });
+    var qf = makeQuickFilters(basePred, function () { view.recompute(); });
+    var dseg = makeDensitySeg();
+    var view = tableView(host, {
+      cols: chooser.order,
+      pred: qf.pred,
+      toolbar: h('span', { style: { display: 'inline-flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } }, qf.el, chooser.el, dseg.el),
+      pageSizes: [10, 25, 50, 100, Infinity],
+      filename: 'TALOS_variant_details.csv',
+      rowId: function (i) { return 'variant-detail-row-' + (i + 1); },
+      onRow: function (i) { showVariant(i + 1); },
+      render: makeResultRenderers(),
+      rowClass: function (i) {
+        var cls = [];
+        if (hasCol('Hotspot') && cellRaw('Hotspot', i) === true) cls.push('row-hotspot');
+        if (cellRaw('MergeFragmentWarning', i) === true || cellRaw('ArtifactSuspect', i) === true) cls.push('row-flagged');
+        var v = VARIANTS.filter(function (x) { return Number(x.id) === i + 1; })[0];
+        if (v && v.flag) cls.push('row-flagged');
+        var len = numv('Length', i);
+        if (len != null && (len === 0 || len > 1000)) cls.push('row-ptd');
+        return cls.join(' ');
+      },
+      detail: resultDetail, sticky: 2, label: 'Variant details'
+    });
+    view.setDensity(currentDensity());
+    detailsTableAPI = view;
+    function refreshLegend() { clear(legendHost).appendChild(groupLegendEl(chooser.order())); }
+    var refresh0 = view.refresh;
+    view.refresh = function () { refresh0(); refreshLegend(); };
+    var nShown = range(NROW).filter(basePred).length;
+    root.appendChild(card('Variant details (' + nShown + ')',
+      'One row per variant \u00b7 choose variables, quick filters, compact mode, CSV \u00b7 click \u25B8 to expand a row',
+      h('div', null, legendHost, host)));
+    refreshLegend();
+  }
+
+  // -- All result values sub-view: the complete embedded result matrix with
+  // the same toolbar features as the Results table. Every source column
+  // (including internal metrics and sequence fields) starts selected.
+  function buildAllValuesSub(root) {
+    var host = h('div');
+    var legendHost = h('div');
+    var chooser = makeColumnChooser({
+      storeKey: 'talos-cols-all-' + M.mode,
+      defaults: T.cols.slice(),
+      chooserTitle: 'Choose which variables are shown in All result values',
+      hint: 'Every embedded result variable starts selected. Untick variables to focus the matrix; the selection is independent and remembered in this browser.',
+      onChange: function () { view.refresh(); refreshLegend(); }
+    });
+    var qf = makeQuickFilters(samplePred, function () { view.recompute(); });
+    var dseg = makeDensitySeg();
+    var view = tableView(host, {
+      cols: chooser.order,
+      pred: qf.pred,
+      toolbar: h('span', { style: { display: 'inline-flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } }, qf.el, chooser.el, dseg.el),
+      pageSizes: [10, 25, 50, 100, Infinity],
+      filename: 'TALOS_all_result_values.csv',
+      onRow: function (i) { showVariant(i + 1); },
+      render: makeResultRenderers(),
+      rowClass: function (i) {
+        var cls = [];
+        if (hasCol('Hotspot') && cellRaw('Hotspot', i) === true) cls.push('row-hotspot');
+        if (cellRaw('MergeFragmentWarning', i) === true || cellRaw('ArtifactSuspect', i) === true) cls.push('row-flagged');
+        var len = numv('Length', i);
+        if (len != null && (len === 0 || len > 1000)) cls.push('row-ptd');
+        return cls.join(' ');
+      },
+      detail: resultDetail, sticky: 1, label: 'All result values'
+    });
+    view.setDensity(currentDensity());
+    allValuesAPI = view;
+    function refreshLegend() { clear(legendHost).appendChild(groupLegendEl(chooser.order())); }
+    var refresh0 = view.refresh;
+    view.refresh = function () { refresh0(); refreshLegend(); };
+    root.appendChild(card('All result values (' + NROW + ' rows \u00d7 ' + T.cols.length + ' variables)',
+      'Complete embedded result matrix, including internal metrics and sequence fields \u00b7 same tools as the Results table',
+      h('div', null, legendHost, host)));
+    refreshLegend();
+  }
+  tab('results', 'Results', function () { return NROW > 0; }, function (root) {
+    resultsSub = subTabs([
+      { id: 'table', label: 'Results table', build: buildResultsTableSub },
+      { id: 'details', label: 'Variant details', build: buildDetailsSub },
+      { id: 'all-values', label: 'All result values', build: buildAllValuesSub }
+    ], 'table');
+    root.appendChild(resultsSub.el);
   });
 
   // ---- Genome view
   tab('genome', 'Genome view', function () { return PANELS.length > 0; }, function (root) {
     var cur = 0, box = plotBox('tall'), legend = h('div', { class: 'legend' }), hidden = {};
     var focusHost = h('span', { class: 'field' });
-    var sel = h('select', { 'aria-label': 'Sample and gene' },
-      PANELS.map(function (p, i) { return h('option', { value: i, text: p.sample + ' \u00b7 ' + p.gene + ' (' + p.chrom + ', ' + p.build + ')' }); }));
+    var sel = h('select', { 'aria-label': 'Sample and gene' });
+    // The panel dropdown follows the header sample filter; a sample with no
+    // genome panel (no BAM/coverage) shows an explicit note instead.
+    function panelOptions() {
+      return PANELS.map(function (p, i) { return { i: i, p: p }; })
+        .filter(function (o) { return !state.sample || o.p.sample === state.sample; });
+    }
+    function refreshPanelOptions() {
+      var opts = panelOptions();
+      clear(sel);
+      opts.forEach(function (o) {
+        sel.appendChild(h('option', { value: String(o.i),
+          text: o.p.sample + ' \u00b7 ' + o.p.gene + ' (' + o.p.chrom + ', ' + o.p.build + ')' }));
+      });
+      if (!opts.length) { cur = -1; return false; }
+      if (!opts.some(function (o) { return o.i === cur; })) cur = opts[0].i;
+      sel.value = String(cur);
+      return true;
+    }
     sel.addEventListener('change', function () { cur = +sel.value; hidden = {}; draw(); });
     var resetBtn = h('button', { class: 'btn', type: 'button', text: 'Reset zoom',
       onclick: function () {
-        if (!hasPlotly()) return;
+        if (!hasPlotly() || !PANELS[cur]) return;
         var P = PANELS[cur];
         window.Plotly.relayout(box, { 'xaxis.range': [P.from, P.to] });
       } });
@@ -1374,6 +1993,7 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     root.appendChild(card('Coverage, exons and calls', 'click a call for details', h('div', null, box, legend)));
 
     function zoomTo(vid) {
+      if (!PANELS[cur]) return;
       var vs = arr(PANELS[cur].variants);
       for (var k = 0; k < vs.length; k++) {
         if (vs[k].vid !== vid) continue;
@@ -1384,14 +2004,33 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     }
     genomeAPI = {
       focusPanel: function (p, vid) {
+        // Explicit navigation (row buttons, overview charts) wins over the
+        // sample filter: clear it when the requested panel is filtered out.
+        if (state.sample && PANELS[p] && PANELS[p].sample !== state.sample) setSample('');
+        refreshPanelOptions();
         cur = p; sel.value = String(p); hidden = {}; draw();
         if (vid != null) setTimeout(function () { zoomTo(vid); }, 80);
       }
     };
+    onState(function () {
+      if (!sel.isConnected) return;
+      if (refreshPanelOptions()) draw();
+      else { clear(legend); clear(focusHost); }
+    });
 
     function draw() {
       var P = PANELS[cur];
       clear(legend); clear(focusHost);
+      if (!P) {
+        plot(box, function (t) {
+          return { data: [], layout: baseLayout(t, {
+            annotations: [{ xref: 'paper', yref: 'paper', x: 0.5, y: 0.5,
+              text: 'No genome panel for sample: ' + state.sample, showarrow: false,
+              font: { size: 13, color: CHROME[t].muted } }], margin: { l: 40, r: 16, t: 16, b: 40 },
+            xaxis: axisStyle(t, { visible: false }), yaxis: axisStyle(t, { visible: false }) }) };
+        });
+        return;
+      }
       var vs = arr(P.variants);
       if (vs.length > 1) {
         var focusSel = h('select', { 'aria-label': 'Focus on call' },
@@ -1425,12 +2064,18 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
         if (p && p.data && p.data.meta && p.data.meta.vid) showVariant(p.data.meta.vid);
       });
     }
+    refreshPanelOptions();
     draw();
   });
 
   function genomeFigure(P, t, hidden) {
     var c = CHROME[t], data = [], shapes = [], ann = [];
     var vs = arr(P.variants), n = Math.max(1, vs.length);
+    if (!P.cov || !arr(P.cov.x).length) {
+      ann.push({ xref: 'paper', yref: 'paper', x: 0.5, y: 0.88,
+        text: 'Coverage unavailable — see TALOS run log', showarrow: false,
+        font: { size: 12, color: c.muted }, bgcolor: 'rgba(128,128,128,0.08)' });
+    }
     if (P.cov) data.push({ type: 'scatter', mode: 'lines', x: arr(P.cov.x), y: arr(P.cov.y), customdata: arr(P.cov.pos), fill: 'tozeroy', name: 'Coverage',
       line: { color: CAT[t][0], width: 1.2 }, fillcolor: alpha(CAT[t][0], 0.22), yaxis: 'y', hovertemplate: P.chrom + ':%{customdata}<br>depth %{y}<extra></extra>' });
     arr(P.exons).forEach(function (e) {
@@ -1469,31 +2114,6 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
   }
   function indexOfVid(vs, vid) { for (var i = 0; i < vs.length; i++) if (vs[i].vid === vid) return i; return 0; }
 
-  // ---- Variant details
-  tab('details', 'Variant details', function () { return VARIANTS.length > 0; }, function (root) {
-    var q = h('input', { type: 'search', placeholder: 'Search variants\u2026', 'aria-label': 'Search variants' });
-    root.appendChild(h('div', { class: 'toolbar' }, h('label', { class: 'field' }, 'Search', q)));
-    var list = h('div', { class: 'stack' });
-    root.appendChild(list);
-    var lastGroup = null, cards = [];
-    VARIANTS.forEach(function (v) {
-      var g = v.sample + ' \u00b7 ' + v.gene;
-      if (g !== lastGroup) { list.appendChild(h('h2', { class: 'group-title', text: 'Sample: ' + v.sample + ' \u00b7 ' + v.gene })); lastGroup = g; }
-      var body = h('div', null, variantDetailTable(v));
-      var c = card(v.title, v.flag ? 'review flagged' : null, body, { id: 'v-' + v.id, class: 'card vcard' });
-      var hdr = $('header', c);
-      if (v.hotspot) hdr.appendChild(h('span', { class: 'badge badge-hotspot', text: '\u2605 ' + (v.hotspot_name || 'hotspot') }));
-      if (v.flag) hdr.appendChild(h('span', { class: 'badge flag', text: '\u26A0 flagged' }));
-      if (panelIndexOfVariant(v.id) >= 0) {
-        hdr.appendChild(h('span', { class: 'hint', style: { marginLeft: 'auto', display: 'inline-flex', gap: '6px' } },
-          h('button', { class: 'btn', type: 'button', title: 'Show this call in the genome view', onclick: function () { showInGenome(v.id); } }, iconEl('jump', 12), 'Genome view')));
-      }
-      c._text = (v.title + ' ' + arr(v.values).join(' ')).toLowerCase();
-      cards.push(c); list.appendChild(c);
-    });
-    q.addEventListener('input', function () { var f = q.value.toLowerCase(); cards.forEach(function (c) { c.hidden = f && c._text.indexOf(f) < 0; }); });
-  });
-
   // ---- Configuration
   tab('config', 'Configuration', function () { return arr(DATA.configs).length > 0; }, function (root) {
     root.appendChild(h('div', { class: 'grid g2' }, arr(DATA.configs).map(function (c) { return card('Analysis configuration: ' + c.gene, null, kv(c.keys, c.values)); })));
@@ -1505,8 +2125,36 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     root.appendChild(card('Run information', M.plotly_inline ? 'plotly.js embedded (works offline)' : 'plotly.js loaded from CDN', kv(R.keys, R.values)));
   });
 
+  // ---- Global sample filter propagation.
+  // Overview is rebuilt from scratch (its figures are computed at build time);
+  // the three result tables re-run their predicates in place. The genome view
+  // registers its own listener when it is built.
+  onState(function () {
+    rebuildTab('overview');
+    if (resultsAPI && resultsAPI.recompute) resultsAPI.recompute();
+    if (detailsTableAPI && detailsTableAPI.recompute) detailsTableAPI.recompute();
+    if (allValuesAPI && allValuesAPI.recompute) allValuesAPI.recompute();
+  });
+
   // ------------------------------------------------------------------ shell
   var panels = {}, tabButtons = {}, active = null;
+  function panelsById() { return panels; }
+  // URL hash: #tab=results&view=details&sample=HORIZON (sample and view are
+  // optional; the legacy #tab=details / #tab=all-values ids still resolve).
+  function pushHash() {
+    var frag = '#tab=' + (active || 'overview');
+    if (active === 'results' && resultsSub) frag += '&view=' + resultsSub.current();
+    if (state.sample) frag += '&sample=' + encodeURIComponent(state.sample);
+    try { history.replaceState(null, '', frag); } catch (e) { /* file:// may refuse */ }
+  }
+  function parseHash() {
+    var out = {};
+    String(location.hash || '').replace(/^#/, '').split('&').forEach(function (kv) {
+      var p = kv.split('=');
+      if (p[0]) out[p[0]] = decodeURIComponent((p[1] || '').replace(/\+/g, ' '));
+    });
+    return out;
+  }
   function activate(id, push) {
     var t = TABS.filter(function (x) { return x.id === id && x.available(); })[0] || TABS.filter(function (x) { return x.available(); })[0];
     if (!t) return;
@@ -1521,7 +2169,7 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
     } else refreshVisible(panels[id]);
     setTimeout(function () { refreshVisible(panels[id]); }, 60);
     active = id;
-    if (push) { try { history.replaceState(null, '', '#tab=' + id); } catch (e) { /* file:// may refuse */ } }
+    if (push) pushHash();
   }
   function init() {
     applyThemeAttr();
@@ -1539,6 +2187,26 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
       panels[t.id] = h('section', { class: 'panel', role: 'tabpanel', id: 'panel-' + t.id, 'aria-labelledby': 'tab-' + t.id, hidden: true });
       main.appendChild(panels[t.id]);
     });
+
+    // Header sample picker (ECHO-style): one cohort-wide filter that drives
+    // the results tables, the variant details, the genome panels, the
+    // overview figures and the URL hash.
+    var pick = $('#sample-pick');
+    if (pick && SAMPLES.length > 0) {
+      headerPicker = h('select', { id: 'sample-sel', 'aria-label': 'Filter report by sample' },
+        h('option', { value: '', text: 'All samples (' + SAMPLES.length + ')' }),
+        SAMPLES.map(function (s) { return h('option', { value: s, text: s }); }));
+      headerPicker.value = state.sample;
+      headerPicker.addEventListener('change', function () {
+        setSample(headerPicker.value);
+        pushHash();
+      });
+      pick.appendChild(h('label', { for: 'sample-sel', text: 'Filter sample' }));
+      pick.appendChild(headerPicker);
+      pick.appendChild(h('span', { class: 'pick-note', text: 'applies to every tab' }));
+      pick.hidden = false;
+    }
+
     var btn = $('#theme-btn');
     var label = function () { btn.textContent = 'Theme: ' + themePref; };
     label();
@@ -1552,7 +2220,8 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
       var mq = window.matchMedia('(prefers-color-scheme: dark)');
       if (mq.addEventListener) mq.addEventListener('change', function () { if (themePref === 'auto') rerenderAll(); });
     }
-    // Print: build every tab first so the printed page shows all sections.
+    // Print: build every tab and sub-view first so the printed page shows all
+    // sections (sub-panels are unhidden by the print stylesheet).
     window.addEventListener('beforeprint', function () {
       TABS.forEach(function (t) {
         if (t.available() && !t.built) {
@@ -1560,10 +2229,22 @@ details.seq pre { white-space: pre-wrap; word-break: break-all; margin-top: 6px;
           try { t.build(panels[t.id]); } catch (e) { if (window.console) console.error(e); }
         }
       });
+      if (resultsSub) resultsSub.buildAll();
     });
-    var m = /tab=([\w-]+)/.exec(location.hash);
-    activate(m ? m[1] : 'overview', false);
-    window.addEventListener('hashchange', function () { var mm = /tab=([\w-]+)/.exec(location.hash); if (mm && mm[1] !== active) activate(mm[1], false); });
+
+    function applyHash(quiet) {
+      var hs = parseHash();
+      var wantSample = hs.sample && SAMPLES.indexOf(hs.sample) >= 0 ? hs.sample : '';
+      setSample(wantSample, quiet);
+      var wantTab = hs.tab || 'overview';
+      // Legacy deep links to the former standalone tabs still work.
+      var wantView = hs.view || (wantTab === 'details' || wantTab === 'all-values' ? wantTab : null);
+      if (wantTab === 'details' || wantTab === 'all-values') wantTab = 'results';
+      if (wantTab !== active) activate(wantTab, false);
+      if (wantTab === 'results' && resultsSub && wantView) resultsSub.switchTo(wantView, false);
+    }
+    applyHash(true);
+    window.addEventListener('hashchange', function () { applyHash(false); });
     document.documentElement.setAttribute('data-ready', '1');
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();

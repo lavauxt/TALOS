@@ -297,6 +297,142 @@ describe(".extract_discordant_and_shadow (end-coordinate fix)", {
     result <- extract_fn(dt, expected_isize_max = 500L)
     expect_equal(nrow(result), 1L)
   })
+
+  # [ITEM 5] Mate-qwidth lookup tests
+  describe("ITEM 5: mate-qwidth lookup for mixed-length pairs", {
+    it("uses the mate's qwidth when the current read is leftmost", {
+      # Mixed-length pair: leftmost mate has qwidth=150, rightmost mate has
+      # qwidth=100. Both mates are in dt (the normal case for FR pairs in
+      # the scanned region).
+      #
+      # Mate 1 (leftmost, reverse): qname=r1, pos=100, mpos=2000, qwidth=150, flag=83
+      # Mate 2 (rightmost, forward): qname=r1, pos=2000, mpos=100, qwidth=100, flag=163
+      #
+      # For Mate 1's row: it is the leftmost (pos < mpos), so the rightmost
+      # width should be looked up from dt by key (qname=r1, pos=2000) -> 100.
+      # end = max(100, 2000) + 100 - 1 = 2099
+      dt <- data.frame(
+        qname = c("r1", "r1"),
+        flag = c(83L, 163L),
+        rname = c("chr1", "chr1"),
+        pos = c(100L, 2000L),
+        qwidth = c(150L, 100L),
+        mapq = c(60L, 60L),
+        cigar = c("150M", "100M"),
+        mrnm = c("=", "="),
+        mpos = c(2000L, 100L),
+        isize = c(2050L, -2050L),
+        sa = c("", ""),
+        stringsAsFactors = FALSE
+      )
+      result <- extract_fn(dt, expected_isize_max = 500L)
+      expect_equal(nrow(result), 1L)
+      # After dedup by qname, only one row remains. Its end should reflect
+      # the rightmost mate's qwidth (100), not the leftmost's (150).
+      # end = 2000 + 100 - 1 = 2099 (not 2149)
+      expect_equal(result$end, 2099L)
+    })
+
+    it("uses the current read's qwidth when it is the rightmost mate", {
+      # Same pair as above but consider the rightmost mate's row (flag=163).
+      # In this row pos=2000, mpos=100, qwidth=100. The rightmost position is
+      # pos (2000), and the rightmost width is its own qwidth (100) -- exact,
+      # no lookup needed. end = 2000 + 100 - 1 = 2099.
+      dt <- data.frame(
+        qname = c("r1"),
+        flag = c(163L),  # paired + mate reverse + first + forward
+        rname = c("chr1"),
+        pos = c(2000L),
+        qwidth = c(100L),
+        mapq = c(60L),
+        cigar = c("100M"),
+        mrnm = c("="),
+        mpos = c(100L),
+        isize = c(-2050L),
+        sa = c(""),
+        stringsAsFactors = FALSE
+      )
+      result <- extract_fn(dt, expected_isize_max = 500L)
+      expect_equal(nrow(result), 1L)
+      expect_equal(result$end, 2099L)
+    })
+
+    it("falls back to current read's qwidth when mate is not in dt", {
+      # Only the leftmost mate is in dt (mate is outside the scanned region).
+      # The lookup fails, so we fall back to the current read's qwidth.
+      # For a same-length pair this is exact; for mixed-length it is the
+      # original approximation (documented behaviour).
+      dt <- data.frame(
+        qname = "r1",
+        flag = 83L,  # reverse, leftmost
+        rname = "chr1",
+        pos = 100L,
+        qwidth = 150L,  # leftmost width; mate's width unavailable
+        mapq = 60L,
+        cigar = "150M",
+        mrnm = "=",
+        mpos = 2000L,
+        isize = 2050L,
+        sa = "",
+        stringsAsFactors = FALSE
+      )
+      result <- extract_fn(dt, expected_isize_max = 500L)
+      expect_equal(nrow(result), 1L)
+      # Fallback: end = 2000 + 150 - 1 = 2149 (uses current read's qwidth)
+      expect_equal(result$end, 2149L)
+    })
+
+    it("is exact for same-length pairs with both mates present", {
+      # Same-length pair (150bp both mates), both in dt.
+      # The lookup gives the same value as the current read's qwidth, so
+      # the result is the same as the fallback. This is a regression guard
+      # to ensure the lookup doesn't change behaviour for the common case.
+      dt <- data.frame(
+        qname = c("r1", "r1"),
+        flag = c(83L, 163L),
+        rname = c("chr1", "chr1"),
+        pos = c(100L, 2000L),
+        qwidth = c(150L, 150L),
+        mapq = c(60L, 60L),
+        cigar = c("150M", "150M"),
+        mrnm = c("=", "="),
+        mpos = c(2000L, 100L),
+        isize = c(2050L, -2050L),
+        sa = c("", ""),
+        stringsAsFactors = FALSE
+      )
+      result <- extract_fn(dt, expected_isize_max = 500L)
+      expect_equal(nrow(result), 1L)
+      expect_equal(result$end, 2149L)  # 2000 + 150 - 1
+    })
+
+    it("handles multiple pairs with mixed lengths", {
+      # Two everted pairs:
+      #  Pair A: qname=r1, leftmost qwidth=150, rightmost qwidth=100
+      #  Pair B: qname=r2, leftmost qwidth=120, rightmost qwidth=130
+      dt <- data.frame(
+        qname = c("r1", "r1", "r2", "r2"),
+        flag = c(83L, 163L, 83L, 163L),
+        rname = c("chr1", "chr1", "chr1", "chr1"),
+        pos = c(100L, 2000L, 300L, 2500L),
+        qwidth = c(150L, 100L, 120L, 130L),
+        mapq = c(60L, 60L, 60L, 60L),
+        cigar = c("150M", "100M", "120M", "130M"),
+        mrnm = c("=", "=", "=", "="),
+        mpos = c(2000L, 100L, 2500L, 300L),
+        isize = c(2050L, -2050L, 2320L, -2320L),
+        sa = c("", "", "", ""),
+        stringsAsFactors = FALSE
+      )
+      result <- extract_fn(dt, expected_isize_max = 500L)
+      expect_equal(nrow(result), 2L)
+      ends <- setNames(result$end, result$qname)
+      # Pair A: end = 2000 + 100 - 1 = 2099
+      # Pair B: end = 2500 + 130 - 1 = 2629
+      expect_equal(ends[["r1"]], 2099L)
+      expect_equal(ends[["r2"]], 2629L)
+    })
+  })
 })
 
 # ---------------------------------------------------------------------------
@@ -397,4 +533,20 @@ describe(".parse_sa_tags", {
     result <- parse_fn(dt)
     expect_equal(nrow(result), 0L)
   })
+})
+
+test_that("discordant fragment envelope uses CIGAR reference span, not query width", {
+  extract_fn <- get_fn(".extract_discordant_and_shadow")
+  # Everted pair; the rightmost mate has a soft clip (50S100M), so qwidth=150
+  # but reference span=100. Its true outer end is 2099, not 2149.
+  dt <- data.frame(
+    qname = c("soft", "soft"), flag = c(83L, 163L),
+    rname = c("chr1", "chr1"), pos = c(100L, 2000L),
+    qwidth = c(100L, 150L), mapq = c(60L, 60L),
+    cigar = c("100M", "50S100M"), mrnm = c("=", "="),
+    mpos = c(2000L, 100L), isize = c(2050L, -2050L),
+    sa = c("", ""), stringsAsFactors = FALSE
+  )
+  got <- extract_fn(dt, expected_isize_max = 500L)
+  expect_equal(got$end, 2099L)
 })

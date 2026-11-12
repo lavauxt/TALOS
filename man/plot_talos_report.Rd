@@ -2,9 +2,13 @@
 % Please edit documentation in R/report.R
 \name{plot_talos_report}
 \alias{plot_talos_report}
-\title{Generate a publication-ready PDF plot (Gviz + summary table)
+\title{Generate a publication-ready PDF plot (Gviz + compact variant details)
 Only the region restricted directly by targeted_exons context is shown
-(extended to include the plotted variants).}
+(extended to include the plotted variants). Page 1 carries the Gviz
+tracks; the following pages carry a compact variant-details table
+(.compact_variant_fields()). The full ~150-metric matrix is not printed
+any more: it caused multi-page tables whose rows escaped the page frame;
+it remains available in the HTML report and the results TSV.}
 \usage{
 plot_talos_report(
   itd_row,
@@ -37,7 +41,9 @@ plot_talos_report(
 
 \item{show_config}{If TRUE, display configuration summary on a separate page.}
 
-\item{precomputed_cov}{Optional precomputed coverage Rle (to avoid re-reading BAM).}
+\item{precomputed_cov}{Optional precomputed coverage Rle indexed by genomic
+coordinate (index 1 is genomic position 1) and long enough to include the
+full plotted interval, including flanking exons.}
 
 \item{include_ptd}{If TRUE, include zero-length (PTD) events (default FALSE).}
 
@@ -47,7 +53,11 @@ plot_talos_report(
 Invisibly, output_pdf.
 }
 \description{
-Generate a publication-ready PDF plot (Gviz + summary table)
+Generate a publication-ready PDF plot (Gviz + compact variant details)
 Only the region restricted directly by targeted_exons context is shown
-(extended to include the plotted variants).
+(extended to include the plotted variants). Page 1 carries the Gviz
+tracks; the following pages carry a compact variant-details table
+(.compact_variant_fields()). The full ~150-metric matrix is not printed
+any more: it caused multi-page tables whose rows escaped the page frame;
+it remains available in the HTML report and the results TSV.
 }
